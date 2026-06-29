@@ -1,0 +1,27 @@
+
+[dependencies]
+pyo3 = { version = "0.19.2", features = ["extension-module"] }
+cudarc = "0.9"
+anyhow = "1.0"
+rayon = "1.8"
+# Adicionamos a biblioteca Arrow (A versão 47 é estritamente compatível com o PyO3 0.19)
+arrow = { version = "47.0.0", features = ["pyarrow", "ffi"] }
+chrono = "=0.4.31"
+flate2 = "1.0"
+polars = { version = "0.36", features = ["lazy", "parquet"] }
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.69"
+
+[package]
+name = "multimerge_genomics"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "multimerge_genomics"
+crate-type = ["cdylib", "rlib"]
+
+
+

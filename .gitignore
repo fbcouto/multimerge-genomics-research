@@ -1,0 +1,59 @@
+# ==========================================
+# MMGEN - Ignore List
+# ==========================================
+
+# 1. Dados Genómicos (Crucial: Evita upload de ficheiros de 100MB+)
+*.fasta
+*.fastq
+*.fq
+*.vcf
+*.sam
+*.bam
+amostra_A.txt
+amostra_B.txt
+.parquet
+
+# 2. Rust e Compilados C++
+target/
+**/*.rs.bk
+*.dll
+*.so
+*.dylib
+*.exp
+*.lib
+
+# 3. Python e Ambientes Virtuais
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# 4. Ficheiros de Sistema Operativo
+.DS_Store
+Thumbs.db
+
+# Pastas de Compilação e Ambientes Virtuais
+/target/
+.venv/
+__pycache__/
+Cargo.lock
+
+# Ficheiros Genómicos Pesados e Temporários
+*.arrow
+*.fastq
+*.fq
+*.fasta
+*.fa
+*.vcf
+*.sam
+*.bam
+*.parquet
+*.gz
+*.fasta.gz
+*.fastq.gz
+
+# Ficheiros de Instalação Final
+*.whl

@@ -6,11 +6,11 @@ use crate::kmer::Kmer128;
 
 /// Processa múltiplos ficheiros FASTQ (suporta .gz e texto limpo) em paralelo
 pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) -> Vec<u128> {
-    println!("🚀 Iniciando extração Multi-Thread de {} ficheiro(s) FASTQ...", caminhos.len());
+    println!("🚀 Starting multi-threaded extraction from {} FASTQ file(s)...", caminhos.len());
 
     // 1. O Rayon processa CADA ficheiro numa thread diferente simultaneamente
         let mut todos_kmers: Vec<u128> = caminhos.par_iter().flat_map(|caminho| {
-        let file = File::open(caminho).expect(&format!("Erro ao abrir o ficheiro: {}", caminho));
+        let file = File::open(caminho).expect(&format!("Error opening file: {}", caminho));
         
         // 2. Inteligência de Descompressão On-The-Fly
         let mut reader: Box<dyn BufRead> = if caminho.ends_with(".gz") {
@@ -59,8 +59,8 @@ pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) 
     }).collect(); // O Rayon junta os resultados de todas as threads aqui!
 
     // 4. Esmagamento Final: Ordenação Instável In-Place (Ultra rápida)
-    println!("🔄 Ordenando {} K-mers do lote e removendo duplicatas...", todos_kmers.len());
-    todos_kmers.par_sort_unstable();
+    println!("🔄 Sorting {} k-mers from the batch and removing duplicates...", todos_kmers.len());
+    crate::multimerge_core::multi_merge_sort_stable(&mut todos_kmers);
     todos_kmers.dedup(); // Remove cópias exatas do DNA para economizar RAM no Grafo
 
     todos_kmers

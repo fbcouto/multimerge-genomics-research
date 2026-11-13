@@ -11,6 +11,8 @@
 *.bam
 amostra_A.txt
 amostra_B.txt
+sample_A.txt
+sample_B.txt
 .parquet
 
 # 2. Rust e Compilados C++
@@ -39,7 +41,6 @@ Thumbs.db
 /target/
 .venv/
 __pycache__/
-Cargo.lock
 
 # Ficheiros Genómicos Pesados e Temporários
 *.arrow
@@ -57,3 +58,10 @@ Cargo.lock
 
 # Ficheiros de Instalação Final
 *.whl
+
+# Copias de seguranca do porte: nao vao para o GitHub
+_backup_antes_do_porte/
+*.old
+
+# Working notes of the author's sessions: local only
+CLAUDE.md

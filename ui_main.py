@@ -1,7 +1,9 @@
 import marimo
 
 __generated_with = "0.23.11"
-app = marimo.App(width="full")
+# app_title is the browser tab title.
+app = marimo.App(width="full", app_title="MMGEN Suite")
+
 
 @app.cell
 def imports():
@@ -9,50 +11,49 @@ def imports():
     import polars as pl
     import numpy as np
     import glob
-    import asyncio  # 👈 Importado aqui uma única vez!
+    import os
+    import asyncio
     import multimerge_genomics as mmg
-    return asyncio, glob, mmg, mo, np, pl
+    return asyncio, glob, mmg, mo, np, os, pl
+
 
 @app.cell
-def estado_global(mo):
-    obter_pagina, definir_pagina = mo.state("home")
-    return definir_pagina, obter_pagina
+def global_state(mo):
+    # allow_self_loops: the cell that calls the setter is re-run too. Without it
+    # the menu (which calls set_page) never left the page when a screen opened,
+    # and the screen you left through "Back to Menu" stayed on the page.
+    get_page, set_page = mo.state("home", allow_self_loops=True)
+
+    # Message of the "Generate simulated patient" button (screen 4). It lives
+    # here and not in the screen's own cell: a state created in the very cell
+    # that shows it is reborn empty on every run.
+    get_patient_msg, set_patient_msg = mo.state("", allow_self_loops=True)
+    return get_page, get_patient_msg, set_page, set_patient_msg
+
 
 @app.cell
-def identidade_visual(mo):
-    script_identidade = """
-    <script>
-        document.title = "MMGEN Suite";
-        let link = document.querySelector("link[rel~='icon']");
-        if (!link) {
-            link = document.createElement('link');
-            link.rel = 'icon';
-            document.head.appendChild(link);
-        }
-        link.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>";
-    </script>
-    """
-    return mo.Html(script_identidade)
+def main_menu(get_page, mmg, mo, set_page):
+    mo.stop(get_page() != "home")
 
-@app.cell
-def menu_principal(definir_pagina, mo, obter_pagina):
-    mo.stop(obter_pagina() != "home", mo.md(""))
+    btn_menu_qc = mo.ui.button(label="🔬 1. QC & Ingestion (FASTQ / FASTA)", on_change=lambda _: set_page("qc"))
+    btn_menu_cluster = mo.ui.button(label="🧬 2. Taxonomic Clustering", on_change=lambda _: set_page("cluster"))
+    btn_menu_assembly = mo.ui.button(label="🧩 3. Genome Assembly (De Bruijn)", on_change=lambda _: set_page("assembly"))
+    btn_menu_variant = mo.ui.button(label="⚠️ 4. Variant Calling (SNPs)", on_change=lambda _: set_page("variant"))
+    btn_menu_annotation = mo.ui.button(label="📘 5. Functional Annotation", on_change=lambda _: set_page("annotation"))
+    btn_menu_bloom = mo.ui.button(label="🔍 6. Bloom Filters", on_change=lambda _: set_page("bloom"))
+    btn_menu_scaffold = mo.ui.button(label="🖇️ 7. Genome Scaffolding", on_change=lambda _: set_page("scaffold"))
+    btn_menu_vcf = mo.ui.button(label="🗄️ 8. VCF Multimerge & Sorting", on_change=lambda _: set_page("vcf"))
 
-    btn_menu_qc = mo.ui.button(label="🔬 1. QC e Trimming (FASTQ)", on_change=lambda _: definir_pagina("qc"))
-    btn_menu_cluster = mo.ui.button(label="🧬 2. Agrupamento Taxonômico", on_change=lambda _: definir_pagina("cluster"))
-    btn_menu_assembly = mo.ui.button(label="🧩 3. Montagem de Genomas (De Bruijn)", on_change=lambda _: definir_pagina("assembly"))
-    btn_menu_variant = mo.ui.button(label="⚠️ 4. Chamada de Variantes (SNPs)", on_change=lambda _: definir_pagina("variant"))
-    btn_menu_annotation = mo.ui.button(label="📘 5. Anotação Funcional", on_change=lambda _: definir_pagina("annotation"))
-    btn_menu_bloom = mo.ui.button(label="🔍 6. Filtros Bloom (cuSBF na GPU)", on_change=lambda _: definir_pagina("bloom"))
-    btn_menu_scaffold = mo.ui.button(label="🖇️ 7. Fechamento de Genomas (Scaffolding)", on_change=lambda _: definir_pagina("scaffold"))
-    btn_menu_vcf = mo.ui.button(label="🗄️ 8. VCF Multimerge & Sorting", on_change=lambda _: definir_pagina("vcf"))
+    # What this installation really has: the GPU modules fall back to the CPU.
+    _engine = mmg.engine_info()
+    _where = "NVIDIA GPU (CUDA)" if _engine["gpu"] else "CPU"
 
-    tela_menu = mo.md(f"""
+    menu_screen = mo.md(f"""
     <div style="text-align: center; margin-top: 40px; font-family: sans-serif;">
-        <h1 style="font-size: 3em; margin-bottom: 0px;">🧬 MMGEN</h1>
+        <h1 style="font-size: 3em; margin-bottom: 0px; text-align: center;">🧬 MMGEN</h1>
         <h3 style="color: gray; margin-top: 5px;">High-Performance Genomics Framework</h3>
-        <p style="margin-bottom: 40px;">Motor acelerado por Rust e NVIDIA CUDA. Selecione um módulo para iniciar:</p>
-        
+        <p style="margin-bottom: 40px;">Rust engine with optional NVIDIA CUDA acceleration. Pick a module to start:</p>
+
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 850px; margin: 0 auto;">
             {btn_menu_qc}
             {btn_menu_cluster}
@@ -63,700 +64,748 @@ def menu_principal(definir_pagina, mo, obter_pagina):
             {btn_menu_scaffold}
             {btn_menu_vcf}
         </div>
+        <p style="color: gray; font-size: 0.85em; margin-top: 40px;">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
     </div>
     """)
-    
-    tela_menu
-    return btn_menu_annotation, btn_menu_assembly, btn_menu_bloom, btn_menu_cluster, btn_menu_qc, btn_menu_variant, tela_menu
+
+    menu_screen
+    return (
+        btn_menu_annotation,
+        btn_menu_assembly,
+        btn_menu_bloom,
+        btn_menu_cluster,
+        btn_menu_qc,
+        btn_menu_scaffold,
+        btn_menu_variant,
+        btn_menu_vcf,
+        menu_screen,
+    )
+
 
 @app.cell
-def pagina_qc_ui(definir_pagina, glob, mo, obter_pagina):
-    import os as _os
-    # 👇 AQUI ESTÁ A CORREÇÃO: Voltou a ser "qc" para o botão do menu funcionar!
-    mo.stop(obter_pagina() != "qc", mo.md(""))
-    
-    btn_voltar_qc = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
+def qc_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "qc")
 
-    _arquivos = glob.glob("*.fastq") + glob.glob("*.fastq.gz") + glob.glob("*.fasta") + glob.glob("*.fasta.gz") + glob.glob("*.fa")
-    if not _arquivos: _arquivos = ["Nenhum arquivo encontrado"]
+    btn_back_qc = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+
+    _files = glob.glob("*.fastq") + glob.glob("*.fastq.gz") + glob.glob("*.fasta") + glob.glob("*.fasta.gz") + glob.glob("*.fa")
+    if not _files: _files = ["No file found"]
 
     form_qc = mo.ui.form(
         element=mo.ui.dictionary({
-            "caminhos_arquivos": mo.ui.multiselect(options=_arquivos, label="🧬 Ficheiros de DNA (Suporta múltiplos e .gz):"),
-            "tamanho_k": mo.ui.slider(start=21, stop=63, step=2, value=55, label="Tamanho do K-mer (Régua u128):"),
-            "qualidade": mo.ui.slider(start=0, stop=40, step=1, value=20, label="Qualidade Mínima (Apenas FASTQ):")
+            "files": mo.ui.multiselect(options=_files, label="🧬 DNA files (several allowed, .gz too):"),
+            "kmer_size": mo.ui.slider(start=21, stop=63, step=2, value=55, label="K-mer size:"),
+            "min_quality": mo.ui.slider(start=0, stop=40, step=1, value=20, label="Minimum mean quality (FASTQ only):")
         }),
         bordered=True,
-        submit_button_label="🚀 Iniciar Ingestão em Lote"
+        submit_button_label="🚀 Start batch ingestion"
     )
 
     ui_qc = mo.vstack([
-        btn_voltar_qc,
-        mo.md("<br># 🧬 1. Ingestão de Dados e QC (Lote / GZIP)"),
-        mo.callout(mo.md("O motor agora suporta a importação de **múltiplos ficheiros em simultâneo** (ex: Paired-End R1 e R2) e descompacta ficheiros `.gz` diretamente na memória RAM, poupando espaço no disco."), kind="info"),
+        btn_back_qc,
+        mo.md("<br>\n\n# 🧬 1. Data Ingestion & QC (Batch / GZIP)"),
+        mo.callout(mo.md("The engine reads **several files at once** (for example paired-end R1 and R2) and decompresses `.gz` files on the fly, straight into memory, so nothing extra is written to disk."), kind="info"),
         form_qc
     ])
-    
+
     ui_qc
-    return btn_voltar_qc, form_qc, ui_qc
+    return btn_back_qc, form_qc, ui_qc
+
 
 @app.cell
-async def pagina_qc_backend(asyncio, form_qc, mmg, mo, obter_pagina, pl):
-    import os as _os
-    # 👇 AQUI TAMBÉM: Voltou a ser "qc"
-    mo.stop(obter_pagina() != "qc", mo.md(""))
-    mo.stop(form_qc.value is None, mo.md("⏳ *Aguardando configuração...*"))
+async def qc_page_backend(asyncio, form_qc, get_page, mmg, mo, pl):
+    mo.stop(get_page() != "qc")
+    mo.stop(form_qc.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
-    _caminhos = form_qc.value.get("caminhos_arquivos", [])
-    mo.stop(not _caminhos or "Nenhum" in _caminhos[0], mo.callout(mo.md("⚠️ Selecione pelo menos um ficheiro."), kind="warning"))
+    _paths = form_qc.value.get("files", [])
+    mo.stop(not _paths or _paths[0].startswith("No file"), mo.callout(mo.md("⚠️ Select at least one file."), kind="warn"))
 
-    _k = form_qc.value["tamanho_k"]
-    _qualidade = form_qc.value["qualidade"]
-    
-    _is_fasta = any(c.endswith(".fasta") or c.endswith(".fa") or c.endswith(".fasta.gz") for c in _caminhos)
+    _k = form_qc.value["kmer_size"]
+    _min_quality = form_qc.value["min_quality"]
+
+    _is_fasta = any(c.endswith(".fasta") or c.endswith(".fa") or c.endswith(".fasta.gz") for c in _paths)
 
     try:
-        with mo.status.spinner(f"Processando {len(_caminhos)} ficheiro(s) em Multi-Threading (K={_k})..."):
+        with mo.status.spinner(f"Processing {len(_paths)} file(s) in parallel (K={_k})..."):
             await asyncio.sleep(0.1)
-            
+
             if _is_fasta:
-                _bytes_kmer = mmg.ler_fasta_em_lote(_caminhos, _k)
+                _kmer_bytes = mmg.read_fasta_batch(_paths, _k)
             else:
-                _bytes_kmer = mmg.ler_fastq_em_lote(_caminhos, _qualidade, _k)
+                _kmer_bytes = mmg.read_fastq_batch(_paths, _min_quality, _k)
 
-        with mo.status.spinner("Ordenando e Salvando Monólito Arrow..."):
+        with mo.status.spinner("Saving the k-mers (Arrow file)..."):
             await asyncio.sleep(0.1)
-            _df = pl.DataFrame({"K-mers": [_bytes_kmer]})
-            
-            if len(_caminhos) > 1:
-                _nome_base = "Lote_Multiplo"
-            else:
-                _nome_base = _caminhos[0].split(".")[0]
-                
-            _nome_arquivo = f"{_nome_base}_K{_k}.arrow"
-            _df.write_ipc(_nome_arquivo)
+            _df = pl.DataFrame({"K-mers": [_kmer_bytes]})
 
-        _painel = mo.vstack([
+            if len(_paths) > 1:
+                _base_name = "Multi_Batch"
+            else:
+                _base_name = _paths[0].split(".")[0]
+
+            _out_name = f"{_base_name}_K{_k}.arrow"
+            _df.write_ipc(_out_name)
+
+        _panel = mo.vstack([
             mo.callout(mo.md(f"""
-            ### ✅ Lote Processado com Sucesso!
-            * **Ficheiros Analisados (Threads):** `{len(_caminhos)}`
-            * **Tamanho do K-mer:** `{_k}`
-            * **Sequências Únicas Extraídas:** `{len(_bytes_kmer) // 16:,}`
-            * **Ficheiro Arrow Gerado:** `{_nome_arquivo}`
+            ### ✅ Batch processed successfully!
+            * **Files read:** `{len(_paths)}`
+            * **K-mer size:** `{_k}`
+            * **Distinct k-mers extracted:** `{len(_kmer_bytes) // 16:,}`
+            * **Arrow file written:** `{_out_name}`
             """), kind="success")
         ])
-        
+
     except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO:** `{str(e)}`"), kind="danger")
+        _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    _panel
+    return
+
+
 @app.cell
-def pagina_cluster_ui(definir_pagina, glob, mo, obter_pagina):
-    mo.stop(obter_pagina() != "cluster", mo.md(""))
-    
-    _btn_voltar = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
-    
-    _arquivos = glob.glob("*.arrow") + glob.glob("*.txt") + glob.glob("*.fasta")
-    if not _arquivos: _arquivos = ["Nenhum arquivo encontrado"]
+def cluster_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "cluster")
 
-    form_dados = mo.ui.form(
+    # A global variable (no leading "_"), like on the other screens: marimo only
+    # keeps a component alive when it is bound to a global variable. As
+    # `_btn_back`, this button did nothing when clicked.
+    btn_back_cluster = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+
+    _files = glob.glob("*.arrow") + glob.glob("*.txt") + glob.glob("*.fasta")
+    if not _files: _files = ["No file found"]
+
+    form_samples = mo.ui.form(
         element=mo.ui.dictionary({
-            "path_a": mo.ui.dropdown(options=_arquivos, label="📂 Amostra A (Recomendado: .arrow):"),
-            "path_b": mo.ui.dropdown(options=_arquivos, label="📂 Amostra B (Recomendado: .arrow):")
-        }), bordered=True, submit_button_label="🚀 1. Iniciar GPU"
+            "sample_a": mo.ui.dropdown(options=_files, label="📂 Sample A (.txt, one 31-mer per line):"),
+            "sample_b": mo.ui.dropdown(options=_files, label="📂 Sample B (.txt, one 31-mer per line):")
+        }), bordered=True, submit_button_label="🚀 1. Load and merge the k-mers"
     )
 
-    _ui = mo.vstack([_btn_voltar, mo.md("<br># 🧬 Módulo de Agrupamento Taxonômico"), form_dados])
+    _ui = mo.vstack([btn_back_cluster, mo.md("<br>\n\n# 🧬 Taxonomic Clustering"), form_samples])
     _ui
-    return form_dados,
+    return btn_back_cluster, form_samples
+
 
 @app.cell
-async def pagina_cluster_backend(asyncio, form_dados, mmg, mo, np, obter_pagina, pl):
-    mo.stop(obter_pagina() != "cluster", mo.md("")) 
-    mo.stop(form_dados.value is None, mo.md("🧬 *Aguardando clique...*"))
+async def cluster_page_backend(asyncio, form_samples, get_page, mmg, mo, np, pl):
+    mo.stop(get_page() != "cluster")
+    mo.stop(form_samples.value is None, mo.md("🧬 *Waiting for the two samples...*"))
 
-    _p_a, _p_b = form_dados.value["path_a"], form_dados.value["path_b"]
-    if not _p_a or "Nenhum" in _p_a: mo.stop(True, mo.md("⚠️ Erro."))
+    _p_a, _p_b = form_samples.value["sample_a"], form_samples.value["sample_b"]
+    mo.stop(not _p_a or not _p_b or _p_a.startswith("No file"), mo.callout(mo.md("⚠️ Select both samples."), kind="warn"))
+    # An .arrow next to a .txt went to the text reader, which read the binary as lines.
+    mo.stop(
+        _p_a.endswith(".arrow") != _p_b.endswith(".arrow"),
+        mo.callout(mo.md("⚠️ Both samples must be of the same kind: two `.arrow` files or two text files."), kind="warn")
+    )
 
-    with mo.status.spinner("Lendo ficheiros e atirando para a VRAM (CUDA)..."):
+    with mo.status.spinner("Reading the files, sorting and merging the k-mers..."):
         await asyncio.sleep(0.1)
-        
+
         if _p_a.endswith(".arrow") and _p_b.endswith(".arrow"):
-            _bytes_a = pl.read_ipc(_p_a).get_column("K-mers").to_numpy().tobytes()
-            _bytes_b = pl.read_ipc(_p_b).get_column("K-mers").to_numpy().tobytes()
-            _bytes_gpu = mmg.ordenar_bytes_gpu(_bytes_a, _bytes_b)
+            _col_a = pl.read_ipc(_p_a).get_column("K-mers")
+            _col_b = pl.read_ipc(_p_b).get_column("K-mers")
+            # This module works with 64-bit k-mers (k=31), one per row. The
+            # .arrow files Module 1 writes today are something else: a single
+            # row holding every 128-bit k-mer as binary. On that column
+            # .to_numpy().tobytes() returns the bytes of the pointer, and the
+            # screen carried on with "2 k-mers" of garbage and no error at all.
+            mo.stop(
+                not (_col_a.dtype.is_integer() and _col_b.dtype.is_integer()),
+                mo.callout(mo.md("⚠️ This module clusters k-mers of 31 bases (64 bits). The `.arrow` files written by Module 1 hold 128-bit k-mers and are not accepted here yet. Use `.txt` files with one 31-base k-mer per line."), kind="warn")
+            )
+            _bytes_a = _col_a.to_numpy().tobytes()
+            _bytes_b = _col_b.to_numpy().tobytes()
+            _merged_bytes = mmg.sort_merge_bytes(_bytes_a, _bytes_b)
         else:
-            _bytes_gpu = mmg.ler_arquivos_e_processar(_p_a, _p_b)
-            
-        _arr_gpu = np.frombuffer(_bytes_gpu, dtype=np.uint64)
-        
-    with mo.status.spinner("Gerando Assinaturas MinHash na CPU..."):
+            _merged_bytes = mmg.read_and_merge_kmer_files(_p_a, _p_b)
+
+        _merged = np.frombuffer(_merged_bytes, dtype=np.uint64)
+
+    with mo.status.spinner("Computing MinHash signatures on the CPU..."):
         await asyncio.sleep(0.1)
-        _bytes_assinaturas = mmg.gerar_assinaturas_lote(_bytes_gpu, 50)
-        matriz_assinaturas = np.frombuffer(_bytes_assinaturas, dtype=np.uint64).reshape(-1, 50)
-        
-        df_final = pl.DataFrame({
-            "K-mers (GPU)": _arr_gpu,
-            "Sequencia_DNA": mmg.decodificar_lote(_bytes_gpu, 31)
+        _signature_bytes = mmg.minhash_signatures(_merged_bytes, 50)
+        signature_matrix = np.frombuffer(_signature_bytes, dtype=np.uint64).reshape(-1, 50)
+
+        df_kmers = pl.DataFrame({
+            "K-mer (u64)": _merged,
+            "DNA_sequence": mmg.decode_kmers(_merged_bytes, 31)
         })
 
-    _painel = mo.md(f"✅ Motor Finalizado. **{df_final.height:,}** K-mers prontos para agrupamento.")
-    _painel
-    return df_final, matriz_assinaturas, _painel
+    _panel = mo.md(f"✅ Engine finished. **{df_kmers.height:,}** k-mers ready for clustering.")
+    _panel
+    return df_kmers, signature_matrix
+
 
 @app.cell
-def pagina_cluster_hdbscan(df_final, mo, obter_pagina):
-    mo.stop(obter_pagina() != "cluster", mo.md(""))
+def cluster_page_hdbscan(df_kmers, get_page, mo):
+    mo.stop(get_page() != "cluster")
 
     form_cluster = mo.ui.form(
-        element=mo.ui.dictionary({"porcentagem": mo.ui.slider(start=1, stop=100, step=1, value=5, label="Amostragem HDBSCAN (%):")}),
-        bordered=True, submit_button_label="🧬 2. Agrupar Espécies"
+        element=mo.ui.dictionary({"sample_percent": mo.ui.slider(start=1, stop=100, step=1, value=5, label="HDBSCAN sample (%):")}),
+        bordered=True, submit_button_label="🧬 2. Cluster the k-mers"
     )
-    
+
     form_cluster
-    return form_cluster,
+    return (form_cluster,)
+
 
 @app.cell
-async def pagina_cluster_resultado(asyncio, df_final, form_cluster, matriz_assinaturas, mo, np, obter_pagina, pl):
+async def cluster_page_result(asyncio, df_kmers, form_cluster, get_page, mo, np, pl, signature_matrix):
     from sklearn.cluster import HDBSCAN
     from sklearn.decomposition import PCA
 
-    mo.stop(obter_pagina() != "cluster", mo.md(""))
-    mo.stop(form_cluster.value is None, mo.md(""))
+    mo.stop(get_page() != "cluster")
+    mo.stop(form_cluster.value is None)
 
-    _fracao = form_cluster.value["porcentagem"] / 100.0
-    _num_rows_total = len(df_final)
-    
-    # 🧠 AMOSTRAGEM INTELIGENTE
-    # Se temos muito poucos dados (como no nosso teste de 6 k-mers), forçamos 100% da amostra
-    if _num_rows_total < 1000:
-        _tamanho_amostra = _num_rows_total
+    _fraction = form_cluster.value["sample_percent"] / 100.0
+    _total_rows = len(df_kmers)
+
+    # With very little data (a 6 k-mer test, say) use 100% of it.
+    if _total_rows < 1000:
+        _sample_size = _total_rows
     else:
-        _tamanho_amostra = int(_num_rows_total * _fracao)
+        _sample_size = int(_total_rows * _fraction)
 
-    # 🛡️ PROTEÇÕES
-    if _tamanho_amostra < 4:
-        mo.stop(True, mo.md("⚠️ **Erro:** Dados insuficientes. O modelo precisa de pelo menos 4 K-mers para calcular a geometria tridimensional (PCA)."))
+    if _sample_size < 4:
+        mo.stop(True, mo.md("⚠️ **Error:** not enough data. The model needs at least 4 k-mers to compute the 3-D projection (PCA)."))
 
-    if _tamanho_amostra > 100000:
+    if _sample_size > 100000:
         mo.stop(True, mo.md(f"""
-        ⚠️ **Aviso de Gargalo de CPU:** Você está tentando agrupar **{_tamanho_amostra:,}** K-mers. O algoritmo HDBSCAN no Python (CPU) não foi feito para lidar com esse volume e pode demorar horas. 
-        👉 **Solução:** Reduza o slider e clique em Agrupar novamente.
+        ⚠️ **CPU bottleneck warning:** you are trying to cluster **{_sample_size:,}** k-mers. HDBSCAN in Python (CPU) is not built for that volume and may take hours.
+        👉 **What to do:** lower the slider and click Cluster again.
         """))
 
-    with mo.status.spinner(f"Amostragem de {_tamanho_amostra:,} pontos e cálculo espacial..."):
+    with mo.status.spinner(f"Sampling {_sample_size:,} points and computing their geometry..."):
         await asyncio.sleep(0.1)
-        
-        _indices = np.arange(_num_rows_total)
-        # Só fatiamos se a amostra for menor que o total
-        if _tamanho_amostra < _num_rows_total:
-            _indices = np.random.choice(_indices, _tamanho_amostra, replace=False)
-        
-        _df_processar = df_final[_indices]
-        _matriz_embeddings = matriz_assinaturas[_indices].astype(np.float64)
 
-        _matriz_reduzida = PCA(n_components=3).fit_transform(_matriz_embeddings)
-        
-        # Como o HDBSCAN exige grupos de no mínimo 50, ajustamos dinamicamente para testes pequenos
-        _min_cluster = min(50, max(2, _tamanho_amostra // 2))
-        _labels = HDBSCAN(min_cluster_size=_min_cluster, n_jobs=-1, copy=False).fit_predict(_matriz_reduzida)
+        _indices = np.arange(_total_rows)
+        # Only slice when the sample is smaller than the total.
+        if _sample_size < _total_rows:
+            _indices = np.random.choice(_indices, _sample_size, replace=False)
 
-        _df_agrupado = _df_processar.with_columns(pl.Series("Cluster_ID", _labels))
+        _df_sample = df_kmers[_indices]
+        _embeddings = signature_matrix[_indices].astype(np.float64)
+
+        _reduced = PCA(n_components=3).fit_transform(_embeddings)
+
+        # HDBSCAN wants groups of at least 50; adjust for small tests.
+        _min_cluster = min(50, max(2, _sample_size // 2))
+        _labels = HDBSCAN(min_cluster_size=_min_cluster, n_jobs=-1, copy=False).fit_predict(_reduced)
+
+        _df_clustered = _df_sample.with_columns(pl.Series("Cluster_ID", _labels))
         _total_clusters = len(set(_labels)) - (1 if -1 in _labels else 0)
 
-    _tabela = mo.ui.table(_df_agrupado, selection="single", pagination=True)
-    
-    _painel_final = mo.vstack([
-        mo.callout(mo.md(f"**Resultado:** {_total_clusters} Espécies/Cepas detectadas. (K-mers sem grupo/Ruído: {sum(_labels == -1)})"), kind="success"),
-        _tabela
+    _table = mo.ui.table(_df_clustered, selection="single", pagination=True)
+
+    _final_panel = mo.vstack([
+        mo.callout(mo.md(f"**Result:** {_total_clusters} cluster(s) found. (K-mers left ungrouped / noise: {sum(_labels == -1)})"), kind="success"),
+        _table
     ])
-    
-    _painel_final
+
+    _final_panel
     return HDBSCAN, PCA
 
+
 @app.cell
-def pagina_assembly_ui(definir_pagina, glob, mo, obter_pagina):
-    mo.stop(obter_pagina() != "assembly", mo.md(""))
-    btn_voltar_assembly = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
-    
-    # Procura os ficheiros .arrow do Módulo 1
-    _arquivos = glob.glob("*.arrow")
-    if not _arquivos: _arquivos = ["Nenhum arquivo .arrow encontrado"]
+def assembly_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "assembly")
+    btn_back_assembly = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+
+    # The .arrow files written by Module 1.
+    _files = glob.glob("*.arrow")
+    if not _files: _files = ["No file found (.arrow)"]
 
     form_assembly = mo.ui.form(
         element=mo.ui.dictionary({
-            "path_arrow": mo.ui.dropdown(options=_arquivos, label="🧬 Escolha o Ficheiro Base (.arrow):")
-        }), 
-        bordered=True, 
-        submit_button_label="🧩 1. Montar Grafo de De Bruijn (Memória RAM)"
+            "kmer_file": mo.ui.dropdown(options=_files, label="🧬 K-mer file (.arrow):")
+        }),
+        bordered=True,
+        submit_button_label="🧩 Build the De Bruijn graph and assemble"
     )
-    
+
     ui_assembly = mo.vstack([
-        btn_voltar_assembly, 
-        mo.md("<br># 🧩 Montagem de Genomas (De Bruijn)"),
-        mo.callout(mo.md("Este módulo recebe os K-mers purificados, fatia cada um deles em Prefixo (K-1) e Sufixo (K-1) e mapeia as sobreposições na memória RAM do seu computador usando a velocidade extrema do Rust. O resultado é a base estrutural para montar o genoma original."), kind="info"),
+        btn_back_assembly,
+        mo.md("<br>\n\n# 🧩 Genome Assembly (De Bruijn)"),
+        mo.callout(mo.md("This module takes the k-mers from Module 1, splits each one into a prefix (K-1) and a suffix (K-1), and maps the overlaps in memory, in Rust. The unbranched paths of that graph are the contigs."), kind="info"),
         form_assembly
     ])
-    
+
     ui_assembly
-    return btn_voltar_assembly, form_assembly, ui_assembly
+    return btn_back_assembly, form_assembly, ui_assembly
+
 
 @app.cell
-async def pagina_assembly_backend(asyncio, form_assembly, mmg, mo, obter_pagina, pl):
-    import os as _os # <-- IMPORTAÇÃO PRIVADA AQUI
-    mo.stop(obter_pagina() != "assembly", mo.md(""))
-    mo.stop(form_assembly.value is None, mo.md("🧩 *Aguardando clique no botão de montagem...*"))
+async def assembly_page_backend(asyncio, form_assembly, get_page, mmg, mo, os, pl):
+    mo.stop(get_page() != "assembly")
+    mo.stop(form_assembly.value is None, mo.md("🧩 *Waiting for the assembly button...*"))
 
-    _path = form_assembly.value.get("path_arrow")
-    mo.stop(not _path or "Nenhum" in _path, mo.callout(mo.md("⚠️ Selecione um ficheiro .arrow válido."), kind="warning"))
+    _path = form_assembly.value.get("kmer_file")
+    mo.stop(not _path or _path.startswith("No file"), mo.callout(mo.md("⚠️ Select a valid .arrow file."), kind="warn"))
 
     try:
-        # Extrai o "K" automaticamente do nome do ficheiro (ex: arquivo_K55.arrow -> 55)
-        _k_str = _path.split("_K")[-1].split(".arrow")[0]
-        _k_size = int(_k_str)
+        # K comes from the file name (file_K55.arrow -> 55).
+        _k_text = _path.split("_K")[-1].split(".arrow")[0]
+        _k_size = int(_k_text)
 
-        with mo.status.spinner(f"1/3 Lendo K-mers (Zero-Copy) Monolítico (K={_k_size})..."):
+        with mo.status.spinner(f"1/3 Reading the k-mers (K={_k_size})..."):
             await asyncio.sleep(0.1)
             _df = pl.read_ipc(_path)
-            _bytes_kmer = _df.get_column("K-mers").item(0) 
-            
-        with mo.status.spinner("2/3 Rust: Analisando Grafo e Superando Repetições..."):
-            await asyncio.sleep(0.1)
-            _nos, _arestas = mmg.construir_grafo_debruijn(_bytes_kmer, _k_size)
-            lista_contigs = mmg.montar_genoma_debruijn(_bytes_kmer, _k_size)
+            _kmer_bytes = _df.get_column("K-mers").item(0)
 
-        with mo.status.spinner("3/3 Salvando no Disco e Preparando Interface..."):
+        with mo.status.spinner("2/3 Rust: building the graph and walking its paths..."):
             await asyncio.sleep(0.1)
-            
-            _nome_arquivo = f"MMGEN_Contigs_K{_k_size}.fasta"
-            with open(_nome_arquivo, "w", encoding="utf-8") as arquivo_fasta:
-                for i, c in enumerate(lista_contigs):
-                    arquivo_fasta.write(f">NODE_{i+1}_length_{len(c)}\n{c}\n")
+            _nodes, _edges = mmg.build_debruijn_graph(_kmer_bytes, _k_size)
+            contig_list = mmg.assemble_debruijn(_kmer_bytes, _k_size)
 
-            _caminho = _os.path.abspath(_nome_arquivo) # <-- USAMOS _os AQUI
-            _top_contigs = lista_contigs[:100]
+        with mo.status.spinner("3/3 Saving to disk and preparing the table..."):
+            await asyncio.sleep(0.1)
+
+            _out_name = f"MMGEN_Contigs_K{_k_size}.fasta"
+            with open(_out_name, "w", encoding="utf-8") as fasta_file:
+                for i, c in enumerate(contig_list):
+                    fasta_file.write(f">NODE_{i+1}_length_{len(c)}\n{c}\n")
+
+            _full_path = os.path.abspath(_out_name)
+            _top_contigs = contig_list[:100]
 
             df_contigs = pl.DataFrame({
                 "Contig ID": [f"NODE_{i+1}" for i in range(len(_top_contigs))],
-                "Tamanho (bp)": [len(c) for c in _top_contigs],
-                "Sequência Inicial": [c[:50] + "..." for c in _top_contigs]
+                "Length (bp)": [len(c) for c in _top_contigs],
+                "Start of sequence": [c[:50] + "..." for c in _top_contigs]
             })
-            _tabela_ui = mo.ui.table(df_contigs, pagination=True, page_size=10)
+            _table_ui = mo.ui.table(df_contigs, pagination=True, page_size=10)
 
-        _painel = mo.vstack([
+        _panel = mo.vstack([
             mo.callout(mo.md(f"""
-            ### 🗺️ Grafo Ultra-Longo Resolvido com Sucesso! (128-bits)
-            * **Nós Totais:** `{_nos:,}` | **Arestas Totais:** `{_arestas:,}`
-            * **Total de Peças Geradas:** `{len(lista_contigs):,}`
-            * **Maior Peça Reconstruída:** `{len(lista_contigs[0]):,} bp`
+            ### 🗺️ Graph resolved successfully (128-bit k-mers)
+            * **Nodes:** `{_nodes:,}` | **Edges:** `{_edges:,}`
+            * **Contigs produced:** `{len(contig_list):,}`
+            * **Longest contig:** `{len(contig_list[0]):,} bp`
             """), kind="success"),
-            mo.callout(mo.md(f"💾 **Ficheiro Físico Salvo:** `{_caminho}`"), kind="info"),
-            mo.md(f"#### 📋 Top {len(_top_contigs)} Maiores Fragmentos (Unitigs):"),
-            _tabela_ui
+            mo.callout(mo.md(f"💾 **File saved:** `{_full_path}`"), kind="info"),
+            mo.md(f"#### 📋 Top {len(_top_contigs)} longest contigs (unitigs):"),
+            _table_ui
         ])
 
     except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO NO PYTHON:** `{str(e)}`"), kind="danger")
+        _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    _panel
+    return
+
+
 @app.cell
-def pagina_variant_ui(definir_pagina, glob, mo, obter_pagina):
-    import os as _os
-    mo.stop(obter_pagina() != "variant", mo.md(""))
-    btn_voltar_variant = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
+def variant_page_ui(get_page, get_patient_msg, glob, mo, os, set_page, set_patient_msg):
+    mo.stop(get_page() != "variant")
 
-    # 1. Criamos um estado para mostrar o resultado do botão na tela!
-    get_msg, set_msg = mo.state("")
+    def _back(_):
+        set_patient_msg("")
+        set_page("home")
 
-    def gerar_paciente():
-        # 2. Corrigido para o nome exato do ficheiro no seu disco
-        _nome_base = "ecoli.fasta" 
-        
-        if not _os.path.exists(_nome_base): 
-            set_msg(f"❌ Erro: O ficheiro '{_nome_base}' não está nesta pasta!")
+    btn_back_variant = mo.ui.button(label="⬅️ Back to Menu", on_change=_back)
+
+    def generate_patient():
+        # The simulated patient is made from a file with exactly this name.
+        _base_name = "ecoli.fasta"
+
+        if not os.path.exists(_base_name):
+            set_patient_msg(f"❌ Error: the file '{_base_name}' is not in this folder!")
             return
-            
-        with open(_nome_base, "r") as f: linhas = f.readlines()
-        seq = "".join([l.strip() for l in linhas if not l.startswith(">")])
+
+        with open(_base_name, "r") as f: lines = f.readlines()
+        seq = "".join([l.strip() for l in lines if not l.startswith(">")])
         seq_list = list(seq)
-        
+
         if len(seq_list) > 30000:
             seq_list[5000] = 'T' if seq_list[5000] == 'A' else 'A'
             seq_list[15000] = 'G' if seq_list[15000] == 'C' else 'C'
             seq_list[25000] = 'C' if seq_list[25000] == 'G' else 'G'
-            
-        seq_mutada = "".join(seq_list)
-        with open("paciente_mutado.fasta", "w") as f:
-            f.write(">Paciente_Mutado_Ecoli\n")
-            for i in range(0, len(seq_mutada), 80): f.write(seq_mutada[i:i+80] + "\n")
-            
-        # 3. Atualiza a mensagem na interface gráfica
-        set_msg("✅ SUCESSO! O 'paciente_mutado.fasta' foi gerado no disco com 3 mutações.")
 
-    btn_gerar = mo.ui.button(label="💉 Gerar Paciente Simulado", on_click=lambda _: gerar_paciente())
+        mutated = "".join(seq_list)
+        with open("mutated_patient.fasta", "w") as f:
+            f.write(">Mutated_Patient_Ecoli\n")
+            for i in range(0, len(mutated), 80): f.write(mutated[i:i+80] + "\n")
 
-    _arquivos = glob.glob("*.arrow")
-    if not _arquivos: _arquivos = ["Nenhum arquivo .arrow encontrado"]
+        set_patient_msg("✅ Done! 'mutated_patient.fasta' was written to disk with 3 mutations.")
+
+    btn_generate = mo.ui.button(label="💉 Generate simulated patient", on_click=lambda _: generate_patient())
+
+    _files = glob.glob("*.arrow")
+    if not _files: _files = ["No file found (.arrow)"]
 
     form_variant = mo.ui.form(
         element=mo.ui.dictionary({
-            "path_ref": mo.ui.dropdown(options=_arquivos, label="🧬 1. Genoma de Referência Saudável (.arrow):"),
-            "path_paciente": mo.ui.dropdown(options=_arquivos, label="🩸 2. Amostra do Paciente (.arrow):"),
-            "tamanho_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Memória da VRAM para o Filtro (MB):"),
-            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Cálculos Criptográficos por K-mer:")
+            "reference": mo.ui.dropdown(options=_files, label="🧬 1. Healthy reference genome (.arrow):"),
+            "patient": mo.ui.dropdown(options=_files, label="🩸 2. Patient sample (.arrow):"),
+            "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Bloom filter size (MB):"),
+            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Hashes per k-mer:")
         }),
         bordered=True,
-        submit_button_label="🔍 3. Executar Busca CUDA"
+        submit_button_label="🔍 3. Run the search"
     )
 
     ui_variant = mo.vstack([
-        btn_voltar_variant,
-        mo.md("<br># ⚠️ Chamada de Variantes (SNPs) via GPU"),
-        mo.callout(mo.md("Para encontrar mutações, precisamos comparar um Paciente contra uma Referência. Clique no botão abaixo para simular um paciente."), kind="info"),
-        btn_gerar,
-        # AQUI APARECERÁ O FEEDBACK DO BOTÃO:
-        mo.md(f"**{get_msg()}**"), 
+        btn_back_variant,
+        mo.md("<br>\n\n# ⚠️ Variant Calling (SNPs)"),
+        mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below creates a simulated patient from `ecoli.fasta`, with 3 planted mutations; run it through Module 1 to get its `.arrow` file."), kind="info"),
+        btn_generate,
+        # The button's feedback (an empty one gave "****", which Markdown draws
+        # as a horizontal rule).
+        mo.md(f"**{get_patient_msg()}**" if get_patient_msg() else ""),
         form_variant
     ])
-    
+
     ui_variant
-    return btn_gerar, btn_voltar_variant, form_variant, get_msg, set_msg, ui_variant
+    return btn_back_variant, btn_generate, form_variant, generate_patient, ui_variant
+
+
 @app.cell
-async def pagina_variant_backend(asyncio, form_variant, mmg, mo, obter_pagina, pl):
-    mo.stop(obter_pagina() != "variant", mo.md(""))
-    mo.stop(form_variant.value is None, mo.md("🧪 *Aguardando configuração...*"))
+async def variant_page_backend(asyncio, form_variant, get_page, mmg, mo, pl):
+    mo.stop(get_page() != "variant")
+    mo.stop(form_variant.value is None, mo.md("🧪 *Waiting for the settings...*"))
 
-    _ref = form_variant.value.get("path_ref")
-    _pac = form_variant.value.get("path_paciente")
-    
-    mo.stop(_ref == _pac, mo.callout(mo.md("⚠️ A Referência e o Paciente não podem ser o mesmo ficheiro!"), kind="warning"))
-    mo.stop(not _ref or not _pac or "Nenhum" in _ref, mo.md("⚠️ Selecione os dois ficheiros."))
+    _ref = form_variant.value.get("reference")
+    _pat = form_variant.value.get("patient")
 
-    _k_str = _ref.split("_K")[-1].split(".arrow")[0]
-    _k_size = int(_k_str)
-    _mb = form_variant.value["tamanho_mb"]
+    mo.stop(not _ref or not _pat or _ref.startswith("No file"), mo.callout(mo.md("⚠️ Select both files."), kind="warn"))
+    mo.stop(_ref == _pat, mo.callout(mo.md("⚠️ The reference and the patient cannot be the same file!"), kind="warn"))
+
+    _k_text = _ref.split("_K")[-1].split(".arrow")[0]
+    _k_size = int(_k_text)
+    _mb = form_variant.value["filter_mb"]
     _hashes = form_variant.value["num_hashes"]
+    # Where the Bloom filter really runs on this machine.
+    _where = "GPU" if mmg.engine_info()["gpu"] else "CPU"
 
     try:
-        with mo.status.spinner("1/3 Carregando Genomas (Zero-Copy)..."):
+        with mo.status.spinner("1/3 Loading the k-mers..."):
             await asyncio.sleep(0.1)
             _ref_bytes = pl.read_ipc(_ref).get_column("K-mers").item(0)
-            _pac_bytes = pl.read_ipc(_pac).get_column("K-mers").item(0)
+            _pat_bytes = pl.read_ipc(_pat).get_column("K-mers").item(0)
 
-        with mo.status.spinner("2/3 Construindo Filtro Bloom da Referência na NVIDIA..."):
+        with mo.status.spinner(f"2/3 Building the reference Bloom filter on the {_where}..."):
             await asyncio.sleep(0.1)
-            _bloom_bytes = mmg.construir_filtro_bloom_gpu(_ref_bytes, _mb, _hashes)
+            _bloom_bytes = mmg.build_bloom_filter(_ref_bytes, _mb, _hashes)
 
-        with mo.status.spinner("3/3 Buscando Mutações Exclusivas do Paciente na GPU..."):
+        with mo.status.spinner(f"3/3 Looking for k-mers found only in the patient ({_where})..."):
             await asyncio.sleep(0.1)
-            _mutacoes_bytes = mmg.extrair_mutacoes_gpu(_pac_bytes, _bloom_bytes, _hashes)
-            _sequencias_mutadas = mmg.decodificar_lote_128(_mutacoes_bytes, _k_size)
-            
-        _total_mutacoes = len(_sequencias_mutadas)
-        _amostra_visual = _sequencias_mutadas[:15] if _total_mutacoes > 0 else ["Nenhuma mutação encontrada."]
+            _mutation_bytes = mmg.extract_mutations(_pat_bytes, _bloom_bytes, _hashes)
+            _mutated_seqs = mmg.decode_kmers_128(_mutation_bytes, _k_size)
 
-        _painel = mo.vstack([
-            mo.callout(mo.md(f"""### 🏆 Varredura Genómica Concluída na GPU!
-A NVIDIA vasculhou 5 milhões de peças e encontrou a agulha no palheiro.
+        _total_mutations = len(_mutated_seqs)
+        _preview = _mutated_seqs[:15] if _total_mutations > 0 else ["No mutation found."]
 
-* **Mutações Detetadas (K-mers Únicos do Paciente):** `{_total_mutacoes:,}`
+        _panel = mo.vstack([
+            mo.callout(mo.md(f"""### 🏆 Genome scan complete (on the {_where})
+The patient's {len(_pat_bytes) // 16:,} k-mers were checked against the reference filter.
 
-**Amostra de Sequências Mutadas (k={_k_size}):**
+* **Mutations detected (k-mers found only in the patient):** `{_total_mutations:,}`
+
+**Sample of mutated sequences (k={_k_size}):**
 ```text
-{chr(10).join(_amostra_visual)}
+{chr(10).join(_preview)}
 ```"""), kind="success")
         ])
-        
-    except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO NO PYTHON:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    except Exception as e:
+        _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
+
+    _panel
+    return
+
+
 @app.cell
-def pagina_annotation_ui(definir_pagina, mo, obter_pagina):
-    import os as _os
-    mo.stop(obter_pagina() != "annotation", mo.md(""))
-    btn_voltar_annotation = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
+def annotation_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "annotation")
+    btn_back_annotation = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
 
     form_annotation = mo.ui.form(
         element=mo.ui.dictionary({
-            "dna_input": mo.ui.text_area(
-                label="🧬 Cole o DNA Mutado do Módulo 4 (ou um Contig inteiro):",
-                # Deixei uma das sequências mutadas que a sua GPU achou como teste!
-                value="ATTTACCCTTGCTTTCACATAATCTGCCCGCCGATTTTGCTGCGTTGCGTAAATA" 
+            "dna": mo.ui.text_area(
+                label="🧬 Paste the mutated DNA from Module 4 (or a whole contig):",
+                # One of the mutated sequences found in the E. coli example.
+                value="ATTTACCCTTGCTTTCACATAATCTGCCCGCCGATTTTGCTGCGTTGCGTAAATA"
             )
         }),
         bordered=True,
-        submit_button_label="⚙️ Traduzir para Proteína (Multi-Core)"
+        submit_button_label="⚙️ Translate to protein"
     )
 
     ui_annotation = mo.vstack([
-        btn_voltar_annotation,
-        mo.md("<br># 📘 Anotação Funcional (Tradução Genética)"),
-        mo.callout(mo.md("O DNA por si só é apenas um manual de instruções. Para saber se uma mutação causa doença, precisamos traduzir o código de 3 em 3 letras (Codões) para ver se a estrutura da **Proteína** foi alterada. Cole a sequência abaixo para testar."), kind="info"),
+        btn_back_annotation,
+        mo.md("<br>\n\n# 📘 Functional Annotation (Translation)"),
+        mo.callout(mo.md("DNA alone is only an instruction manual. To see whether a mutation matters, we translate the code three letters at a time (codons) and check whether the **protein** changed. Paste a sequence below to try it."), kind="info"),
         form_annotation
     ])
-    
+
     ui_annotation
-    return btn_voltar_annotation, form_annotation, ui_annotation
+    return btn_back_annotation, form_annotation, ui_annotation
+
 
 @app.cell
-async def pagina_annotation_backend(asyncio, form_annotation, mmg, mo, obter_pagina):
-    mo.stop(obter_pagina() != "annotation", mo.md(""))
-    mo.stop(form_annotation.value is None, mo.md("🧬 *Aguardando o DNA para tradução...*"))
+async def annotation_page_backend(asyncio, form_annotation, get_page, mmg, mo):
+    mo.stop(get_page() != "annotation")
+    mo.stop(form_annotation.value is None, mo.md("🧬 *Waiting for the DNA to translate...*"))
 
-    _dna = form_annotation.value.get("dna_input", "").strip().upper()
-    mo.stop(not _dna, mo.callout(mo.md("⚠️ Insira uma sequência de DNA válida."), kind="warning"))
+    _dna = form_annotation.value.get("dna", "").strip().upper()
+    mo.stop(not _dna, mo.callout(mo.md("⚠️ Enter a valid DNA sequence."), kind="warn"))
 
     try:
-        with mo.status.spinner("Traduzindo DNA em Proteínas via Rust (Rayon Multi-Core)..."):
+        with mo.status.spinner("Translating DNA into protein in Rust (Rayon, multi-core)..."):
             await asyncio.sleep(0.1)
-            # O Rust espera uma lista de sequências, devolve uma lista de proteínas
-            _resultados = mmg.traduzir_proteinas([_dna])
-            _proteina = _resultados[0]
+            # Rust takes a list of sequences and returns a list of proteins.
+            _results = mmg.translate_proteins([_dna])
+            _protein = _results[0]
 
-        # Vamos formatar visualmente os codões de STOP (*) para saltarem à vista
-        _proteina_formatada = _proteina.replace("*", "**<span style='color:red'>*</span>**")
+        # Make the stop codons (*) stand out. (&#42; and not "*": with asterisks
+        # around it Markdown did not make it bold and the screen showed "***".)
+        _protein_html = _protein.replace("*", "<b style='color:red'>&#42;</b>")
 
-        _painel = mo.vstack([
+        _panel = mo.vstack([
             mo.callout(mo.md(f"""
-            ### 🧬 Tradução Concluída!
-            * **Tamanho do DNA:** `{len(_dna)} bases`
-            * **Tamanho da Proteína:** `{len(_proteina)} aminoácidos`
+            ### 🧬 Translation complete!
+            * **DNA length:** `{len(_dna)} bases`
+            * **Protein length:** `{len(_protein)} amino acids`
 
-            **Sequência Peptídica (Aminoácidos):**
-            > {_proteina_formatada}
+            **Peptide sequence (amino acids):**
+            > {_protein_html}
 
-            *(Nota Médica: O asterisco vermelho indica um 'Codão de Paragem' (STOP). Se a mutação gerou um STOP precoce (Nonsense), a proteína foi truncada e a bactéria provavelmente perdeu essa função biolóica!)*
+            *(Note: the red asterisk marks a stop codon. If a mutation created an early stop (a nonsense mutation), the protein is truncated and has probably lost its function.)*
             """), kind="success")
         ])
     except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO NO PYTHON:** `{str(e)}`"), kind="danger")
+        _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    _panel
+    return
+
 
 @app.cell
-def pagina_bloom_ui(definir_pagina, glob, mo, obter_pagina):
-    mo.stop(obter_pagina() != "bloom", mo.md(""))
-    btn_voltar_bloom = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
+def bloom_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "bloom")
+    btn_back_bloom = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
 
-    # Verifica os ficheiros disponíveis
-    _arquivos = glob.glob("*.arrow")
-    _opcoes = _arquivos if _arquivos else ["Nenhum arquivo .arrow encontrado"]
+    _files = glob.glob("*.arrow")
+    _options = _files if _files else ["No file found (.arrow)"]
 
     form_bloom = mo.ui.form(
         element=mo.ui.dictionary({
-            "path_arrow": mo.ui.dropdown(options=_opcoes, label="🧬 Escolha o Genoma (.arrow):"),
-            "tamanho_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Memória VRAM (MB):"),
-            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Número de Hashes:")
+            "kmer_file": mo.ui.dropdown(options=_options, label="🧬 Genome (.arrow):"),
+            "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Filter size (MB):"),
+            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Number of hashes:")
         }),
         bordered=True,
-        submit_button_label="🔍 1. Lançar Força Bruta na NVIDIA (CUDA)"
+        submit_button_label="🔍 Build the Bloom filter"
     )
 
     _ui = mo.vstack([
-        btn_voltar_bloom,
-        mo.md("<br># 🔍 Filtros Bloom Probabilísticos (GPU)"),
+        btn_back_bloom,
+        mo.md("<br>\n\n# 🔍 Probabilistic Bloom Filters"),
         form_bloom
     ])
     _ui
-    return btn_voltar_bloom, form_bloom
+    return btn_back_bloom, form_bloom
+
 
 @app.cell
-async def pagina_bloom_backend(asyncio, form_bloom, mmg, mo, np, obter_pagina, pl):
-    mo.stop(obter_pagina() != "bloom", mo.md(""))
-    mo.stop(form_bloom.value is None, mo.md("🔍 *Configure os parâmetros acima e clique em 'Lançar'...*"))
+async def bloom_page_backend(asyncio, form_bloom, get_page, mmg, mo, np, pl):
+    mo.stop(get_page() != "bloom")
+    mo.stop(form_bloom.value is None, mo.md("🔍 *Set the parameters above and click 'Build'...*"))
 
-    _path = form_bloom.value.get("path_arrow")
-    mo.stop(not _path or "Nenhum" in _path, mo.md("⚠️ Selecione um ficheiro .arrow válido."))
+    _path = form_bloom.value.get("kmer_file")
+    mo.stop(not _path or _path.startswith("No file"), mo.md("⚠️ Select a valid .arrow file."))
 
-    _tamanho_mb = form_bloom.value["tamanho_mb"]
+    _filter_mb = form_bloom.value["filter_mb"]
     _num_hashes = form_bloom.value["num_hashes"]
+    # Where the filter really runs on this machine.
+    _where = "GPU" if mmg.engine_info()["gpu"] else "CPU"
 
-    with mo.status.spinner("🔥 Processando na NVIDIA GTX 1050 Ti..."):
+    with mo.status.spinner(f"🔥 Building the filter on the {_where}..."):
         await asyncio.sleep(0.1)
         _df = pl.read_ipc(_path)
-        _bytes_kmer = _df.get_column("K-mers").to_numpy().tobytes()
-        _total_kmers = len(_df)
-        
-        # AQUI É ONDE A MÁGICA CUDA ACONTECE
-        _bloom_bytes = mmg.construir_filtro_bloom_gpu(_bytes_kmer, _tamanho_mb, _num_hashes)
+        _kmer_bytes = _df.get_column("K-mers").item(0)
+        _total_kmers = len(_kmer_bytes) // 16
 
-        # Estatísticas
+        _bloom_bytes = mmg.build_bloom_filter(_kmer_bytes, _filter_mb, _num_hashes)
+
+        # Statistics
         _arr_8 = np.frombuffer(_bloom_bytes, dtype=np.uint8)
-        _bits_ativos = np.unpackbits(_arr_8).sum()
-        _bits_totais = _tamanho_mb * 1024 * 1024 * 8
-        _saturacao = (_bits_ativos / _bits_totais) * 100
+        _bits_set = np.unpackbits(_arr_8).sum()
+        _bits_total = _filter_mb * 1024 * 1024 * 8
+        _saturation = (_bits_set / _bits_total) * 100
 
-    _painel = mo.callout(mo.md(f"""
-    ### 🚀 Filtro Bloom Gerado com Sucesso!
-    A GPU processou **{_total_kmers * _num_hashes:,}** operações de hash.
-    * **Saturação:** `{_saturacao:.2f}%` 
-    * **Bits Ativos:** `{_bits_ativos:,}` de `{_bits_totais:,}`
+    _panel = mo.callout(mo.md(f"""
+    ### 🚀 Bloom filter built successfully!
+    The {_where} ran **{_total_kmers * _num_hashes:,}** hash operations.
+    * **Saturation:** `{_saturation:.2f}%`
+    * **Bits set:** `{_bits_set:,}` of `{_bits_total:,}`
     """), kind="success")
-    
-    _painel
-    return _painel,
-@app.cell
-def pagina_scaffold_ui(definir_pagina, glob, mo, obter_pagina):
-    mo.stop(obter_pagina() != "scaffold", mo.md(""))
-    btn_voltar_scaffold = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
 
-    _arquivos = glob.glob("*.fasta") + glob.glob("*.fa")
-    if not _arquivos: _arquivos = ["Nenhum arquivo FASTA encontrado"]
+    _panel
+    return
+
+
+@app.cell
+def scaffold_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "scaffold")
+    btn_back_scaffold = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+
+    _files = glob.glob("*.fasta") + glob.glob("*.fa")
+    if not _files: _files = ["No file found (FASTA)"]
 
     form_scaffold = mo.ui.form(
         element=mo.ui.dictionary({
-            "path_fasta": mo.ui.dropdown(options=_arquivos, label="🧩 Ficheiro de Contigs (FASTA):"),
-            # Se usámos K=55 na montagem, o overlap exato dos contigs é K-1 (54)
-            "overlap": mo.ui.slider(start=21, stop=100, step=1, value=54, label="Sobreposição Exata nas Pontas (Overlap):")
+            "contigs_fasta": mo.ui.dropdown(options=_files, label="🧩 Contigs file (FASTA):"),
+            # With K=55 in the assembly, the contigs overlap by exactly K-1 (54).
+            "overlap": mo.ui.slider(start=21, stop=100, step=1, value=54, label="Exact overlap at the ends (bases):")
         }),
         bordered=True,
-        submit_button_label="🏗️ Fechar Genoma (Scaffolding)"
+        submit_button_label="🏗️ Close the genome (scaffolding)"
     )
 
     ui_scaffold = mo.vstack([
-        btn_voltar_scaffold,
-        mo.md("<br># 🧬 Fechamento de Genomas (Scaffolding)"),
-        mo.callout(mo.md("O Grafo de De Bruijn gerou grandes fragmentos (Contigs). O Módulo de Scaffolding pega nestes blocos de centenas de milhares de bases e costura-os procurando sobreposições perfeitas nas pontas, com o objetivo de reconstruir o círculo cromossómico original."), kind="info"),
+        btn_back_scaffold,
+        mo.md("<br>\n\n# 🧬 Genome Scaffolding"),
+        mo.callout(mo.md("The De Bruijn graph produced contigs. Scaffolding takes those blocks and stitches them together wherever their ends overlap exactly, trying to rebuild the original chromosome, circular ones included."), kind="info"),
         form_scaffold
     ])
-    
+
     ui_scaffold
-    return btn_voltar_scaffold, form_scaffold, ui_scaffold
+    return btn_back_scaffold, form_scaffold, ui_scaffold
+
 
 @app.cell
-async def pagina_scaffold_backend(asyncio, form_scaffold, mmg, mo, obter_pagina):
-    mo.stop(obter_pagina() != "scaffold", mo.md(""))
-    mo.stop(form_scaffold.value is None, mo.md("🏗️ *Aguardando seleção do FASTA...*"))
+async def scaffold_page_backend(asyncio, form_scaffold, get_page, mmg, mo):
+    mo.stop(get_page() != "scaffold")
+    mo.stop(form_scaffold.value is None, mo.md("🏗️ *Waiting for a FASTA file...*"))
 
-    _path = form_scaffold.value.get("path_fasta")
+    _path = form_scaffold.value.get("contigs_fasta")
     _overlap = form_scaffold.value.get("overlap")
-    
-    mo.stop(not _path or "Nenhum" in _path, mo.callout(mo.md("⚠️ Selecione um ficheiro FASTA válido gerado pelo Módulo 3."), kind="warning"))
+
+    mo.stop(not _path or _path.startswith("No file"), mo.callout(mo.md("⚠️ Select a valid FASTA file produced by Module 3."), kind="warn"))
 
     try:
-        with mo.status.spinner("Lendo Contigs massivos da RAM..."):
+        with mo.status.spinner("Reading the contigs..."):
             await asyncio.sleep(0.1)
-            # Lê o ficheiro FASTA gerado pelo Módulo 3
             with open(_path, "r") as f:
-                linhas = f.readlines()
-            
+                lines = f.readlines()
+
             contigs = []
-            seq_atual = []
-            for linha in linhas:
-                if linha.startswith(">"):
-                    if seq_atual:
-                        contigs.append("".join(seq_atual))
-                        seq_atual = []
+            current = []
+            for line in lines:
+                if line.startswith(">"):
+                    if current:
+                        contigs.append("".join(current))
+                        current = []
                 else:
-                    seq_atual.append(linha.strip())
-            if seq_atual:
-                contigs.append("".join(seq_atual))
+                    current.append(line.strip())
+            if current:
+                contigs.append("".join(current))
 
-        with mo.status.spinner(f"Costurando pontas com overlap exato de {_overlap} bases no Rust..."):
+        with mo.status.spinner(f"Stitching ends with an exact overlap of {_overlap} bases, in Rust..."):
             await asyncio.sleep(0.1)
-            # 🚀 Chamada ao Motor C++ / Rust
-            scaffolds, circulares = mmg.montar_scaffolds(contigs, _overlap)
+            scaffolds, circular = mmg.build_scaffolds(contigs, _overlap)
 
-        _painel = mo.vstack([
+        _panel = mo.vstack([
             mo.callout(mo.md(f"""
-            ### 🏆 Scaffolding Concluído!
-            O algoritmo analisou e cruzou as pontas de **{len(contigs):,}** blocos isolados.
-            
-            * **Super-Contigs Resultantes:** `{len(scaffolds):,}` 
-            * **Maior Cromossoma Contínuo:** `{len(scaffolds[0]):,} bases`
-            * **Genomas Circulares Detetados:** `{circulares}` 🔄
-            
-            *(Se detetou Genomas Circulares, significa que a cauda final do cromossoma colou perfeitamente com a cabeça inicial, reconstruindo a biologia original na sua plenitude!)*
+            ### 🏆 Scaffolding complete!
+            The algorithm compared the ends of **{len(contigs):,}** contigs.
+
+            * **Resulting scaffolds:** `{len(scaffolds):,}`
+            * **Longest continuous sequence:** `{len(scaffolds[0]):,} bases`
+            * **Circular genomes detected:** `{circular}` 🔄
+
+            *(A circular genome means the tail of a sequence joined its own head exactly.)*
             """), kind="success")
         ])
-        
+
     except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO NO PYTHON:** `{str(e)}`"), kind="danger")
+        _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    _panel
+    return
+
+
 @app.cell
-def pagina_vcf_ui(definir_pagina, glob, mo, obter_pagina):
-    mo.stop(obter_pagina() != "vcf", mo.md(""))
-    btn_voltar_vcf = mo.ui.button(label="⬅️ Voltar ao Menu", on_change=lambda _: definir_pagina("home"))
+def vcf_page_ui(get_page, glob, mo, set_page):
+    mo.stop(get_page() != "vcf")
+    btn_back_vcf = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
 
-    # 👇 A MAGIA ACONTECE AQUI: Procurar explicitamente pelas extensões
-    _arquivos = glob.glob("*.vcf") + glob.glob("*.vcf.gz") + glob.glob("*.parquet")
-    if not _arquivos: 
-        _arquivos = ["Nenhum arquivo encontrado (Coloque os VCF/Parquet na pasta do projeto)"]
+    _files = sorted(glob.glob("*.vcf") + glob.glob("*.vcf.gz"))
+    if not _files:
+        _files = ["No file found (put the VCF files in the project folder)"]
 
     form_vcf = mo.ui.form(
         element=mo.ui.dictionary({
-            "caminhos": mo.ui.multiselect(options=_arquivos, label="🗄️ Selecione os ficheiros (VCF, GZ, Parquet):"),
-            "ordem": mo.ui.dropdown(options=["POS", "QUAL"], value="POS", label="📊 Campo de Ordenação:"),
-            "nome_saida": mo.ui.text(value="Lote_Fundido_Ordenado.vcf", label="💾 Nome do ficheiro final:")
+            "files": mo.ui.multiselect(options=_files, label="🗄️ Files (VCF, VCF.GZ):"),
+            "sort_by": mo.ui.dropdown(options=["POS", "QUAL"], value="POS", label="📊 Sort by:"),
+            "output_name": mo.ui.text(value="Merged_Sorted.vcf", label="💾 Output file name:")
         }),
         bordered=True,
-        submit_button_label="🚀 Iniciar Motor Multimerge CLI"
+        submit_button_label="🚀 Start the Multimerge engine"
     )
 
     ui_vcf = mo.vstack([
-        btn_voltar_vcf,
-        mo.md("<br># 🗄️ 8. VCF Multimerge & Sorting"),
-        mo.callout(mo.md("O projeto original vive! Ingestão massiva de variantes genéticas. Selecione múltiplos ficheiros `.vcf`, `.vcf.gz` ou `.parquet` e o motor CLI com Polars fará o trabalho."), kind="info"),
+        btn_back_vcf,
+        mo.md("<br>\n\n# 🗄️ 8. VCF Multimerge & Sorting"),
+        mo.callout(mo.md("Bulk sorting of genetic variants. Select one or more `.vcf` or `.vcf.gz` files: the engine merges them all into a single output, with a stable sort, for files of any size (what does not fit in memory is sorted in runs on disk)."), kind="info"),
         form_vcf
     ])
-    
+
     ui_vcf
-    return btn_voltar_vcf, form_vcf, ui_vcf
+    return btn_back_vcf, form_vcf, ui_vcf
+
+
 @app.cell
-async def pagina_vcf_backend(asyncio, form_vcf, mo, obter_pagina):
-    import os as _os
-    import subprocess as _subprocess
-    
-    mo.stop(obter_pagina() != "vcf", mo.md(""))
-    mo.stop(form_vcf.value is None, mo.md("⏳ *Aguardando configuração...*"))
+async def vcf_page_backend(asyncio, form_vcf, get_page, mmg, mo, os):
+    mo.stop(get_page() != "vcf")
+    mo.stop(form_vcf.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
-    _caminhos = form_vcf.value.get("caminhos", [])
-    _ordem = form_vcf.value.get("ordem")
-    _saida = form_vcf.value.get("nome_saida", "Output.vcf")
+    _paths = list(form_vcf.value.get("files", []))
+    _sort_by = form_vcf.value.get("sort_by")
+    _output = (form_vcf.value.get("output_name") or "").strip() or "Merged_Sorted.vcf"
 
-    mo.stop(not _caminhos or "Nenhum" in _caminhos[0], mo.callout(mo.md("⚠️ Selecione pelo menos um ficheiro."), kind="warning"))
+    mo.stop(not _paths or _paths[0].startswith("No file"), mo.callout(mo.md("⚠️ Select at least one file."), kind="warn"))
+    # The result of an earlier run shows up in the list (it is a .vcf in the same
+    # folder): reading and writing the same file would destroy the data.
+    mo.stop(
+        os.path.abspath(_output) in [os.path.abspath(_c) for _c in _paths],
+        mo.callout(mo.md("⚠️ The output file cannot be one of the input files. Choose another name."), kind="warn")
+    )
 
     try:
-        with mo.status.spinner(f"Processando ficheiros via Motor Polars/Rust CLI..."):
+        with mo.status.spinner(f"Merging and sorting {len(_paths)} file(s) in the Multimerge engine..."):
             await asyncio.sleep(0.1)
-            
-            # Caminho dinâmico para encontrar o seu executável compilado pelo Cargo
-            _cli_path = _os.path.join("target", "release", "multimerge_cli")
-            if _os.name == "nt": # Adiciona .exe no Windows
-                _cli_path += ".exe"
-                
-            if not _os.path.exists(_cli_path):
-                mo.stop(True, mo.md(f"⚠️ **Erro:** O executável não foi encontrado em '{_cli_path}'. Compile com `cargo build --release --bin multimerge_cli` no terminal primeiro."))
 
-            _regra_cli = "--sort-by 0:chrom,1:num" if _ordem == "POS" else "--sort-by 5:float"
-            
-            # Dispara o seu executável para cada ficheiro selecionado
-            for _caminho in _caminhos:
-                _comando = f"{_cli_path} {_caminho} {_saida} {_regra_cli}"
-                _subprocess.run(_comando.split(), check=True)
+            # ONE call with ALL the files: the engine merges and sorts them with a
+            # stable sort. (It used to be one CLI call per file, all with the same
+            # output: each erased the previous one and only the last file
+            # survived.) It runs in a thread (Rust releases the GIL) so the
+            # interface does not freeze.
+            _variants = await asyncio.to_thread(mmg.multimerge_vcf, _paths, _sort_by, _output)
 
-            _caminho_absoluto = _os.path.abspath(_saida)
+            _full_path = os.path.abspath(_output)
 
-        _painel = mo.vstack([
+        _panel = mo.vstack([
             mo.callout(mo.md(f"""
-            ### ✅ VCF Multimerge Concluído!
-            O motor CLI Polars leu, ordenou e fundiu com sucesso.
-            
-            * **Ficheiros Originais:** `{len(_caminhos)}`
-            * **Campo de Ordenação Aplicado:** `{_ordem}`
-            * **Guardado em:** `{_caminho_absoluto}`
+            ### ✅ VCF Multimerge complete!
+            The engine read, merged and sorted the files.
+
+            * **Files merged:** `{len(_paths)}`
+            * **Variants written:** `{_variants:,}`
+            * **Sorted by:** `{_sort_by}`
+            * **Saved to:** `{_full_path}`
             """), kind="success")
         ])
-        
-    except Exception as e:
-        _painel = mo.callout(mo.md(f"**🔥 ERRO CRÍTICO NO CLI:** `{str(e)}`"), kind="danger")
 
-    _painel
-    return _painel,
+    except Exception as e:
+        _panel = mo.callout(mo.md(f"**🔥 MULTIMERGE ENGINE ERROR:** `{str(e)}`"), kind="danger")
+
+    _panel
+    return
+
+
+if __name__ == "__main__":
+    app.run()

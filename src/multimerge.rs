@@ -226,9 +226,9 @@ pub fn infer_schema(_path: &Path, partials: &[(usize, Option<ColumnType>)]) -> V
 }
 
 pub fn process_files(input: &str, output: &str, rules: &[Rule]) {
-    println!("🚀 [RUST] Lendo e analisando VCF: {}", input);
+    println!("🚀 [RUST] Reading and parsing VCF: {}", input);
     
-    let file = File::open(input).expect("Erro ao abrir ficheiro de entrada");
+    let file = File::open(input).expect("Error opening the input file");
     let reader = BufReader::with_capacity(1024 * 1024 * 16, file);
 
     let mut headers = Vec::new();
@@ -263,20 +263,23 @@ pub fn process_files(input: &str, output: &str, rules: &[Rule]) {
         }
     }
 
-    println!("🔄 [MOTOR HÍBRIDO] Ordenando {:#?} variantes usando multi_merge_sort...", records.len());
+    println!("🔄 [HYBRID ENGINE] Sorting {:#?} variants with multi_merge_sort...", records.len());
     
-    // 2. INVOCAMOS O SEU MOTOR GENIAL!
-    multi_merge_sort_generic(&mut records);
+    // 2. Multimerge_Stable, ordenando REFERENCIAS: move 8 bytes por variante
+    //    em vez de tres `String`, e variantes com a mesma chave mantem a ordem
+    //    do arquivo.
+    let mut ordem: Vec<&VcfRecord> = records.iter().collect();
+    crate::multimerge_core::multi_merge_sort_stable(&mut ordem);
 
-    println!("💾 [RUST] Gravando resultados em: {}", output);
-    let out_file = File::create(output).expect("Erro ao criar ficheiro de saída");
+    println!("💾 [RUST] Writing results to: {}", output);
+    let out_file = File::create(output).expect("Error creating the output file");
     let mut writer = BufWriter::with_capacity(1024 * 1024 * 32, out_file);
 
     // 3. ESCRITA NO DISCO
     for h in headers {
         writeln!(writer, "{}", h).unwrap();
     }
-    for r in records {
+    for r in ordem {
         writeln!(writer, "{}", r.raw_line).unwrap();
     }
 }

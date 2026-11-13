@@ -1,0 +1,5 @@
+# O pyo3 0.19 recusa Python mais novo que o 3.12, a menos que o build seja
+# abi3 (e e: ver Cargo.toml) e esta variavel esteja ligada. Com ela, o mesmo
+# wheel compila e roda em qualquer Python de 3.8 em diante.
+[env]
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"

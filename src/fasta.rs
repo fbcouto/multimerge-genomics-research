@@ -6,10 +6,10 @@ use crate::kmer::Kmer128;
 
 /// Processa múltiplos ficheiros FASTA (suporta .gz e texto limpo) em paralelo
 pub fn processar_fasta_lote(caminhos: Vec<String>, k: u8) -> Vec<u128> {
-    println!("🚀 Iniciando extração Multi-Thread de {} ficheiro(s) FASTA...", caminhos.len());
+    println!("🚀 Starting multi-threaded extraction from {} FASTA file(s)...", caminhos.len());
 
         let mut todos_kmers: Vec<u128> = caminhos.par_iter().flat_map(|caminho| {
-        let file = File::open(caminho).expect(&format!("Erro ao abrir o ficheiro: {}", caminho));
+        let file = File::open(caminho).expect(&format!("Error opening file: {}", caminho));
         
         // Inteligência de Descompressão
         let mut reader: Box<dyn BufRead> = if caminho.ends_with(".gz") {
@@ -54,8 +54,8 @@ pub fn processar_fasta_lote(caminhos: Vec<String>, k: u8) -> Vec<u128> {
         kmers_locais
     }).collect();
 
-    println!("🔄 Ordenando {} K-mers do lote FASTA...", todos_kmers.len());
-    todos_kmers.par_sort_unstable();
+    println!("🔄 Sorting {} k-mers from the FASTA batch...", todos_kmers.len());
+    crate::multimerge_core::multi_merge_sort_stable(&mut todos_kmers);
     todos_kmers.dedup(); 
 
     todos_kmers

@@ -15,7 +15,7 @@ impl Kmer128 {
         let k = sequencia.len() as u8;
         
         // Proteção contra K-mers grandes demais para u128
-        assert!(k <= 63, "O tamanho máximo do K-mer para u128 é 63!");
+        assert!(k <= 63, "The maximum k-mer size for u128 is 63!");
 
         for &base in sequencia {
             bits <<= 2; // Empurra os bits 2 casas para a esquerda

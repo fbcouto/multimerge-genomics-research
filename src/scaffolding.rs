@@ -3,7 +3,7 @@ use std::collections::HashMap;
 /// Recebe a lista de milhares de contigs e o tamanho do "encaixe" (overlap)
 /// Retorna os Super-Contigs montados e a contagem de Genomas Circulares encontrados.
 pub fn fast_hash_scaffold(contigs: Vec<String>, k_overlap: usize) -> (Vec<String>, usize) {
-    println!("🛠️ RUST: Iniciando Scaffolding de {} peças...", contigs.len());
+    println!("🛠️ RUST: starting scaffolding of {} contig(s)...", contigs.len());
     
     let mut prefix_map: HashMap<String, usize> = HashMap::with_capacity(contigs.len());
     let mut next_link = vec![usize::MAX; contigs.len()];

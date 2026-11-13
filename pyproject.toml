@@ -1,0 +1,30 @@
+# Empacotamento da extensao Python (maturin). Com este arquivo valem:
+#   maturin develop --release        instala no venv ativo, para desenvolver
+#   maturin build --release -o dist  gera o wheel
+#   pip install .                    compila e instala a partir do fonte
+# O wheel e abi3: um arquivo por sistema, para todo Python de 3.10 em diante.
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "multimerge-genomics"
+description = "Genomics tools for files of any size: validate, normalize chromosome names, sort, merge and intersect VCF/BED/GFF/SAM, plus k-mer modules with optional CUDA acceleration."
+readme = "README.md"
+requires-python = ">=3.10"
+# A versao vem do Cargo.toml.
+dynamic = ["version"]
+keywords = ["bioinformatics", "genomics", "vcf", "bed", "gff", "sorting"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "multimerge_genomics"

@@ -1,23 +1,29 @@
 
 [dependencies]
-pyo3 = { version = "0.19.2", features = ["extension-module"] }
-cudarc = "0.9"
-anyhow = "1.0"
+# abi3: um wheel so serve em todo Python de 3.10 em diante. O piso e o 3.10
+# porque foi quando a API estavel do Python passou a entregar `&str` sem copia.
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
 rayon = "1.8"
-# Adicionamos a biblioteca Arrow (A versão 47 é estritamente compatível com o PyO3 0.19)
-arrow = { version = "47.0.0", features = ["pyarrow", "ffi"] }
-chrono = "=0.4.31"
 flate2 = "1.0"
+# Lotes temporarios da ordenacao fora da memoria (LZ4) e RAM livre para o orcamento.
+lz4_flex = "0.11"
+sysinfo = "0.34"
+# So o CLI (src/bin/multimerge_cli.rs) usa o Polars.
 polars = { version = "0.36", features = ["lazy", "parquet"] }
+
+# Sairam em 2026-11-13, por nao terem nenhum uso no codigo: arrow 47 (que
+# prendia o pyo3 na versao 0.19), cudarc, anyhow, chrono e o bindgen do build.
 
 [build-dependencies]
 cc = "1.0"
-bindgen = "0.69"
 
 [package]
 name = "multimerge_genomics"
 version = "0.1.0"
 edition = "2021"
+description = "Genomics tools for files of any size: validate, normalize chromosome names, sort, merge and intersect VCF/BED/GFF/SAM, plus k-mer modules with optional CUDA acceleration."
+license = "Apache-2.0"
+readme = "README.md"
 
 [lib]
 name = "multimerge_genomics"

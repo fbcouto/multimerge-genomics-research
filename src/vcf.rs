@@ -1,86 +1,56 @@
-use rayon::prelude::*;
-use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use flate2::read::MultiGzDecoder;
+// Ordenacao de VCF pela interface original do projeto ("POS" / "QUAL").
+//
+// O trabalho esta em `externo.rs`: ordena em memoria quando o dado cabe no
+// orcamento e em lotes no disco, com merge k-vias, quando nao cabe. Nos dois
+// casos a ordenacao e ESTAVEL -- variantes com a mesma chave saem na ordem em
+// que entraram (ordem dos arquivos, depois ordem das linhas).
+//
+// Estas funcoes mantem a ordem alfabetica de cromossomos que o projeto sempre
+// teve (chr1, chr10, chr11, chr2). Para a ordem natural ou a do cabecalho
+// `##contig`, que e a do `bcftools sort`, use `externo::ordenar_arquivos`.
+use crate::externo::{ordenar_arquivos, Criterio, Formato, OrdemCromossomos, Resumo};
+use crate::orcamento::opcoes;
 
-/// Estrutura leve para manter a linha inteira na RAM e apenas as chaves necessárias para a ordenação
-#[derive(Clone)]
-pub struct VcfRecord {
-    pub chrom: String,
-    pub pos: u64,
-    pub qual: f32,
-    pub raw_line: String,
+/// Ordena um ou mais VCFs por "POS" (cromossomo e posicao, crescente) ou
+/// "QUAL" (qualidade, decrescente) e grava em `output_path`. O orcamento de
+/// memoria e calculado a partir da RAM livre. Devolve o numero de variantes.
+pub fn processar_e_ordenar_vcfs(
+    caminhos: Vec<String>,
+    campo_ordenacao: &str,
+    output_path: &str,
+) -> Result<usize, String> {
+    processar_e_ordenar_vcfs_com_orcamento(caminhos, campo_ordenacao, output_path, None, None)
+        .map(|r| r.registros)
 }
 
-pub fn processar_e_ordenar_vcfs(caminhos: Vec<String>, campo_ordenacao: &str, output_path: &str) -> Result<usize, String> {
-    println!("🧬 RUST: Iniciando VCF Multimerge de {} ficheiro(s)...", caminhos.len());
-
-    // 1. LER E EXTRAIR EM PARALELO
-    let mut todos_registos: Vec<VcfRecord> = caminhos.par_iter().flat_map(|caminho| {
-        let file = File::open(caminho).expect("Erro ao abrir VCF");
-        let reader: Box<dyn BufRead> = if caminho.ends_with(".gz") {
-            Box::new(BufReader::with_capacity(1024 * 1024 * 16, MultiGzDecoder::new(file)))
-        } else {
-            Box::new(BufReader::with_capacity(1024 * 1024 * 16, file))
-        };
-
-        let mut registos_locais = Vec::new();
-        for linha_result in reader.lines() {
-            if let Ok(linha) = linha_result {
-                // Ignora os cabeçalhos (mas numa versão final poderíamos guardá-los)
-                if linha.starts_with('#') { continue; }
-
-                let colunas: Vec<&str> = linha.split('\t').collect();
-                if colunas.len() >= 6 {
-                    let chrom = colunas[0].to_string();
-                    let pos = colunas[1].parse::<u64>().unwrap_or(0);
-                    let qual = colunas[5].parse::<f32>().unwrap_or(0.0);
-
-                    registos_locais.push(VcfRecord {
-                        chrom,
-                        pos,
-                        qual,
-                        raw_line: linha,
-                    });
-                }
-            }
-        }
-        registos_locais
-    }).collect();
-
-    let total_variantes = todos_registos.len();
-    println!("🔄 RUST: Ordenando {:#?} variantes em memória...", total_variantes);
-
-    // 2. O PODER DO MULTIMERGE (Ordenação Baseada no Campo Escolhido)
-    match campo_ordenacao {
-        "POS" => {
-            // Ordena primeiro por Cromossoma (Alfabético) e depois por Posição (Numérico)
-            todos_registos.par_sort_unstable_by(|a, b| {
-                a.chrom.cmp(&b.chrom).then_with(|| a.pos.cmp(&b.pos))
-            });
-        },
-        "QUAL" => {
-            // Ordena por Qualidade da mutação (do maior para o menor)
-            todos_registos.par_sort_unstable_by(|a, b| {
-                b.qual.partial_cmp(&a.qual).unwrap_or(std::cmp::Ordering::Equal)
-            });
-        },
-        _ => return Err("Campo de ordenação desconhecido!".to_string()),
+/// Igual a [`processar_e_ordenar_vcfs`], com o orcamento de memoria (em MB) e
+/// o diretorio dos lotes temporarios escolhidos por quem chama.
+pub fn processar_e_ordenar_vcfs_com_orcamento(
+    caminhos: Vec<String>,
+    campo_ordenacao: &str,
+    output_path: &str,
+    memoria_mb: Option<usize>,
+    dir_temp: Option<&str>,
+) -> Result<Resumo, String> {
+    let criterio = match campo_ordenacao {
+        "POS" => Criterio::Posicao,
+        "QUAL" => Criterio::Qualidade,
+        _ => return Err("Unknown sort field (use \"POS\" or \"QUAL\")".to_string()),
+    };
+    let op = opcoes(memoria_mb, dir_temp, OrdemCromossomos::Lexica);
+    println!(
+        "🧬 RUST: starting VCF Multimerge of {} file(s), memory budget {} MB...",
+        caminhos.len(),
+        op.memoria_bytes >> 20
+    );
+    let resumo = ordenar_arquivos(&caminhos, output_path, Formato::Vcf, criterio, &op)?;
+    if resumo.lotes == 0 {
+        println!("✅ RUST: {} variants sorted in memory.", resumo.registros);
+    } else {
+        println!(
+            "✅ RUST: {} variants sorted out of core ({} runs on disk, k-way merge).",
+            resumo.registros, resumo.lotes
+        );
     }
-
-    // 3. GRAVAÇÃO SUPER RÁPIDA NO DISCO
-    println!("💾 RUST: Escrevendo super-ficheiro VCF em {}...", output_path);
-    let out_file = File::create(output_path).map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::with_capacity(1024 * 1024 * 32, out_file);
-
-    // Escreve um cabeçalho VCF mínimo
-    writeln!(writer, "##fileformat=VCFv4.2").unwrap();
-    writeln!(writer, "##source=MMGEN_Multimerge_Engine").unwrap();
-    writeln!(writer, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT").unwrap();
-
-    for reg in todos_registos {
-        writeln!(writer, "{}", reg.raw_line).unwrap();
-    }
-
-    Ok(total_variantes)
+    Ok(resumo)
 }

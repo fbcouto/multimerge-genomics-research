@@ -15,7 +15,7 @@ pub fn construir_grafo_estatisticas(kmers: &[u128], k: u8) -> (usize, usize) {
 }
 
 pub fn montar_todos_contigs(kmers: &[u128], k: u8) -> Vec<String> {
-    println!("🧩 Extraindo contigs com Inteligência Topológica (u128, K={})...", k);
+    println!("🧩 Extracting contigs (u128, K={})...", k);
     
     let mut grafo: HashMap<u128, Vec<u128>> = HashMap::with_capacity(kmers.len());
     let mut in_degree: HashMap<u128, usize> = HashMap::with_capacity(kmers.len());
@@ -54,7 +54,7 @@ pub fn montar_todos_contigs(kmers: &[u128], k: u8) -> Vec<String> {
         }
     }
     
-    println!("🫧 SUCESSO: {} Bolhas de SNP/Erros colapsadas!", bolhas_colapsadas);
+    println!("🫧 Done: {} simple bubble(s) collapsed.", bolhas_colapsadas);
     contigs.sort_by(|a, b| b.len().cmp(&a.len()));
     contigs
 }

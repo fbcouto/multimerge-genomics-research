@@ -1,0 +1,17 @@
+[package]
+name = "trials"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# `cargo run --release` with no --bin runs the 102 sorting and interval tests.
+default-run = "trials"
+
+# Validation of src/externo.rs, intervalos.rs, validador.rs, nomes.rs and bloom.rs,
+# isolated from the rest of the project:
+# it needs neither CUDA, nor Python, nor Polars.
+[dependencies]
+rayon = "1.8"
+flate2 = "1.0"
+lz4_flex = "0.11"
+
+[workspace]

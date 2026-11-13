@@ -1,0 +1,41 @@
+name: Bug report
+description: A wrong result, an unclear error message, or a crash
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A small file that reproduces the problem is worth more than a long description: a few lines are usually enough.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got. Paste the full error message or the validator report.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The Python call, the interface screen or the notebook cell, and a small input file if you can share one.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Python API
+        - Web interface
+        - Colab notebook
+        - Build / installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python version, and the output of `python -c "import multimerge_genomics as m; print(m.engine_info())"`.
+    validations:
+      required: false

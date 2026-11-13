@@ -1,0 +1,43 @@
+name: Feature request or improvement
+description: A format, a tool or a behaviour you miss
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. The most useful requests start from a real task: what you were trying to do, and what got in the way.
+  - type: textarea
+    id: task
+    attributes:
+      label: What are you trying to do?
+      description: The task or the analysis, and what gets in the way today. Real file formats and sizes help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: The function, option, format or screen you have in mind. If another tool already does it (bedtools, bcftools, samtools...), name the command.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - File tools (validate, normalize, sort, merge, intersect)
+        - File formats (BAM/CRAM, Parquet, BGZF index...)
+        - K-mer modules (assembly, variants, Bloom filters, scaffolding)
+        - Web interface
+        - Colab notebook
+        - Performance / GPU
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you like to implement it?
+      options:
+        - label: I can open a pull request for this

@@ -273,6 +273,10 @@ MMGEN is alpha software (version 0.1.0). The file tools of modules 8–10 are th
 * Module 2 (clustering) is experimental — see above.
 * The public API, the messages, the interface and this documentation are in English. Code comments and internal names are still in Portuguese.
 
+## 💬 Feedback and contributions
+
+Suggestions for improvements and requests for new features are welcome: [open an issue](../../issues/new/choose) and pick *Feature request or improvement*, or *Bug report* if something went wrong. To implement something yourself, see [CONTRIBUTING.md](CONTRIBUTING.md); pull requests are welcome.
+
 ## 📄 License
 
 [Apache License 2.0](LICENSE).
@@ -292,4 +296,4 @@ MMGEN is free and open source, and nothing in it is locked behind a donation. If
 
 Please send only over the network shown for each address: a transfer made over a different network may not arrive, and it cannot be reversed. Copy the address rather than typing it, and compare its first and last characters before confirming.
 
-Other ways to help cost nothing: star the repository, report a bug with a file that reproduces it, or say which format or tool you miss.
+Other ways to help cost nothing: star the repository, [report a bug](../../issues/new/choose) with a file that reproduces it, or [say which format or tool you miss](../../issues/new/choose).

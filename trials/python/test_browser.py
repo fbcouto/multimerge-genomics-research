@@ -11,6 +11,7 @@
 # machine already has (MMG_BROWSER=msedge|chrome picks one).
 # It works in a temporary folder, with data it creates itself.
 import contextlib
+import gzip
 import os
 import random
 import re
@@ -102,6 +103,50 @@ for _name in ("species_A.txt", "species_B.txt"):
 pl.DataFrame({"K-mers": [random.getrandbits(62) for _ in range(1500)]}).write_ipc("legacy_A.arrow")
 pl.DataFrame({"K-mers": [random.getrandbits(62) for _ in range(1700)]}).write_ipc("legacy_B.arrow")
 
+# Screens 9-14: intervals and a genome file, a VCF with defects, two .fai of
+# different assemblies, an indel inside a repeat with its genome, a pair of
+# FASTQ files with an adapter, and a VCF whose QUAL is not in its shortest form.
+CHROMS = {"chr1": 300_000, "chr2": 200_000, "chr10": 100_000}
+with open("genome.fai", "w", newline="\n") as f:
+    f.writelines(f"{c}\t{n}\t0\t60\t61\n" for c, n in CHROMS.items())
+for _name, _n in (("peaks.bed", 300), ("genes.bed", 200)):
+    with open(_name, "w", newline="\n") as f:
+        for _i in range(_n):
+            _c = random.choice(list(CHROMS))
+            _s = random.randrange(0, CHROMS[_c] - 2000)
+            f.write(f"{_c}\t{_s}\t{_s + random.randrange(50, 1500)}\tname{_i}\n")
+_contigs = "".join(f"##contig=<ID={c},length={n}>\n" for c, n in CHROMS.items())
+with open("broken.vcf", "w", newline="\n") as f:
+    f.write("##fileformat=VCFv4.2\n" + _contigs + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+    f.write("chr1\t500\ta\tA\tG\t50\tPASS\t.\nchr1\t100\tb\tA\tG\t50\tPASS\t.\n1\t200\tc\tA\tG\t50\tPASS\t.\n")
+with open("hg38.fai", "w", newline="\n") as f:
+    f.write("chr1\t248956422\t0\t0\t0\nchr2\t242193529\t0\t0\t0\n")
+with open("hg19.fai", "w", newline="\n") as f:
+    f.write("1\t249250621\t0\t0\t0\n2\t243199373\t0\t0\t0\n")
+_left = "".join(random.choice("ACG") for _ in range(100))
+SMALL_GENOME = _left + "C" + "TTTTT" + "G" + "".join(random.choice("ACGT") for _ in range(400))
+with open("small_genome.fa", "w", newline="\n") as f:
+    f.write(">chr1\n" + "\n".join(SMALL_GENOME[i:i + 60] for i in range(0, len(SMALL_GENOME), 60)) + "\n")
+with open("indel.vcf", "w", newline="\n") as f:
+    f.write(f"##fileformat=VCFv4.2\n##contig=<ID=chr1,length={len(SMALL_GENOME)}>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+    f.write("chr1\t105\tdel\tTT\tT\t50\tPASS\t.\n")
+ADAPTER = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
+for _mate in (1, 2):
+    with gzip.open(f"pair_R{_mate}.fastq.gz", "wt", newline="\n") as f:
+        for _i in range(2000):
+            _insert = "".join(random.choice("ACGT") for _ in range(random.randrange(40, 100)))
+            _seq = (_insert + ADAPTER)[:100]
+            f.write(f"@p{_i}\n{_seq}\n+\n{''.join(chr(33 + random.randrange(5, 41)) for _ in _seq)}\n")
+with open("quals.vcf", "w", newline="\n") as f:
+    f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+    f.write("chr1\t10\ta\tA\tG\t12.50\tPASS\t.\nchr1\t20\tb\tC\tT\t30.0\tPASS\t.\n")
+
+
+def records(path):
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", newline="\n") as f:
+        return [l for l in f.read().split("\n") if l and not l.startswith("#")]
+
 # ---------------------------------------------------------------------------
 # The server
 # ---------------------------------------------------------------------------
@@ -157,6 +202,12 @@ MENU = {
     6: ("6. Bloom Filters", "Probabilistic Bloom Filters"),
     7: ("7. Genome Scaffolding", "Genome Scaffolding"),
     8: ("8. VCF Multimerge", "VCF Multimerge"),
+    9: ("9. Sort, Index & Intervals", "9. Sorting, Indexing & Intervals"),
+    10: ("10. Validation & Chromosome Names", "10. Validation & Chromosome Names"),
+    11: ("11. VCF Stats, Filter & Normalize", "11. VCF Statistics, Filtering & Normalization"),
+    12: ("12. FASTQ Quality & Trimming", "12. FASTQ Quality Report & Trimming"),
+    13: ("13. K-mer Counting", "13. K-mer Counting"),
+    14: ("14. Formats & Conversion", "14. Formats & Conversion"),
 }
 
 # Words that would mean a piece of the interface is still in Portuguese.
@@ -266,6 +317,22 @@ def submit(pg, label):
     pg.get_by_role("button", name=label).click()
 
 
+def radio(pg, name):
+    """Picks a task on screens 9-14; the form below is rebuilt for it."""
+    pg.get_by_role("radio", name=name, exact=True).click()
+    pg.wait_for_timeout(1200)
+
+
+def placeholder(pg, text):
+    return pg.get_by_placeholder(text, exact=True)
+
+
+def code_text(pg):
+    """The last code block of the page: the Python call under a result."""
+    blocks = pg.locator("pre:visible")
+    return blocks.last.inner_text() if blocks.count() else ""
+
+
 # The icon-only buttons that are visible: for the diagnosis, when the table's
 # "next page" button is not found.
 JS_BUTTONS = """
@@ -321,7 +388,7 @@ try:
         print("== navigation")
         with page(browser) as pg:
             check("tab title: MMGEN Suite", pg.title() == "MMGEN Suite", pg.title())
-            check("the menu shows the 8 modules", all(menu_button(pg, n).is_visible() for n in MENU))
+            check(f"the menu shows the {len(MENU)} modules", all(menu_button(pg, n).is_visible() for n in MENU))
             t = text_of(pg)
             check("the menu says where the engine runs", "running on:" in t and WHERE in t, t[-200:])
             check("menu: no Portuguese left on the page", not PORTUGUESE.search(t), PORTUGUESE.findall(t))
@@ -453,6 +520,140 @@ try:
             submit(pg, "Start the Multimerge engine")
             check("output equal to an input: a warning", wait_for(pg, "cannot be one of the input files", 30) is not None, text_of(pg)[-300:])
             check("output equal to an input: not overwritten", read_vcf("sample_a.vcf") == before)
+
+        print("== screen 9: sort & merge, index & query, intervals")
+        with page(browser) as pg:
+            enter(pg, 9)
+            multiselect(pg, list(BATCHES))
+            choose(pg, 1, "natural: chr1, chr2, chr10")
+            pg.get_by_role("checkbox", name=re.compile("Also write the index")).click()
+            submit(pg, "🚀 Sort")
+            t = wait_for(pg, "Sorted|ERROR", 120)
+            shot(pg, "screen9_sort")
+            mmg.sort_genomic(list(BATCHES), "api_sorted.vcf.gz", chrom_order="natural")
+            check("sort: 6,000 records, and the .tbi", number(t, "Records written:") == 6000 and os.path.exists("sample_a.sorted.vcf.gz.tbi"), (t or "")[-300:])
+            check("sort: the same records as the direct call",
+                  os.path.exists("sample_a.sorted.vcf.gz") and records("sample_a.sorted.vcf.gz") == records("api_sorted.vcf.gz"))
+            check("sort: the Python call under the result", "mmg.sort_genomic(" in code_text(pg) and "index=True" in code_text(pg), code_text(pg))
+
+            radio(pg, "Index & query a region")
+            choose(pg, 0, "sample_a.sorted.vcf.gz")
+            placeholder(pg, "chr1:1000000-2000000, chr2").fill("chr2:1000-30000")
+            submit(pg, "Index and query")
+            t = wait_for(pg, r"record\(s\) in chr2|ERROR", 60)
+            shot(pg, "screen9_query")
+            expected = [l for l in records("api_sorted.vcf.gz") if l.split("\t")[0] == "chr2" and 1000 <= int(l.split("\t")[1]) <= 30000]
+            check(f"query: {len(expected)} records in chr2:1000-30000", f"{len(expected):,} record(s) in chr2:1000-30000" in (t or ""), (t or "")[-300:])
+
+            radio(pg, "Interval operations (BED)")
+            choose(pg, 0, "intersect: A against B (bedtools intersect)")
+            pg.get_by_text("B: BED file(s):").first.wait_for(timeout=30000)
+            multiselect(pg, ["peaks.bed"])
+            multiselect(pg, ["genes.bed"])
+            choose(pg, 1, "unique: the lines of A that touch B (-u)")
+            submit(pg, "Run intersect")
+            t = wait_for(pg, "Intersect done|ERROR", 60)
+            shot(pg, "screen9_intersect")
+            mmg.bed_intersect(["peaks.bed"], ["genes.bed"], "api_intersect.bed", mode="unique")
+            check("intersect -u: the same lines as the direct call",
+                  os.path.exists("peaks.intersect.bed") and records("peaks.intersect.bed") == records("api_intersect.bed"), (t or "")[-300:])
+
+        print("== screen 10: validation, reference genomes")
+        with page(browser) as pg:
+            enter(pg, 10)
+            choose(pg, 0, "broken.vcf")
+            submit(pg, "Validate")
+            t = wait_for(pg, r"error\(s\)|ERROR", 60)
+            shot(pg, "screen10_validate")
+            check("validate: the errors with their lines, and the screens that fix them",
+                  t is not None and "line" in t and "Rename chromosomes" in t and "9. Sorting" in t, (t or "")[-400:])
+            radio(pg, "Compare reference genomes")
+            choose(pg, 0, "hg38.fai")
+            choose(pg, 1, "hg19.fai")
+            submit(pg, "Compare")
+            t = wait_for(pg, "DIFFERENT reference genomes|ERROR", 60)
+            check("compare: GRCh38 against GRCh37 is DIFFERENT", t is not None and "GRCh38" in t and "GRCh37" in t, (t or "")[-300:])
+
+        print("== screen 11: VCF filter and normalization")
+        with page(browser) as pg:
+            enter(pg, 11)
+            radio(pg, "Filter")
+            choose(pg, 0, "sample_a.vcf")
+            placeholder(pg, 'QUAL >= 30 && FILTER == "PASS"').fill("QUAL >= 50")
+            submit(pg, "🔍 Filter")
+            t = wait_for(pg, "Filtered|ERROR", 60)
+            shot(pg, "screen11_filter")
+            mmg.vcf_filter("sample_a.vcf", "api_filtered.vcf", expression="QUAL >= 50")
+            check("filter: the same records as vcf_filter",
+                  os.path.exists("sample_a.filtered.vcf") and records("sample_a.filtered.vcf") == records("api_filtered.vcf"), (t or "")[-300:])
+            radio(pg, "Normalize")
+            choose(pg, 0, "indel.vcf")
+            choose(pg, 1, "small_genome.fa")
+            submit(pg, "🧹 Normalize")
+            t = wait_for(pg, "Normalized|ERROR", 60)
+            shot(pg, "screen11_normalize")
+            check("normalize with the genome: the deletion moves left (POS 101, CT>C)",
+                  os.path.exists("indel.norm.vcf") and records("indel.norm.vcf") == ["chr1\t101\tdel\tCT\tC\t50\tPASS\t."], (t or "")[-300:])
+
+        print("== screen 12: FASTQ report and trimming")
+        with page(browser) as pg:
+            enter(pg, 12)
+            choose(pg, 0, "pair_R1.fastq.gz")
+            submit(pg, "Measure")
+            t = wait_for(pg, "Report page|ERROR", 120)
+            frame = pg.frame_locator("iframe").first
+            try:
+                frame.locator("svg").first.wait_for(timeout=30000)
+                charts = frame.locator("svg").count()
+            except Exception:
+                charts = 0
+            shot(pg, "screen12_report")
+            check(f"report: the adapter found, and the report's charts drawn inside the screen ({charts} svg)",
+                  t is not None and "Illumina Universal" in t and charts >= 3, (t or "")[-300:])
+            radio(pg, "Trim reads")
+            choose(pg, 0, "pair_R1.fastq.gz")
+            choose(pg, 1, "pair_R2.fastq.gz")
+            submit(pg, "✂️ Trim")
+            t = wait_for(pg, "Trimmed|ERROR", 120)
+            shot(pg, "screen12_trim")
+            mmg.fastq_trim("pair_R1.fastq.gz", "api_R1.fastq.gz", input2="pair_R2.fastq.gz", output2="api_R2.fastq.gz",
+                           adapter="auto", quality_cutoff=20, min_length=20)
+            check("trim, paired: R1 and R2 as fastq_trim writes them",
+                  all(os.path.exists(n) for n in ("pair_R1.trimmed.fastq.gz", "pair_R2.trimmed.fastq.gz"))
+                  and records("pair_R1.trimmed.fastq.gz") == records("api_R1.fastq.gz")
+                  and records("pair_R2.trimmed.fastq.gz") == records("api_R2.fastq.gz"), (t or "")[-300:])
+
+        print("== screen 13: k-mer counting")
+        with page(browser) as pg:
+            enter(pg, 13)
+            multiselect(pg, ["pair_R1.fastq.gz", "pair_R2.fastq.gz"])
+            placeholder(pg, "blank: the summary only, no table (for example kmers.tsv.gz)").fill("kmers.tsv.gz")
+            submit(pg, "Count")
+            t = wait_for(pg, "Counted|ERROR", 120)
+            shot(pg, "screen13_kmers")
+            api = mmg.count_kmers(["pair_R1.fastq.gz", "pair_R2.fastq.gz"], "api_kmers.tsv.gz", k=31)
+            check("count: the totals, and the table as count_kmers writes it",
+                  number(t, "Distinct k-mers:") == api["distinct_kmers"] and records("kmers.tsv.gz") == records("api_kmers.tsv.gz"), (t or "")[-300:])
+            check("count: the spectrum chart is drawn", pg.locator("svg[aria-label^='Abundance spectrum']").count() >= 1)
+
+        print("== screen 14: formats & conversion")
+        with page(browser) as pg:
+            enter(pg, 14)
+            choose(pg, 0, "quals.vcf")
+            choose(pg, 1, "Parquet (.parquet)")
+            pg.get_by_role("radio", name="as text, exactly as written (a byte-for-byte round trip)").click()
+            submit(pg, "Convert")
+            t = wait_for(pg, "Converted|ERROR", 60)
+            shot(pg, "screen14_convert")
+            back_ok = False
+            if os.path.exists("quals.vcf.parquet"):
+                mmg.convert_file("quals.vcf.parquet", "quals_back.vcf")
+                back_ok = open("quals_back.vcf", "rb").read() == open("quals.vcf", "rb").read()
+            check("convert to Parquet with QUAL as text: back to text, the same bytes", back_ok, (t or "")[-300:])
+            pg.get_by_role("button", name="Refresh the file list").click()
+            pg.wait_for_timeout(1500)
+            options = pg.locator("select:visible").first.locator("option").all_inner_texts()
+            check("'Refresh the file list' offers the new file", "quals.vcf.parquet" in options, options)
 
         print("== screen 2: clustering")
         with page(browser) as pg:

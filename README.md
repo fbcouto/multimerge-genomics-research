@@ -22,7 +22,7 @@ MMGEN is free (Apache 2.0). If it is useful to you, you can [support its develop
 * **Checked against the tools it replaces.** `fastq_trim` writes the same reads as cutadapt (0 differences in 128,800 reads over 84 option combinations); BAM files are read back by an independent reader, using our own `.bai`; Parquet files are read by pyarrow and polars, and theirs by us.
 * **No GPU required.** Every GPU path has a CPU twin that returns the same result, bit for bit. With a GPU, the Bloom filter is 3× to 8× faster.
 * **One wheel per platform.** The extension is built against Python's stable ABI and serves every Python from 3.10 on.
-* **Tested.** 1,643 Rust tests, plus Python tests that drive the API with real data, compare it with independent tools, and drive the interface in a real browser.
+* **Tested.** 1,669 Rust tests, plus Python tests that drive the API with real data, compare it with independent tools, and drive the interface in a real browser.
 
 What the validator says about one of the example files of the Colab notebook, which has defects planted on purpose:
 
@@ -43,7 +43,7 @@ examples/with_defects.vcf: VCF with 8007 lines and 8000 records -- 4 error(s), 1
 
 ## 🚀 The Modules
 
-Modules 1–8 have a screen in the web interface. Modules 9–14 are available from Python; the Colab notebook covers 9 and 10.
+Every module has a screen in the web interface, and every function is also available from Python. On screens 9–14, each result ends with the Python call that does the same thing, ready to paste into a script. The Colab notebook covers modules 9 and 10.
 
 ### 🔬 1. Data Ingestion & Quality Control
 * **Batch reading, gzip included:** reads several `.fastq`, `.fasta`, `.fastq.gz` or `.fasta.gz` files in parallel and decompresses them on the fly.
@@ -194,7 +194,7 @@ pip install marimo polars numpy scikit-learn pyarrow
 marimo run ui_main.py
 ```
 
-The interface lists the files of the folder it is started from, and writes its results there.
+The interface lists the files of the folder it is started from, and writes its results there. The menu has two groups: the k-mer modules (1–7) and the file tools (8–14). On screens 9–14 you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
 
 ![Variant detection screen](assets/variant_calling.png)
 

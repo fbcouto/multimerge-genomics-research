@@ -40,6 +40,30 @@ pub mod kmer_count;
 pub mod referencia;
 pub mod relatorio;
 pub mod vcf_tools;
+// Genoma humano (passo 15): achados do ClinVar, regioes de genes, consulta de
+// variantes em parentes, pileup; e a entrada do PharmCAT, que chama os alelos
+// de farmacogenetica (o MMGEN so prepara o VCF e le o resultado dele).
+pub mod clinico;
+pub mod pharmcat;
+// Parentesco (KING), trio (Mendel, de novo, paternidade), regioes de
+// homozigose e sexo genetico.
+pub mod parentesco;
+// Paineis de frequencias por populacao, ascendencia (EM supervisionado) e
+// escore poligenico (arquivos do PGS Catalog).
+pub mod ancestralidade;
+// Pesquisa: contagem de leituras por gene e expressao diferencial (DESeq2).
+pub mod expressao;
+// Triagens CRISPR: contagem de guias e teste de genes (MAGeCK, RRA).
+pub mod crispr;
+// Microbiologia: esbocos FracMinHash (como o sourmash), especies e
+// abundancia, classificacao de leituras, genes de resistencia (AMRFinderPlus).
+pub mod microbio;
+// Surto e vigilancia: distancias e arvores (NJ, UPGMA), mutacoes de um virus
+// contra a referencia (como o Nextclade), PCR in silico.
+pub mod surto;
+// 16S: pares -> ASVs (UNOISE3, quimeras), taxonomia (classificador do RDP),
+// diversidade alfa e beta, PCoA, PERMANOVA; e a carga mutacional do tumor.
+pub mod amplicon;
 
 // A API PYTHON E EM INGLES (2026-11-13): nomes das funcoes, parametros, chaves
 // dos dicionarios, valores aceitos, mensagens e a documentacao que o `help()`
@@ -156,13 +180,14 @@ fn ordenar_e_mesclar_backend(amostra_a: &[u64], amostra_b: &[u64], onde: Disposi
 #[pyo3(signature = (bytes_a, bytes_b, device="auto"))]
 fn sort_merge_bytes<'py>(py: Python<'py>, bytes_a: &[u8], bytes_b: &[u8], device: &str) -> PyResult<Bound<'py, PyBytes>> {
     let onde = Dispositivo::de_texto(device)?;
-    let mut kmer_a: Vec<u64> = como_u64(bytes_a).into_owned();
-    let mut kmer_b: Vec<u64> = como_u64(bytes_b).into_owned();
-
-    multimerge_core::multi_merge_sort_stable(&mut kmer_a);
-    multimerge_core::multi_merge_sort_stable(&mut kmer_b);
-
-    let resultado = ordenar_e_mesclar_backend(&kmer_a, &kmer_b, onde)?;
+    // Sem o GIL: a interface (marimo) continua respondendo enquanto ordena.
+    let resultado = py.allow_threads(|| {
+        let mut kmer_a: Vec<u64> = como_u64(bytes_a).into_owned();
+        let mut kmer_b: Vec<u64> = como_u64(bytes_b).into_owned();
+        multimerge_core::multi_merge_sort_stable(&mut kmer_a);
+        multimerge_core::multi_merge_sort_stable(&mut kmer_b);
+        ordenar_e_mesclar_backend(&kmer_a, &kmer_b, onde)
+    })?;
 
     let byte_slice: &[u8] = unsafe {
         std::slice::from_raw_parts(resultado.as_ptr() as *const u8, resultado.len() * 8)
@@ -181,7 +206,7 @@ fn sort_merge_bytes<'py>(py: Python<'py>, bytes_a: &[u8], bytes_b: &[u8], device
 /// up to 63. The files are read in parallel.
 #[pyfunction]
 fn read_fastq_batch<'py>(py: Python<'py>, paths: Vec<String>, min_quality: u8, k: u8) -> PyResult<Bound<'py, PyBytes>> {
-    let kmers = fastq::processar_fastq_lote(paths, min_quality, k);
+    let kmers = py.allow_threads(|| fastq::processar_fastq_lote(paths, min_quality, k));
 
     // MAGIA MONOLÍTICA (128-bits = 16 bytes)
     let byte_slice: &[u8] = unsafe {
@@ -195,7 +220,7 @@ fn read_fastq_batch<'py>(py: Python<'py>, paths: Vec<String>, min_quality: u8, k
 /// integer) per k-mer. Windows containing `N` are skipped. `k` goes up to 63.
 #[pyfunction]
 fn read_fasta_batch<'py>(py: Python<'py>, paths: Vec<String>, k: u8) -> PyResult<Bound<'py, PyBytes>> {
-    let kmers = fasta::processar_fasta_lote(paths, k);
+    let kmers = py.allow_threads(|| fasta::processar_fasta_lote(paths, k));
 
     let byte_slice: &[u8] = unsafe {
         std::slice::from_raw_parts(kmers.as_ptr() as *const u8, kmers.len() * 16)
@@ -209,17 +234,17 @@ fn read_fasta_batch<'py>(py: Python<'py>, paths: Vec<String>, k: u8) -> PyResult
 /// Builds the De Bruijn graph of a set of k-mers (16 bytes each, as returned
 /// by `read_fasta_batch` / `read_fastq_batch`) and returns `(nodes, edges)`.
 #[pyfunction]
-fn build_debruijn_graph(kmer_bytes: &[u8], k: u8) -> PyResult<(usize, usize)> {
+fn build_debruijn_graph(py: Python<'_>, kmer_bytes: &[u8], k: u8) -> PyResult<(usize, usize)> {
     let kmers = como_u128(kmer_bytes);
-    Ok(debruijn::construir_grafo_estatisticas(&kmers, k))
+    Ok(py.allow_threads(|| debruijn::construir_grafo_estatisticas(&kmers, k)))
 }
 
 /// Assembles contigs from a set of k-mers by walking the unbranched paths of
 /// the De Bruijn graph. Returns the contigs as strings, longest first.
 #[pyfunction]
-fn assemble_debruijn(kmer_bytes: &[u8], k: u8) -> PyResult<Vec<String>> {
+fn assemble_debruijn(py: Python<'_>, kmer_bytes: &[u8], k: u8) -> PyResult<Vec<String>> {
     let kmers = como_u128(kmer_bytes);
-    Ok(debruijn::montar_todos_contigs(&kmers, k))
+    Ok(py.allow_threads(|| debruijn::montar_todos_contigs(&kmers, k)))
 }
 
 // ---------------------------------------------------------
@@ -244,16 +269,17 @@ fn build_bloom_filter<'py>(
     if size_mb == 0 || num_hashes <= 0 {
         return Err(erro_py("The Bloom filter needs at least 1 MB and 1 hash".to_string()));
     }
-    let kmers_128 = como_u128(kmer_bytes);
-    let kmers_gpu: Vec<u64> = kmers_128.par_iter().map(|&k| bloom::dobra(k)).collect();
-    let bloom_bytes = size_mb * 1024 * 1024;
-
-    let bloom_array = despacha(
-        onde,
-        "Bloom filter",
-        || gpu::bloom_construir(&kmers_gpu, bloom_bytes, num_hashes),
-        || bloom::construir(&kmers_gpu, bloom_bytes, num_hashes),
-    )?;
+    let bloom_array = py.allow_threads(|| {
+        let kmers_128 = como_u128(kmer_bytes);
+        let kmers_gpu: Vec<u64> = kmers_128.par_iter().map(|&k| bloom::dobra(k)).collect();
+        let bloom_bytes = size_mb * 1024 * 1024;
+        despacha(
+            onde,
+            "Bloom filter",
+            || gpu::bloom_construir(&kmers_gpu, bloom_bytes, num_hashes),
+            || bloom::construir(&kmers_gpu, bloom_bytes, num_hashes),
+        )
+    })?;
     Ok(PyBytes::new(py, &bloom_array))
 }
 
@@ -274,21 +300,21 @@ fn extract_mutations<'py>(
     if bloom_bytes.len() < 4 || num_hashes <= 0 {
         return Err(erro_py("Empty Bloom filter or invalid number of hashes".to_string()));
     }
-    let kmers_128 = como_u128(sample_bytes);
-    let kmers_gpu: Vec<u64> = kmers_128.par_iter().map(|&k| bloom::dobra(k)).collect();
-
-    let mascara_resultados = despacha(
-        onde,
-        "Bloom filter query",
-        || gpu::bloom_consultar(&kmers_gpu, bloom_bytes, num_hashes),
-        || bloom::consultar(&kmers_gpu, bloom_bytes, num_hashes),
-    )?;
-
-    let kmers_mutantes: Vec<u128> = kmers_128.par_iter()
-        .zip(mascara_resultados.par_iter())
-        .filter(|(_, &existe_na_ref)| existe_na_ref == 0)
-        .map(|(&k, _)| k)
-        .collect();
+    let kmers_mutantes: Vec<u128> = py.allow_threads(|| -> PyResult<Vec<u128>> {
+        let kmers_128 = como_u128(sample_bytes);
+        let kmers_gpu: Vec<u64> = kmers_128.par_iter().map(|&k| bloom::dobra(k)).collect();
+        let mascara_resultados = despacha(
+            onde,
+            "Bloom filter query",
+            || gpu::bloom_consultar(&kmers_gpu, bloom_bytes, num_hashes),
+            || bloom::consultar(&kmers_gpu, bloom_bytes, num_hashes),
+        )?;
+        Ok(kmers_128.par_iter()
+            .zip(mascara_resultados.par_iter())
+            .filter(|(_, &existe_na_ref)| existe_na_ref == 0)
+            .map(|(&k, _)| k)
+            .collect())
+    })?;
 
     let bytes_mutantes: &[u8] = unsafe {
         std::slice::from_raw_parts(kmers_mutantes.as_ptr() as *const u8, kmers_mutantes.len() * 16)
@@ -302,10 +328,9 @@ fn extract_mutations<'py>(
 /// Translates DNA sequences into proteins (standard genetic code, reading
 /// frame 1; `*` marks a stop codon). One protein per input sequence.
 #[pyfunction]
-fn translate_proteins(dna_sequences: Vec<String>) -> PyResult<Vec<String>> {
+fn translate_proteins(py: Python<'_>, dna_sequences: Vec<String>) -> PyResult<Vec<String>> {
     println!("⚙️ RAYON: translating {} DNA sequence(s) into proteins...", dna_sequences.len());
-    let proteinas = annotation::translate_batch(&dna_sequences);
-    Ok(proteinas)
+    Ok(py.allow_threads(|| annotation::translate_batch(&dna_sequences)))
 }
 
 // ---------------------------------------------------------
@@ -315,9 +340,8 @@ fn translate_proteins(dna_sequences: Vec<String>) -> PyResult<Vec<String>> {
 /// `(scaffolds, circular)`: the joined sequences and how many of them closed
 /// into a circle.
 #[pyfunction]
-fn build_scaffolds(sequences: Vec<String>, overlap: usize) -> PyResult<(Vec<String>, usize)> {
-    let (scaffolds, circulares) = scaffolding::fast_hash_scaffold(sequences, overlap);
-    Ok((scaffolds, circulares))
+fn build_scaffolds(py: Python<'_>, sequences: Vec<String>, overlap: usize) -> PyResult<(Vec<String>, usize)> {
+    Ok(py.allow_threads(|| scaffolding::fast_hash_scaffold(sequences, overlap)))
 }
 
 // ---------------------------------------------------------
@@ -325,13 +349,11 @@ fn build_scaffolds(sequences: Vec<String>, overlap: usize) -> PyResult<(Vec<Stri
 // ---------------------------------------------------------
 /// Decodes 128-bit k-mers (16 bytes each) of size `k` back into DNA strings.
 #[pyfunction]
-fn decode_kmers_128(kmer_bytes: &[u8], k: u8) -> PyResult<Vec<String>> {
+fn decode_kmers_128(py: Python<'_>, kmer_bytes: &[u8], k: u8) -> PyResult<Vec<String>> {
     let kmers = como_u128(kmer_bytes);
-    let seqs: Vec<String> = kmers.par_iter().map(|&bits| {
-        let kmer = kmer::Kmer128 { bits, k };
-        kmer.decode()
-    }).collect();
-    Ok(seqs)
+    Ok(py.allow_threads(|| {
+        kmers.par_iter().map(|&bits| kmer::Kmer128 { bits, k }.decode()).collect()
+    }))
 }
 
 /// Encodes a DNA string of up to 63 bases into a 128-bit k-mer and decodes it
@@ -358,11 +380,13 @@ fn read_and_merge_kmer_files<'py>(py: Python<'py>, path_a: &str, path_b: &str) -
         let reader = BufReader::with_capacity(1024 * 1024 * 16, file);
         Ok(reader.lines().filter_map(|l| l.ok()).map(|s| kmer::encode_kmer(s.as_bytes())).filter(|&k| k != u64::MAX).collect())
     };
-    let mut kmer_a = ler_kmer(path_a)?;
-    let mut kmer_b = ler_kmer(path_b)?;
-    multimerge_core::multi_merge_sort_stable(&mut kmer_a);
-    multimerge_core::multi_merge_sort_stable(&mut kmer_b);
-    let resultado = ordenar_e_mesclar_backend(&kmer_a, &kmer_b, Dispositivo::Auto)?;
+    let resultado = py.allow_threads(|| -> PyResult<Vec<u64>> {
+        let mut kmer_a = ler_kmer(path_a)?;
+        let mut kmer_b = ler_kmer(path_b)?;
+        multimerge_core::multi_merge_sort_stable(&mut kmer_a);
+        multimerge_core::multi_merge_sort_stable(&mut kmer_b);
+        ordenar_e_mesclar_backend(&kmer_a, &kmer_b, Dispositivo::Auto)
+    })?;
     let byte_slice: &[u8] = unsafe { std::slice::from_raw_parts(resultado.as_ptr() as *const u8, resultado.len() * 8) };
     Ok(PyBytes::new(py, byte_slice))
 }
@@ -372,7 +396,8 @@ fn read_and_merge_kmer_files<'py>(py: Python<'py>, path_a: &str, path_b: &str) -
 #[pyfunction]
 fn minhash_signatures<'py>(py: Python<'py>, kmer_bytes: &[u8], num_hashes: usize) -> PyResult<Bound<'py, PyBytes>> {
     let kmers = como_u64(kmer_bytes);
-    let assinaturas: Vec<u64> = kmers.par_iter().flat_map(|&k| kmer::compute_minhash_signature(k, num_hashes)).collect();
+    let assinaturas: Vec<u64> =
+        py.allow_threads(|| kmers.par_iter().flat_map(|&k| kmer::compute_minhash_signature(k, num_hashes)).collect());
     let byte_slice: &[u8] = unsafe { std::slice::from_raw_parts(assinaturas.as_ptr() as *const u8, assinaturas.len() * 8) };
     Ok(PyBytes::new(py, byte_slice))
 }
@@ -380,10 +405,9 @@ fn minhash_signatures<'py>(py: Python<'py>, kmer_bytes: &[u8], num_hashes: usize
 /// Legacy 64-bit path. Decodes 64-bit k-mers (8 bytes each) of `length` bases
 /// back into DNA strings.
 #[pyfunction]
-fn decode_kmers(kmer_bytes: &[u8], length: usize) -> PyResult<Vec<String>> {
+fn decode_kmers(py: Python<'_>, kmer_bytes: &[u8], length: usize) -> PyResult<Vec<String>> {
     let kmers = como_u64(kmer_bytes);
-    let seqs: Vec<String> = kmers.par_iter().map(|&k| kmer::decode_kmer(k, length as u8)).collect();
-    Ok(seqs)
+    Ok(py.allow_threads(|| kmers.par_iter().map(|&k| kmer::decode_kmer(k, length as u8)).collect()))
 }
 // ---------------------------------------------------------
 // MÓDULO 8: VCF MULTIMERGE & SORTING
@@ -1331,6 +1355,1355 @@ fn query_region(
     }
 }
 
+// ---------------------------------------------------------
+// Genoma humano (passo 15). Experimental, para ensino e pesquisa.
+// ---------------------------------------------------------
+
+const AVISO: &str = "Experimental software, for teaching and research only: not a medical diagnosis, not a paternity test \
+with legal value and not advice on any treatment or medicine. The authors take no responsibility for decisions made on \
+the basis of these results; a finding must be confirmed by an accredited laboratory and interpreted by a qualified professional.";
+
+fn opcoes_de_lista(valor: Option<&Bound<'_, PyAny>>, nome: &str, n: usize) -> PyResult<Vec<Option<String>>> {
+    let Some(v) = valor else {
+        return Ok(vec![None; n]);
+    };
+    if v.is_none() {
+        return Ok(vec![None; n]);
+    }
+    if let Ok(s) = v.extract::<String>() {
+        return Ok(vec![Some(s); n]);
+    }
+    let lista: Vec<Option<String>> = v
+        .extract()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err(format!("`{nome}` must be a string, a list or None")))?;
+    if lista.len() != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "`{nome}` has {} item(s), one per file is needed ({n})",
+            lista.len()
+        )));
+    }
+    Ok(lista)
+}
+
+/// The ClinVar findings of one person: the variants of a VCF that ClinVar
+/// lists, with their classification, review stars, conditions and zygosity.
+/// Experimental, for teaching and research only: not a medical diagnosis.
+///
+/// - `clinvar`: the ClinVar VCF (GRCh38 or GRCh37, as the person's file).
+/// - `sample`: which sample of a multi-sample VCF (default: the first).
+/// - `callable_bed`: the regions where the person's calls are reliable; only
+///   variants inside them are compared (as in the Genome in a Bottle files).
+/// - `classes`: which classifications to keep: "plp" (pathogenic and likely
+///   pathogenic), "vus", "conflicting", "blb" (benign and likely benign),
+///   "risk", "all", or ClinVar's own terms. Default: "plp".
+/// - `min_stars`: minimum review stars (0-4). Default 1.
+/// - `genes`, `regions`: keep only these genes, or a BED of regions (a panel).
+/// - `output`: also write the findings as a TSV table.
+///
+/// Both files must be sorted in natural chromosome order (1..22, X, Y);
+/// variants are split per allele and trimmed, not left-aligned: left-align
+/// first with `vcf_normalize(reference=...)` if the VCF was not.
+#[pyfunction]
+#[pyo3(signature = (vcf, clinvar, output=None, sample=None, callable_bed=None, classes=None, min_stars=1, genes=None, regions=None))]
+#[allow(clippy::too_many_arguments)]
+fn clinvar_findings(
+    py: Python<'_>,
+    vcf: &str,
+    clinvar: &str,
+    output: Option<&str>,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    classes: Option<&Bound<'_, PyAny>>,
+    min_stars: u8,
+    genes: Option<&Bound<'_, PyAny>>,
+    regions: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let mut classes = lista_de_textos(classes, "classes")?;
+    if classes.is_empty() {
+        classes.push("plp".into());
+    }
+    let genes = lista_de_textos(genes, "genes")?;
+    let pessoa = clinico::Person { vcf: vcf.to_string(), sample, callable: callable_bed };
+    let op = clinico::FindingsOptions { classes, min_stars, genes, regions, output: output.map(|s| s.to_string()) };
+    let r = py.allow_threads(|| clinico::clinvar_findings(&pessoa, clinvar, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// The coordinates of named genes, from a GFF3/GTF annotation (for example
+/// the RefSeq GFF, whose accessions NC_000001.11... are mapped to chromosome
+/// names). Use them as a gene panel: `vcf_filter(regions=...)`,
+/// `clinvar_findings(regions=...)`, `query_region`.
+///
+/// - `padding`: bases added on each side.
+/// - `naming`: "chr" or "no_chr" for the chromosome names (default: as the GFF says).
+/// - `output`: also write them as BED.
+#[pyfunction]
+#[pyo3(signature = (gff, genes, output=None, padding=0, naming=None))]
+fn gene_regions(
+    py: Python<'_>,
+    gff: &str,
+    genes: &Bound<'_, PyAny>,
+    output: Option<&str>,
+    padding: u64,
+    naming: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let genes = lista_de_textos(Some(genes), "genes")?;
+    let r = py.allow_threads(|| clinico::gene_regions(gff, &genes, padding, naming, output)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The genotype of each person at each variant: testing relatives for a
+/// variant already known in the family (cascade testing), as Sanger
+/// sequencing would. Experimental, for teaching and research only.
+///
+/// - `variants`: "chrom:pos:ref:alt" (1-based), or, with `clinvar`, an rsID
+///   or a ClinVar VariationID.
+/// - `vcfs`: one or more VCF files; `samples` and `callable_beds` give, per
+///   file, the sample and the callable regions (a string applies to all).
+#[pyfunction]
+#[pyo3(signature = (variants, vcfs, samples=None, callable_beds=None, clinvar=None))]
+fn variant_lookup(
+    py: Python<'_>,
+    variants: &Bound<'_, PyAny>,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    clinvar: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let variantes = lista_de_textos(Some(variants), "variants")?;
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    let amostras = opcoes_de_lista(samples, "samples", arquivos.len())?;
+    let beds = opcoes_de_lista(callable_beds, "callable_beds", arquivos.len())?;
+    let pessoas: Vec<clinico::Person> = arquivos
+        .iter()
+        .zip(amostras)
+        .zip(beds)
+        .map(|((v, s), b)| clinico::Person { vcf: v.clone(), sample: s, callable: b })
+        .collect();
+    let r = py.allow_threads(|| clinico::variant_lookup(&variantes, &pessoas, clinvar)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// The bases the reads of a BAM (or SAM) show at one position: depth, counts
+/// of A, C, G, T, N, deletions and insertions, and the fraction of an allele —
+/// what one looks at to confirm a variant. Uses the .bai when there is one.
+///
+/// - `position`: "chr1:12345" (1-based).
+/// - `alt`: the allele whose fraction to report: "T", "C>T", "CAG>C",
+///   "C>CTT", "+SEQ", "-N" or "*".
+/// - `min_mapq`, `min_baseq`: quality filters (as samtools mpileup -q / -Q).
+#[pyfunction]
+#[pyo3(signature = (path, position, alt=None, min_mapq=0, min_baseq=13))]
+fn pileup(py: Python<'_>, path: &str, position: &str, alt: Option<String>, min_mapq: u8, min_baseq: u8) -> PyResult<Py<PyAny>> {
+    let (cromo, pos) = position
+        .trim()
+        .rsplit_once(':')
+        .and_then(|(c, p)| p.replace(',', "").parse::<u64>().ok().map(|p| (c.to_string(), p)))
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("`{position}`: write the position as chrom:pos, e.g. chr1:12345")))?;
+    let op = clinico::PileupOptions { min_mapq, min_baseq, alt, ..Default::default() };
+    let r = py.allow_threads(|| clinico::pileup(path, &cromo, pos, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Writes the input VCF of PharmCAT (the pharmacogenomics tool of PharmGKB
+/// and CPIC, https://pharmcat.org) from a person's VCF: the genotype at each
+/// position PharmCAT examines (`pharmcat_positions_<version>.vcf` of its
+/// release). A position without a record becomes 0/0 only inside
+/// `callable_bed` (or, without it, when `absent_is_ref`), and stays missing
+/// on a sequence the file does not have. MMGEN calls no allele itself.
+#[pyfunction]
+#[pyo3(signature = (vcf, output, positions, sample=None, callable_bed=None, absent_is_ref=true))]
+fn pharmcat_prepare(
+    py: Python<'_>,
+    vcf: &str,
+    output: &str,
+    positions: &str,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    absent_is_ref: bool,
+) -> PyResult<Py<PyAny>> {
+    let op = pharmcat::Opcoes { amostra: sample, chamavel: callable_bed, ausente_e_ref: absent_is_ref };
+    let r = py.allow_threads(|| pharmcat::preparar(vcf, positions, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Runs PharmCAT on a person's VCF: prepares its input (see
+/// `pharmcat_prepare`), calls `java -jar <jar>` and returns its calls per gene
+/// (diplotype, phenotype, activity score...) and the paths of its reports
+/// (HTML with the CPIC/DPWG recommendations, JSON, the calls TSV).
+/// Experimental, for teaching and research only: not medical advice; a
+/// pharmacogenomic result must be confirmed by an accredited laboratory.
+///
+/// - `jar`: pharmcat-<version>-all.jar (https://github.com/PharmGKB/PharmCAT/releases);
+///   `positions` defaults to the pharmcat_positions_<version>.vcf next to it.
+/// - `java`: the java program (Java 17 or newer).
+/// - `outside_calls`: a PharmCAT outside-call TSV (for genes such as CYP2D6
+///   or HLA-B, which PharmCAT does not call from a VCF).
+#[pyfunction]
+#[pyo3(signature = (vcf, output_dir, jar, positions=None, sample=None, callable_bed=None, absent_is_ref=true, java="java", outside_calls=None, base_name=None))]
+#[allow(clippy::too_many_arguments)]
+fn pharmcat_run(
+    py: Python<'_>,
+    vcf: &str,
+    output_dir: &str,
+    jar: &str,
+    positions: Option<&str>,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    absent_is_ref: bool,
+    java: &str,
+    outside_calls: Option<&str>,
+    base_name: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let op = pharmcat::Opcoes { amostra: sample, chamavel: callable_bed, ausente_e_ref: absent_is_ref };
+    let r = py
+        .allow_threads(|| pharmcat::rodar(vcf, output_dir, jar, positions, &op, java, outside_calls, base_name))
+        .map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+fn pessoa(path: &str, sample: Option<String>, bed: Option<String>, label: Option<String>) -> parentesco::Person {
+    parentesco::Person { path: path.to_string(), sample, callable_bed: bed, label }
+}
+
+/// Relatedness of every pair of people: the KING-robust kinship (as plink2
+/// --make-king-table), IBS0 and the inferred relationship (duplicate or
+/// monozygotic twin, parent-offspring, full siblings, 2nd or 3rd degree,
+/// unrelated). Experimental, for teaching and research only.
+///
+/// - `vcfs`: one VCF per person, or one multi-sample VCF (then `samples`
+///   picks the samples; without it, all of them).
+/// - `samples`, `callable_beds`, `labels`: per file (or per sample of a
+///   single file); a single string applies to all.
+/// - `absent_is_ref`: without a callable BED, is a site absent from a file
+///   homozygous reference? (True for whole-genome variant calls.)
+/// Files must be sorted in natural chromosome order (1..22, X, Y).
+#[pyfunction]
+#[pyo3(signature = (vcfs, samples=None, callable_beds=None, labels=None, absent_is_ref=true, pass_only=false))]
+fn relatedness(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    labels: Option<&Bound<'_, PyAny>>,
+    absent_is_ref: bool,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    let pessoas: Vec<parentesco::Person> = if arquivos.len() == 1 {
+        let todas = match samples {
+            Some(s) if !s.is_none() => lista_de_textos(Some(s), "samples")?,
+            _ => py.allow_threads(|| parentesco::vcf_samples(&arquivos[0])).map_err(erro_py)?,
+        };
+        let beds = opcoes_de_lista(callable_beds, "callable_beds", todas.len())?;
+        let rotulos = opcoes_de_lista(labels, "labels", todas.len())?;
+        todas
+            .into_iter()
+            .zip(beds)
+            .zip(rotulos)
+            .map(|((s, b), l)| pessoa(&arquivos[0], Some(s), b, l))
+            .collect()
+    } else {
+        let amostras = opcoes_de_lista(samples, "samples", arquivos.len())?;
+        let beds = opcoes_de_lista(callable_beds, "callable_beds", arquivos.len())?;
+        let rotulos = opcoes_de_lista(labels, "labels", arquivos.len())?;
+        arquivos
+            .iter()
+            .zip(amostras)
+            .zip(beds)
+            .zip(rotulos)
+            .map(|(((v, s), b), l)| pessoa(v, s, b, l))
+            .collect()
+    };
+    let op = parentesco::JoinOptions { absent_is_ref, pass_only };
+    let r = py.allow_threads(|| parentesco::relatedness(&pessoas, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// Trio analysis: Mendelian consistency of a child with the father and the
+/// mother, de novo candidates, and a parentage test: the exclusions (opposite
+/// homozygotes) and, given population allele frequencies, the combined
+/// paternity index and the probability of paternity. Without `mother`, a duo.
+/// Experimental, for teaching and research only: NOT a paternity test with
+/// legal value (that needs an accredited laboratory and a chain of custody).
+///
+/// - `child`, `father`, `mother`: VCF paths; `*_sample` and `*_bed` pick the
+///   sample and the callable regions of each.
+/// - `allele_frequencies`: a sorted VCF of population frequencies (e.g. the
+///   1000 Genomes sites file); `af_field` names its INFO field ("AF", "EUR_AF").
+/// - `de_novo_output`: write the de novo candidates as a VCF.
+#[pyfunction]
+#[pyo3(signature = (child, father, mother=None, child_sample=None, father_sample=None, mother_sample=None,
+                    child_bed=None, father_bed=None, mother_bed=None, allele_frequencies=None, af_field="AF",
+                    genotype_error=0.001, prior=0.5, de_novo_output=None, absent_is_ref=true, pass_only=false))]
+#[allow(clippy::too_many_arguments)]
+fn trio_analysis(
+    py: Python<'_>,
+    child: &str,
+    father: &str,
+    mother: Option<&str>,
+    child_sample: Option<String>,
+    father_sample: Option<String>,
+    mother_sample: Option<String>,
+    child_bed: Option<String>,
+    father_bed: Option<String>,
+    mother_bed: Option<String>,
+    allele_frequencies: Option<String>,
+    af_field: &str,
+    genotype_error: f64,
+    prior: f64,
+    de_novo_output: Option<String>,
+    absent_is_ref: bool,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let c = pessoa(child, child_sample, child_bed, Some("child".into()));
+    let f = pessoa(father, father_sample, father_bed, Some("father".into()));
+    let m = mother.map(|p| pessoa(p, mother_sample, mother_bed, Some("mother".into())));
+    let op = parentesco::TrioOptions {
+        join: parentesco::JoinOptions { absent_is_ref, pass_only },
+        af_path: allele_frequencies,
+        af_field: af_field.to_string(),
+        genotype_error,
+        prior,
+        de_novo_output,
+    };
+    let r = py.allow_threads(|| parentesco::trio_analysis(&c, &f, m.as_ref(), &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// Runs of homozygosity of one person: stretches of at least `min_length`
+/// bases and `min_sites` SNV calls (broken by gaps without data longer than
+/// `max_gap`), written as BED, with F_ROH (their share of the autosomes).
+/// Long runs come from related parents (consanguinity) or, on a single
+/// chromosome, from uniparental disomy — as a SNP array shows. Experimental,
+/// for teaching and research only.
+///
+/// By default, the sliding-window method of `plink --homozyg`: windows of
+/// `window_snps` calls, each homozygous with at most `window_het` het and
+/// `window_missing` missing calls; a call is in a run when at least
+/// `window_threshold` of the windows over it are homozygous, so one
+/// genotyping error does not split a run; runs sparser than one call per
+/// `max_density` bases are dropped. `window_snps=0`: the strict method, where
+/// any heterozygous call ends a run.
+#[pyfunction]
+#[pyo3(signature = (vcf, output=None, sample=None, callable_bed=None, min_sites=50, min_length=1_000_000, max_gap=1_000_000, pass_only=false,
+                    window_snps=50, window_het=1, window_missing=5, window_threshold=0.05, max_density=50_000))]
+#[allow(clippy::too_many_arguments)]
+fn runs_of_homozygosity(
+    py: Python<'_>,
+    vcf: &str,
+    output: Option<&str>,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    min_sites: u64,
+    min_length: u64,
+    max_gap: u64,
+    pass_only: bool,
+    window_snps: u64,
+    window_het: u64,
+    window_missing: u64,
+    window_threshold: f64,
+    max_density: u64,
+) -> PyResult<Py<PyAny>> {
+    let p = pessoa(vcf, sample, callable_bed, None);
+    let op = parentesco::RohOptions {
+        min_sites,
+        min_length,
+        max_gap,
+        pass_only,
+        window_snps,
+        window_het,
+        window_missing,
+        window_threshold,
+        max_density,
+        ..Default::default()
+    };
+    let r = py.allow_threads(|| parentesco::runs_of_homozygosity(&p, output, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// Genetic sex from a VCF: the heterozygosity of chrX outside the
+/// pseudoautosomal regions (compared with the autosomes) and the calls on
+/// chrY: XX, XY or undetermined, with flags for patterns that suggest X0 or
+/// XXY. The file must have chrX (and chrY) calls. Experimental, for teaching
+/// and research only.
+#[pyfunction]
+#[pyo3(signature = (vcf, sample=None, callable_bed=None, build=None, pass_only=false))]
+fn genetic_sex(
+    py: Python<'_>,
+    vcf: &str,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    build: Option<&str>,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let p = pessoa(vcf, sample, callable_bed, None);
+    let r = py.allow_threads(|| parentesco::genetic_sex(&p, build, pass_only)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// The people of `vcfs`: one per file, or, with a single file, one per sample
+/// (`samples`, or every sample of the file).
+fn pessoas_anc(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Vec<ancestralidade::Person>> {
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    if arquivos.len() == 1 {
+        let todas = match samples {
+            Some(s) if !s.is_none() => lista_de_textos(Some(s), "samples")?,
+            _ => py.allow_threads(|| parentesco::vcf_samples(&arquivos[0])).map_err(erro_py)?,
+        };
+        let beds = opcoes_de_lista(callable_beds, "callable_beds", todas.len())?;
+        Ok(todas
+            .into_iter()
+            .zip(beds)
+            .map(|(s, b)| ancestralidade::Person { vcf: arquivos[0].clone(), sample: Some(s), callable: b })
+            .collect())
+    } else {
+        let amostras = opcoes_de_lista(samples, "samples", arquivos.len())?;
+        let beds = opcoes_de_lista(callable_beds, "callable_beds", arquivos.len())?;
+        Ok(arquivos
+            .iter()
+            .zip(amostras)
+            .zip(beds)
+            .map(|((v, s), b)| ancestralidade::Person { vcf: v.clone(), sample: s, callable: b })
+            .collect())
+    }
+}
+
+fn lista_json_para_py<T>(py: Python<'_>, itens: &[T], json: fn(&T) -> String, resumo: fn(&T) -> String) -> PyResult<Py<PyAny>> {
+    let texto = format!("[{}]", itens.iter().map(json).collect::<Vec<_>>().join(","));
+    let lista = json_para_py(py, &texto)?;
+    for (i, it) in itens.iter().enumerate() {
+        let d = lista.bind(py).get_item(i)?;
+        d.set_item("text", resumo(it))?;
+        d.set_item("notice", AVISO)?;
+    }
+    Ok(lista)
+}
+
+/// Builds a population frequency panel (a sorted TSV: chrom, pos, ref, alt,
+/// AF_<group>..., AN_<group>...) from a multi-sample VCF (e.g. the 1000
+/// Genomes genotypes) and a table that gives each sample's group. Keeps
+/// biallelic SNVs with a minor-allele frequency of at least `min_maf` in some
+/// group, optionally one per `thin_bp` bases. `exclude`: samples left out (the
+/// relatives, or people held out to test the panel).
+#[pyfunction]
+#[pyo3(signature = (vcfs, samples_table, output, sample_column, group_column, exclude=None, min_maf=0.05, thin_bp=0, keep_indels=false, pass_only=true))]
+#[allow(clippy::too_many_arguments)]
+fn build_panel(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    samples_table: &str,
+    output: &str,
+    sample_column: &str,
+    group_column: &str,
+    exclude: Option<&Bound<'_, PyAny>>,
+    min_maf: f64,
+    thin_bp: u64,
+    keep_indels: bool,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    let fora = lista_de_textos(exclude, "exclude")?;
+    let op = ancestralidade::PanelOptions { min_maf, thin_bp, keep_indels, pass_only };
+    let r = py
+        .allow_threads(|| ancestralidade::build_panel(&arquivos, samples_table, sample_column, group_column, &fora, output, &op))
+        .map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// Builds a population frequency panel from a sites VCF whose INFO holds each
+/// group's frequency, e.g. the 1000 Genomes GRCh38 sites file:
+/// `groups=["AFR","AMR","EAS","EUR","SAS"]`, `af_fields=["AFR_AF",...]`.
+#[pyfunction]
+#[pyo3(signature = (vcfs, groups, af_fields, output, an_fields=None, min_maf=0.05, thin_bp=0, keep_indels=false, pass_only=true))]
+#[allow(clippy::too_many_arguments)]
+fn panel_from_frequencies(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    groups: &Bound<'_, PyAny>,
+    af_fields: &Bound<'_, PyAny>,
+    output: &str,
+    an_fields: Option<&Bound<'_, PyAny>>,
+    min_maf: f64,
+    thin_bp: u64,
+    keep_indels: bool,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    let grupos = lista_de_textos(Some(groups), "groups")?;
+    let afs = lista_de_textos(Some(af_fields), "af_fields")?;
+    let ans = lista_de_textos(an_fields, "an_fields")?;
+    let op = ancestralidade::PanelOptions { min_maf, thin_bp, keep_indels, pass_only };
+    let r = py
+        .allow_threads(|| ancestralidade::panel_from_frequencies(&arquivos, &grupos, &afs, &ans, output, &op))
+        .map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("text", r.resumo())?;
+    Ok(d)
+}
+
+/// Ancestry proportions of each person against the groups of a frequency
+/// panel (`build_panel`, `panel_from_frequencies`): the maximum-likelihood
+/// admixture proportions with the panel's frequencies fixed (as ADMIXTURE's
+/// supervised mode), standard errors from a block bootstrap, and the best
+/// single group. Experimental, for teaching and research only: reference
+/// groups are broad continental samples, not ethnic or national identities.
+///
+/// Returns one dictionary per person.
+#[pyfunction]
+#[pyo3(signature = (panel, vcfs, samples=None, callable_beds=None, absent_is_ref=true, pass_only=true, bootstrap=100, block_bp=5_000_000, seed=1))]
+#[allow(clippy::too_many_arguments)]
+fn estimate_ancestry(
+    py: Python<'_>,
+    panel: &str,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    absent_is_ref: bool,
+    pass_only: bool,
+    bootstrap: usize,
+    block_bp: u64,
+    seed: u64,
+) -> PyResult<Py<PyAny>> {
+    let pessoas = pessoas_anc(py, vcfs, samples, callable_beds)?;
+    let op = ancestralidade::AncestryOptions { absent_is_ref, pass_only, bootstrap, block_bp, seed, ..Default::default() };
+    let r = py.allow_threads(|| ancestralidade::estimate_ancestry(panel, &pessoas, &op)).map_err(erro_py)?;
+    lista_json_para_py(py, &r, |x| x.json(), |x| x.resumo())
+}
+
+/// A polygenic score (a PGS Catalog scoring file, GRCh38 harmonized) for each
+/// person: the weighted sum of effect-allele dosages, its coverage, and, with
+/// a frequency `panel`, where it falls in each panel group (mean, sd, z,
+/// percentile, under Hardy-Weinberg and independent variants). Experimental,
+/// for teaching and research only: a polygenic score is a statistical
+/// summary, not a diagnosis, and it transfers poorly across ancestries.
+///
+/// - `impute`: for score variants the person's file cannot call: "pooled"
+///   (the panel's pooled frequency), a group name, or a list of proportions.
+/// - `keep_ambiguous`: keep A/T and C/G SNVs (their strand cannot be checked).
+/// - `details`: write a per-variant table (TSV).
+#[pyfunction]
+#[pyo3(signature = (scoring_file, vcfs, samples=None, callable_beds=None, panel=None, reference=None, impute=None,
+                    keep_ambiguous=false, allow_flips=true, details=None, absent_is_ref=true, pass_only=true))]
+#[allow(clippy::too_many_arguments)]
+fn polygenic_score(
+    py: Python<'_>,
+    scoring_file: &str,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    panel: Option<String>,
+    reference: Option<String>,
+    impute: Option<&Bound<'_, PyAny>>,
+    keep_ambiguous: bool,
+    allow_flips: bool,
+    details: Option<String>,
+    absent_is_ref: bool,
+    pass_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let pessoas = pessoas_anc(py, vcfs, samples, callable_beds)?;
+    let imputar = match impute {
+        None => ancestralidade::Impute::Pooled,
+        Some(v) if v.is_none() => ancestralidade::Impute::Pooled,
+        Some(v) => {
+            if let Ok(s) = v.extract::<String>() {
+                if s.eq_ignore_ascii_case("pooled") {
+                    ancestralidade::Impute::Pooled
+                } else {
+                    ancestralidade::Impute::Group(s)
+                }
+            } else {
+                let p: Vec<f64> = v.extract().map_err(|_| {
+                    pyo3::exceptions::PyTypeError::new_err("`impute` must be \"pooled\", a group name or a list of proportions")
+                })?;
+                ancestralidade::Impute::Proportions(p)
+            }
+        }
+    };
+    let op = ancestralidade::ScoreOptions { panel, reference, absent_is_ref, pass_only, keep_ambiguous, allow_flips, impute: imputar, details };
+    let r = py.allow_threads(|| ancestralidade::polygenic_score(scoring_file, &pessoas, &op)).map_err(erro_py)?;
+    lista_json_para_py(py, &r, |x| x.json(), |x| x.resumo())
+}
+
+/// Counts the reads (fragments) of RNA-seq alignments per gene, as
+/// featureCounts / htseq-count do in union mode: from coordinate-sorted
+/// BAM/SAM files and a GFF3/GTF annotation. Writes a count matrix (gene, one
+/// column per sample) when `output` is given, and returns the assignment
+/// summary of each sample (assigned, ambiguous, no feature, multimapping...).
+///
+/// - `feature_type`: the annotation feature counted ("exon").
+/// - `attribute`: the attribute that groups features into genes; default:
+///   gene_id, else the parent gene; "GeneID" reads Dbxref=GeneID (RefSeq).
+/// - `strandedness`: "unstranded", "forward" or "reverse".
+#[pyfunction]
+#[pyo3(signature = (bams, annotation, output=None, feature_type="exon", attribute=None, strandedness="unstranded", min_mapq=10, sample_names=None, summary_output=None))]
+#[allow(clippy::too_many_arguments)]
+fn count_reads(
+    py: Python<'_>,
+    bams: &Bound<'_, PyAny>,
+    annotation: &str,
+    output: Option<&str>,
+    feature_type: &str,
+    attribute: Option<String>,
+    strandedness: &str,
+    min_mapq: u8,
+    sample_names: Option<&Bound<'_, PyAny>>,
+    summary_output: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(bams), "bams")?;
+    let nomes_amostras = lista_de_textos(sample_names, "sample_names")?;
+    let op = expressao::CountOptions {
+        feature_type: feature_type.to_string(),
+        attribute,
+        strandedness: expressao::Strandedness::from_text(strandedness).map_err(erro_py)?,
+        min_mapq,
+        sample_names: if nomes_amostras.is_empty() { None } else { Some(nomes_amostras) },
+        summary_output,
+    };
+    let r = py.allow_threads(|| expressao::count_reads(&arquivos, annotation, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Differential expression in the manner of DESeq2: size factors by the
+/// median of ratios, gene-wise dispersions shrunk toward a fitted trend, a
+/// negative-binomial GLM and a Wald test for `condition` (treated against
+/// `reference`), with optional blocking `factors` (e.g. the cell line),
+/// Benjamini-Hochberg adjustment, independent filtering and the Cook's
+/// distance outlier flag.
+///
+/// - `counts`: a count matrix (gene + one column per sample; featureCounts and
+///   htseq-count tables work). `samples`: a table with a column per factor.
+/// - `gene_names`: NCBI gene_info, or a two-column table (id, name).
+/// Returns the summary and, in "plot", the per-gene values for MA and volcano plots.
+#[pyfunction]
+#[pyo3(signature = (counts, samples, condition, reference, output=None, treated=None, factors=None, alpha=0.1, lfc_threshold=0.0,
+                    independent_filtering=true, cooks_filter=true, gene_names=None, only_compared_levels=false))]
+#[allow(clippy::too_many_arguments)]
+fn differential_expression(
+    py: Python<'_>,
+    counts: &str,
+    samples: &str,
+    condition: &str,
+    reference: &str,
+    output: Option<&str>,
+    treated: Option<String>,
+    factors: Option<&Bound<'_, PyAny>>,
+    alpha: f64,
+    lfc_threshold: f64,
+    independent_filtering: bool,
+    cooks_filter: bool,
+    gene_names: Option<String>,
+    only_compared_levels: bool,
+) -> PyResult<Py<PyAny>> {
+    let op = expressao::DeOptions {
+        condition: condition.to_string(),
+        reference: reference.to_string(),
+        treated,
+        factors: lista_de_textos(factors, "factors")?,
+        only_compared_levels,
+        alpha,
+        lfc_threshold,
+        independent_filtering,
+        cooks_filter,
+        gene_names,
+        ..Default::default()
+    };
+    let r = py.allow_threads(|| expressao::differential_expression(counts, samples, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Counts the guides of a pooled CRISPR screen in FASTQ files, as `mageck
+/// count` does: each read's guide is found at its offset (found from the first
+/// reads when not given) and matched to the library exactly (or with one
+/// mismatch, when only one guide is that close).
+///
+/// - `library`: guide id, guide sequence, gene (TSV or CSV, header optional).
+/// - `fastqs`: one file per sample, or a list of files per sample (technical
+///   replicates, summed). `labels`: the sample names.
+/// Returns per-sample statistics (reads, mapped %, guides with no read, Gini).
+#[pyfunction]
+#[pyo3(signature = (library, fastqs, output=None, labels=None, offsets=None, reverse_complement=false, mismatches=0))]
+#[allow(clippy::too_many_arguments)]
+fn crispr_count(
+    py: Python<'_>,
+    library: &str,
+    fastqs: &Bound<'_, PyAny>,
+    output: Option<&str>,
+    labels: Option<&Bound<'_, PyAny>>,
+    offsets: Option<Vec<usize>>,
+    reverse_complement: bool,
+    mismatches: u8,
+) -> PyResult<Py<PyAny>> {
+    let amostras: Vec<Vec<String>> = if let Ok(s) = fastqs.extract::<String>() {
+        vec![vec![s]]
+    } else if let Ok(v) = fastqs.extract::<Vec<String>>() {
+        v.into_iter().map(|f| vec![f]).collect()
+    } else {
+        fastqs.extract::<Vec<Vec<String>>>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("`fastqs` must be a path, a list of paths, or a list of lists of paths")
+        })?
+    };
+    let rotulos = lista_de_textos(labels, "labels")?;
+    let op = crispr::CountOptions { offsets, reverse_complement, mismatches };
+    let r = py.allow_threads(|| crispr::crispr_count(library, &amostras, &rotulos, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Tests a CRISPR screen as `mageck test` (RRA) does: normalizes the counts,
+/// models each guide's variance from its mean, scores each guide in the
+/// treatment against the control, and ranks the genes by robust rank
+/// aggregation for negative selection (depleted: essential genes) and positive
+/// selection (enriched), with permutation p-values and FDR.
+///
+/// - `treatment`, `control`: sample names (or 0-based columns) of the count
+///   table; without `control`, every other sample.
+/// - `norm_method`: "median" (default), "total", "control" (with
+///   `control_sgrnas` or `control_genes`) or "none".
+/// - `output_prefix`: also write <prefix>.sgrna_summary.txt and
+///   <prefix>.gene_summary.txt in MAGeCK's format.
+/// Returns the summary, the top genes and, in "rank_plot", the ranked genes.
+#[pyfunction]
+#[pyo3(signature = (count_table, treatment, control=None, output_prefix=None, norm_method="median", control_sgrnas=None,
+                    control_genes=None, gene_lfc="median", permutations=None, seed=123456))]
+#[allow(clippy::too_many_arguments)]
+fn crispr_test(
+    py: Python<'_>,
+    count_table: &str,
+    treatment: &Bound<'_, PyAny>,
+    control: Option<&Bound<'_, PyAny>>,
+    output_prefix: Option<&str>,
+    norm_method: &str,
+    control_sgrnas: Option<String>,
+    control_genes: Option<String>,
+    gene_lfc: &str,
+    permutations: Option<usize>,
+    seed: u32,
+) -> PyResult<Py<PyAny>> {
+    let tratamento = lista_de_textos(Some(treatment), "treatment")?;
+    let controle = lista_de_textos(control, "control")?;
+    let mut op = crispr::TestOptions {
+        norm_method: crispr::NormMethod::from_text(norm_method).map_err(erro_py)?,
+        gene_lfc: crispr::GeneLfc::from_text(gene_lfc).map_err(erro_py)?,
+        permutations,
+        seed,
+        ..Default::default()
+    };
+    if let Some(p) = control_sgrnas {
+        op.control_sgrnas = py.allow_threads(|| crispr::read_name_list(&p)).map_err(erro_py)?;
+    }
+    if let Some(p) = control_genes {
+        op.control_genes = py.allow_threads(|| crispr::read_name_list(&p)).map_err(erro_py)?;
+    }
+    let r = py
+        .allow_threads(|| crispr::crispr_test(count_table, &tratamento, &controle, output_prefix, &op))
+        .map_err(erro_py)?;
+    json_para_py(py, &r.json_compact())
+}
+
+/// Sketches reference genomes for species identification: the FracMinHash
+/// sketch of each genome (its canonical k-mers whose hash falls below
+/// 2^64/scaled), with the same hashes as sourmash, saved as one database file.
+///
+/// - `genomes`: one entry per genome: a FASTA path, or a list of paths (one
+///   genome in several files). `names`: their names (default: the first
+///   FASTA header). `host`: True for the genomes that are host (e.g. human).
+#[pyfunction]
+#[pyo3(signature = (genomes, output, names=None, host=None, k=31, scaled=1000))]
+fn sketch_references(
+    py: Python<'_>,
+    genomes: &Bound<'_, PyAny>,
+    output: &str,
+    names: Option<&Bound<'_, PyAny>>,
+    host: Option<Vec<bool>>,
+    k: u8,
+    scaled: u64,
+) -> PyResult<Py<PyAny>> {
+    let listas: Vec<Vec<String>> = if let Ok(s) = genomes.extract::<String>() {
+        vec![vec![s]]
+    } else if let Ok(v) = genomes.extract::<Vec<String>>() {
+        v.into_iter().map(|f| vec![f]).collect()
+    } else {
+        genomes.extract::<Vec<Vec<String>>>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("`genomes` must be a path, a list of paths, or a list of lists of paths")
+        })?
+    };
+    let nomes_g = opcoes_de_lista(names, "names", listas.len())?;
+    let hospede = host.unwrap_or_else(|| vec![false; listas.len()]);
+    if hospede.len() != listas.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("`host` needs one True/False per genome"));
+    }
+    let entradas: Vec<microbio::GenomeInput> = listas
+        .into_iter()
+        .zip(nomes_g)
+        .zip(hospede)
+        .map(|((files, name), host)| microbio::GenomeInput { files, name: name.unwrap_or_default(), host })
+        .collect();
+    let op = microbio::SketchOptions { k, scaled };
+    let r = py.allow_threads(|| microbio::sketch_references(&entradas, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Which species are in a sample, and how much of each, as `sourmash gather`
+/// does: the sample (reads or an assembly; both mates of a pair) is sketched
+/// and covered greedily by the references of the databases
+/// (`sketch_references`), the largest overlap first. Each match has its
+/// containment, an ANI estimate and its relative abundance; host genomes
+/// are reported apart. Experimental, for teaching and research.
+#[pyfunction]
+#[pyo3(signature = (samples, databases, output=None, scaled=None, threshold_bp=50000, min_abundance=1))]
+fn gather(
+    py: Python<'_>,
+    samples: &Bound<'_, PyAny>,
+    databases: &Bound<'_, PyAny>,
+    output: Option<String>,
+    scaled: Option<u64>,
+    threshold_bp: u64,
+    min_abundance: u32,
+) -> PyResult<Py<PyAny>> {
+    let amostras = lista_de_textos(Some(samples), "samples")?;
+    let bancos = lista_de_textos(Some(databases), "databases")?;
+    let op = microbio::GatherOptions { scaled, threshold_bp, min_abundance, output };
+    let r = py.allow_threads(|| microbio::gather(&amostras, &bancos, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Classifies each read (or pair) to the reference genome it shares the most
+/// sketch k-mers with, as Kraken does without a taxonomy: an abundance table
+/// (reads per reference), host reads counted apart and, optionally, the
+/// host-free reads written out. Use a database sketched with a small
+/// `scaled` (e.g. 10) for reads. Experimental, for teaching and research.
+#[pyfunction]
+#[pyo3(signature = (input, databases, input2=None, output=None, scaled=None, min_hits=2, min_fraction=0.0, only=None,
+                    assignments=None, host_free=None, host_free2=None))]
+#[allow(clippy::too_many_arguments)]
+fn classify_reads(
+    py: Python<'_>,
+    input: &str,
+    databases: &Bound<'_, PyAny>,
+    input2: Option<&str>,
+    output: Option<String>,
+    scaled: Option<u64>,
+    min_hits: u32,
+    min_fraction: f64,
+    only: Option<&Bound<'_, PyAny>>,
+    assignments: Option<String>,
+    host_free: Option<String>,
+    host_free2: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let bancos = lista_de_textos(Some(databases), "databases")?;
+    let op = microbio::ClassifyOptions {
+        scaled,
+        min_hits,
+        min_fraction,
+        only: lista_de_textos(only, "only")?,
+        output,
+        assignments,
+        host_free,
+        host_free2,
+    };
+    let r = py.allow_threads(|| microbio::classify_reads(input, input2, &bancos, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The known antimicrobial-resistance genes of an isolate: its assembly
+/// (contigs) or its reads are searched for each gene of the NCBI
+/// AMRFinderPlus catalog (AMR_CDS.fa, with ReferenceGeneCatalog.txt for the
+/// drug class), reporting the best allele per locus with its identity and
+/// coverage. Experimental, for teaching and research: it does not replace
+/// susceptibility testing.
+///
+/// - `mode`: "auto" (FASTQ = reads, FASTA = assembly), "assembly" or "reads".
+/// - `include_plus`: also the "plus" genes (virulence, stress, biocides).
+#[pyfunction]
+#[pyo3(signature = (inputs, catalog, catalog_table=None, output=None, min_identity=0.9, min_coverage=0.9,
+                    min_partial_coverage=0.5, include_plus=true, mode="auto", min_depth=1))]
+#[allow(clippy::too_many_arguments)]
+fn find_resistance_genes(
+    py: Python<'_>,
+    inputs: &Bound<'_, PyAny>,
+    catalog: &str,
+    catalog_table: Option<&str>,
+    output: Option<String>,
+    min_identity: f64,
+    min_coverage: f64,
+    min_partial_coverage: f64,
+    include_plus: bool,
+    mode: &str,
+    min_depth: u32,
+) -> PyResult<Py<PyAny>> {
+    let entradas = lista_de_textos(Some(inputs), "inputs")?;
+    let modo = match mode.to_ascii_lowercase().as_str() {
+        "auto" => microbio::AmrMode::Auto,
+        "assembly" => microbio::AmrMode::Assembly,
+        "reads" => microbio::AmrMode::Reads,
+        outro => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "mode `{outro}`: use \"auto\", \"assembly\" or \"reads\""
+            )))
+        }
+    };
+    let op = microbio::AmrOptions { min_identity, min_coverage, min_partial_coverage, include_plus, mode: modo, min_depth, output };
+    let r = py
+        .allow_threads(|| microbio::find_resistance_genes(&entradas, catalog, catalog_table, &op))
+        .map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+// ---------------------------------------------------------
+// Surto e vigilancia (src/surto.rs)
+// ---------------------------------------------------------
+
+fn opcoes_de_distancia(
+    k: u8,
+    scaled: u64,
+    records_as_genomes: bool,
+    method: &str,
+    outgroup: Option<String>,
+    matrix_output: Option<String>,
+    matrix_format: Option<&str>,
+    matrix_value: &str,
+    tree_output: Option<String>,
+) -> PyResult<surto::DistanceOptions> {
+    Ok(surto::DistanceOptions {
+        k,
+        scaled,
+        records_as_genomes,
+        method: surto::TreeMethod::from_text(method).map_err(erro_py)?,
+        outgroup,
+        matrix_output,
+        matrix_format: matrix_format.map(surto::MatrixFormat::from_text).transpose().map_err(erro_py)?,
+        matrix_value: surto::MatrixValue::from_text(matrix_value).map_err(erro_py)?,
+        tree_output,
+    })
+}
+
+/// Distances between genomes and the tree they make, for an outbreak or a
+/// collection of isolates: each genome (FASTA; a list of files when it is in
+/// several, e.g. chromosome and plasmids) is reduced to a FracMinHash sketch
+/// (the same hashes as sourmash), and each pair gets its Jaccard index, the
+/// Mash distance and an ANI estimate. The tree is built by neighbor joining
+/// (rooted at the midpoint, or on `outgroup`) or UPGMA.
+///
+/// - `genomes`: a path, a list of paths (one genome each), or a list of lists.
+/// - `names`: the names in the matrix and the tree (default: the file names).
+/// - `records_as_genomes`: each FASTA record is a genome (a multi-FASTA of
+///   viral genomes).
+/// - `scaled`: one k-mer in `scaled` is kept; 0 = chosen from the sizes.
+/// - `method`: "nj" or "upgma". `matrix_value`: "distance", "ani" or
+///   "jaccard"; `matrix_format`: "tsv" or "phylip" (default: by the name).
+/// - `matrix_output`, `tree_output` (Newick): files to write.
+///
+/// The result has `names`, the `jaccard`, `distance` and `ani` matrices and
+/// `tree` (Newick, and nodes with x = distance from the root and y = leaf
+/// order, ready to draw).
+#[pyfunction]
+#[pyo3(signature = (genomes, names=None, tree_output=None, matrix_output=None, k=31, scaled=0, records_as_genomes=false,
+                    method="nj", outgroup=None, matrix_value="distance", matrix_format=None))]
+#[allow(clippy::too_many_arguments)]
+fn genome_distances(
+    py: Python<'_>,
+    genomes: &Bound<'_, PyAny>,
+    names: Option<&Bound<'_, PyAny>>,
+    tree_output: Option<String>,
+    matrix_output: Option<String>,
+    k: u8,
+    scaled: u64,
+    records_as_genomes: bool,
+    method: &str,
+    outgroup: Option<String>,
+    matrix_value: &str,
+    matrix_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let listas: Vec<Vec<String>> = if let Ok(s) = genomes.extract::<String>() {
+        vec![vec![s]]
+    } else if let Ok(v) = genomes.extract::<Vec<String>>() {
+        v.into_iter().map(|f| vec![f]).collect()
+    } else {
+        genomes.extract::<Vec<Vec<String>>>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("`genomes` must be a path, a list of paths, or a list of lists of paths")
+        })?
+    };
+    let nomes = opcoes_de_lista(names, "names", listas.len())?;
+    let entradas: Vec<surto::GenomeFiles> =
+        listas.into_iter().zip(nomes).map(|(files, name)| surto::GenomeFiles { files, name: name.unwrap_or_default() }).collect();
+    let op = opcoes_de_distancia(k, scaled, records_as_genomes, method, outgroup, matrix_output, matrix_format, matrix_value, tree_output)?;
+    let r = py.allow_threads(|| surto::genome_distances(&entradas, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The same as `genome_distances`, from sketch databases already made
+/// (`sketch_references`, or sourmash signatures of the same k): every genome
+/// of the databases goes into the matrix and the tree.
+#[pyfunction]
+#[pyo3(signature = (databases, tree_output=None, matrix_output=None, scaled=0, method="nj", outgroup=None,
+                    matrix_value="distance", matrix_format=None))]
+#[allow(clippy::too_many_arguments)]
+fn sketch_distances(
+    py: Python<'_>,
+    databases: &Bound<'_, PyAny>,
+    tree_output: Option<String>,
+    matrix_output: Option<String>,
+    scaled: u64,
+    method: &str,
+    outgroup: Option<String>,
+    matrix_value: &str,
+    matrix_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let bases = lista_de_textos(Some(databases), "databases")?;
+    let op = opcoes_de_distancia(31, scaled, false, method, outgroup, matrix_output, matrix_format, matrix_value, tree_output)?;
+    let r = py.allow_threads(|| surto::sketch_distances(&bases, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// A tree from a distance (or similarity) matrix made elsewhere: TSV, CSV
+/// (as `sourmash compare --csv` writes it) or PHYLIP. `similarity=True` for a
+/// matrix of similarities (1 = identical), which is turned into 1 - value.
+#[pyfunction]
+#[pyo3(signature = (path, method="nj", similarity=false, outgroup=None, output=None))]
+fn tree_from_matrix(
+    py: Python<'_>,
+    path: &str,
+    method: &str,
+    similarity: bool,
+    outgroup: Option<&str>,
+    output: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let m = surto::TreeMethod::from_text(method).map_err(erro_py)?;
+    let r = py.allow_threads(|| surto::tree_from_matrix(path, m, similarity, outgroup, output)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The mutations of viral genomes against their reference, named as
+/// Nextclade names them: nucleotide substitutions (`C241T`), deletions
+/// (`21765-21770`), insertions (`22204:GAGCCAGAA`) and missing (N) stretches,
+/// in reference coordinates; and, with the reference's GFF3, the amino-acid
+/// changes they cause in each gene (`S:D614G`, `S:H69-`, `ORF1b:P314L`),
+/// with multi-part CDS such as ORF1ab and its ribosomal frameshift.
+///
+/// - `genomes`: FASTA files; every record is a genome.
+/// - `output_dir`: one TSV per genome; `summary_output`: one line per genome.
+/// - `split_orf1ab`: report ORF1ab as ORF1a + ORF1b, as Nextclade does.
+#[pyfunction]
+#[pyo3(signature = (reference, genomes, annotation=None, output_dir=None, summary_output=None, split_orf1ab=true))]
+fn viral_mutations(
+    py: Python<'_>,
+    reference: &str,
+    genomes: &Bound<'_, PyAny>,
+    annotation: Option<String>,
+    output_dir: Option<String>,
+    summary_output: Option<String>,
+    split_orf1ab: bool,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(genomes), "genomes")?;
+    let op = surto::MutationOptions { annotation, output_dir, summary_output, split_orf1ab };
+    let r = py.allow_threads(|| surto::viral_mutations(reference, &arquivos, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// In-silico PCR: the primer pairs of a panel (a TSV with `target`,
+/// `forward`, `reverse`, optional `probe`, `size` such as "60-90", `source`;
+/// IUPAC codes allowed) against genomes (FASTA: the products, on both
+/// strands, with their mismatches) and read samples (FASTQ: reads carrying a
+/// primer site). A primer may have up to `max_mismatches`, but none in its
+/// last `three_prime_exact` bases; a product is detected when its size is in
+/// the assay's range and its probe (if any) binds.
+///
+/// Returns `rows` (the presence/absence matrix, one row per genome or
+/// sample), `amplicons` and `read_counts`; writes them as TSV when asked.
+#[pyfunction]
+#[pyo3(signature = (panel, inputs, amplicons_output=None, matrix_output=None, reads_output=None, max_mismatches=3,
+                    three_prime_exact=3, max_total_mismatches=4, max_probe_mismatches=3, max_amplicon=2000,
+                    records_as_genomes=false, min_reads=3))]
+#[allow(clippy::too_many_arguments)]
+fn in_silico_pcr(
+    py: Python<'_>,
+    panel: &str,
+    inputs: &Bound<'_, PyAny>,
+    amplicons_output: Option<String>,
+    matrix_output: Option<String>,
+    reads_output: Option<String>,
+    max_mismatches: u32,
+    three_prime_exact: u32,
+    max_total_mismatches: u32,
+    max_probe_mismatches: u32,
+    max_amplicon: u32,
+    records_as_genomes: bool,
+    min_reads: u64,
+) -> PyResult<Py<PyAny>> {
+    let entradas = lista_de_textos(Some(inputs), "inputs")?;
+    let op = surto::PcrOptions {
+        max_mismatches,
+        three_prime_exact,
+        max_total_mismatches,
+        max_probe_mismatches,
+        max_amplicon,
+        records_as_genomes,
+        min_reads,
+        amplicons_output,
+        matrix_output,
+        reads_output,
+    };
+    let r = py.allow_threads(|| surto::in_silico_pcr_panel(panel, &entradas, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+// ---------------------------------------------------------
+// 16S e carga mutacional do tumor (src/amplicon.rs)
+// ---------------------------------------------------------
+
+fn amostras_16s(samples: &Bound<'_, PyAny>) -> PyResult<Vec<amplicon::AmpliconSample>> {
+    if let Ok(s) = samples.extract::<String>() {
+        let baixo = s.to_ascii_lowercase();
+        let fastq = [".fastq", ".fq", ".fastq.gz", ".fq.gz"].iter().any(|e| baixo.ends_with(e));
+        return if fastq { amplicon::pair_fastq_files(&[s]) } else { amplicon::read_sample_sheet(&s) }.map_err(erro_py);
+    }
+    if let Ok(v) = samples.extract::<Vec<String>>() {
+        return amplicon::pair_fastq_files(&v).map_err(erro_py);
+    }
+    let linhas: Vec<Vec<String>> = samples.extract().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(
+            "`samples` must be a sample sheet (name, R1, R2 per line, as mothur's stability.files), a list of FASTQ files (paired by their _R1/_R2 names) or a list of [name, R1, R2]",
+        )
+    })?;
+    linhas
+        .into_iter()
+        .map(|l| match l.as_slice() {
+            [n, r1] => Ok(amplicon::AmpliconSample { name: n.clone(), r1: r1.clone(), r2: None }),
+            [n, r1, r2] => Ok(amplicon::AmpliconSample { name: n.clone(), r1: r1.clone(), r2: Some(r2.clone()) }),
+            _ => Err(pyo3::exceptions::PyValueError::new_err("each sample is [name, R1] or [name, R1, R2]")),
+        })
+        .collect()
+}
+
+/// Amplicon sequence variants (ASVs) from 16S reads, as vsearch / UNOISE3
+/// do: each pair merged by its overlap, primers removed (when given),
+/// reads with more than `max_ee` expected errors dropped, the reads of all
+/// samples dereplicated and denoised (UNOISE3: alpha 2, at least `min_size`
+/// copies), chimeras removed (as `--uchime3_denovo`). Writes the ASVs
+/// (FASTA, ASV_1 the most abundant) and the feature table (ASV x sample).
+///
+/// - `samples`: a sample sheet (name, R1, R2 per line; mothur's
+///   `stability.files` works as it is), a list of FASTQ files paired by
+///   their `_R1`/`_R2` names, or a list of `[name, R1, R2]`.
+/// - `tracking`: also write the reads kept at each step, per sample.
+#[pyfunction]
+#[pyo3(signature = (samples, asv_fasta, feature_table, tracking=None, primer_forward=None, primer_reverse=None,
+                    require_primers=true, max_ee=1.0, min_length=1, max_length=0, min_overlap=10, max_diffs=10,
+                    trunc_len_r1=0, trunc_len_r2=0, min_size=8, alpha=2.0, remove_chimeras=true))]
+#[allow(clippy::too_many_arguments)]
+fn amplicon_asvs(
+    py: Python<'_>,
+    samples: &Bound<'_, PyAny>,
+    asv_fasta: &str,
+    feature_table: &str,
+    tracking: Option<&str>,
+    primer_forward: Option<String>,
+    primer_reverse: Option<String>,
+    require_primers: bool,
+    max_ee: Option<f64>,
+    min_length: usize,
+    max_length: usize,
+    min_overlap: usize,
+    max_diffs: usize,
+    trunc_len_r1: usize,
+    trunc_len_r2: usize,
+    min_size: u64,
+    alpha: f64,
+    remove_chimeras: bool,
+) -> PyResult<Py<PyAny>> {
+    let amostras = amostras_16s(samples)?;
+    let mut op = amplicon::AsvOptions { primer_forward, primer_reverse, require_primers, max_ee, min_length, max_length, ..Default::default() };
+    op.merge.min_overlap = min_overlap;
+    op.merge.max_diffs = max_diffs;
+    op.merge.trunc_len_r1 = trunc_len_r1;
+    op.merge.trunc_len_r2 = trunc_len_r2;
+    op.denoise.min_size = min_size;
+    op.denoise.alpha = alpha;
+    op.chimera.enabled = remove_chimeras;
+    let r = py
+        .allow_threads(|| amplicon::amplicon_asvs(&amostras, asv_fasta, feature_table, tracking, &op))
+        .map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Trains the naive Bayesian classifier of the RDP (Wang et al. 2007) on a
+/// reference FASTA whose headers carry the lineage (the DADA2-formatted RDP
+/// and GTDB files, or GTDB's own `d__...;g__...` headers), and saves the
+/// model to reload fast. With both primers, only the amplified region of
+/// each reference is used, which suits short reads (V4) better.
+#[pyfunction]
+#[pyo3(signature = (reference, output=None, k=8, primer_forward=None, primer_reverse=None, rank_names=None, max_depth=None))]
+#[allow(clippy::too_many_arguments)]
+fn train_classifier(
+    py: Python<'_>,
+    reference: &str,
+    output: Option<&str>,
+    k: usize,
+    primer_forward: Option<String>,
+    primer_reverse: Option<String>,
+    rank_names: Option<Vec<String>>,
+    max_depth: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let op = amplicon::TrainOptions { k, max_depth, rank_names, primer_forward, primer_reverse };
+    let r = py.allow_threads(|| amplicon::train_classifier(reference, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The taxonomy of each sequence (ASVs) by the RDP naive Bayesian
+/// classifier: 8-mer words, 100 bootstrap trials of 1/8 of the words, and
+/// the deepest rank whose confidence reaches `min_confidence` (0.8 as RDP;
+/// 0.5 as DADA2's minBoot for short reads). `model`: a model saved by
+/// `train_classifier`, or a reference FASTA (trained on the fly).
+/// `species_reference`: a FASTA of species for exact matches (DADA2's
+/// addSpecies).
+#[pyfunction]
+#[pyo3(signature = (sequences, model, output, min_confidence=0.8, bootstraps=100, seed=42, try_reverse_complement=false,
+                    species_reference=None))]
+#[allow(clippy::too_many_arguments)]
+fn classify_asvs(
+    py: Python<'_>,
+    sequences: &str,
+    model: &str,
+    output: &str,
+    min_confidence: f64,
+    bootstraps: u32,
+    seed: u64,
+    try_reverse_complement: bool,
+    species_reference: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let op = amplicon::ClassifyOptions { bootstraps, min_confidence, seed, try_reverse_complement, species_reference, ..Default::default() };
+    let r = py.allow_threads(|| amplicon::classify_asvs(sequences, model, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Alpha diversity of each sample of a feature table: observed, Chao1,
+/// Shannon, Simpson, Pielou's evenness, Good's coverage; optionally after
+/// rarefying to `rarefy_depth`, and rarefaction curves (the exact
+/// expectation at each depth).
+#[pyfunction]
+#[pyo3(signature = (table, output=None, rarefy_depth=None, seed=42, curve_steps=20, curve_max_depth=None, curves_output=None))]
+#[allow(clippy::too_many_arguments)]
+fn alpha_diversity(
+    py: Python<'_>,
+    table: &str,
+    output: Option<&str>,
+    rarefy_depth: Option<u64>,
+    seed: u64,
+    curve_steps: usize,
+    curve_max_depth: Option<u64>,
+    curves_output: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let op = amplicon::AlphaOptions { rarefy_depth, seed, curve_steps, curve_max_depth, curves_output };
+    let r = py.allow_threads(|| amplicon::alpha_diversity(table, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Beta diversity between the samples of a feature table: Bray-Curtis,
+/// Jaccard, or "kmer" (a distance between the samples' ASV k-mer profiles,
+/// with `asv_fasta`), the principal coordinates (PCoA) and, with a
+/// `metadata` table and its `group_column`, PERMANOVA (permutations, fixed
+/// seed).
+#[pyfunction]
+#[pyo3(signature = (table, output=None, metric="braycurtis", relative=false, rarefy_depth=None, seed=42, asv_fasta=None,
+                    metadata=None, group_column=None, permutations=999, pcoa_output=None))]
+#[allow(clippy::too_many_arguments)]
+fn beta_diversity(
+    py: Python<'_>,
+    table: &str,
+    output: Option<&str>,
+    metric: &str,
+    relative: bool,
+    rarefy_depth: Option<u64>,
+    seed: u64,
+    asv_fasta: Option<String>,
+    metadata: Option<String>,
+    group_column: Option<String>,
+    permutations: u32,
+    pcoa_output: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let op = amplicon::BetaOptions {
+        metric: metric.to_string(),
+        relative,
+        rarefy_depth,
+        seed,
+        asv_fasta,
+        metadata,
+        group_column,
+        permutations,
+        pcoa_output,
+    };
+    let r = py.allow_threads(|| amplicon::beta_diversity(table, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// The relative abundance of each taxon (at `rank`: "Phylum", "Family",
+/// "Genus"...) in each sample, from a feature table and the taxonomy of its
+/// ASVs (`classify_asvs`), for stacked bars; `top` keeps the most abundant
+/// taxa and adds the rest as "Other".
+#[pyfunction]
+#[pyo3(signature = (table, taxonomy, output=None, rank="Phylum", top=0))]
+fn taxa_composition(py: Python<'_>, table: &str, taxonomy: &str, output: Option<&str>, rank: &str, top: usize) -> PyResult<Py<PyAny>> {
+    let op = amplicon::CompositionOptions { rank: rank.to_string(), top };
+    let r = py.allow_threads(|| amplicon::taxa_composition(table, taxonomy, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Tumor mutational burden: the somatic variants of a tumor VCF counted per
+/// megabase of the sequenced region (`bed`: the panel's or exome's callable
+/// region). Filters: PASS only, minimum depth and variant allele fraction
+/// (from FORMAT AD/DP or AF); optionally only coding variants (`annotation`,
+/// a GFF3) and only non-synonymous ones (also `reference`, the genome
+/// FASTA). Experimental, for teaching and research: not a clinical report.
+#[pyfunction]
+#[pyo3(signature = (vcf, bed, output=None, tumor_sample=None, pass_only=true, min_depth=10, min_vaf=0.05, annotation=None,
+                    coding_only=false, reference=None, nonsynonymous_only=false))]
+#[allow(clippy::too_many_arguments)]
+fn tumor_mutational_burden(
+    py: Python<'_>,
+    vcf: &str,
+    bed: &str,
+    output: Option<String>,
+    tumor_sample: Option<String>,
+    pass_only: bool,
+    min_depth: u32,
+    min_vaf: f64,
+    annotation: Option<String>,
+    coding_only: bool,
+    reference: Option<String>,
+    nonsynonymous_only: bool,
+) -> PyResult<Py<PyAny>> {
+    let op = amplicon::TmbOptions { tumor_sample, pass_only, min_depth, min_vaf, annotation, coding_only, reference, nonsynonymous_only, output };
+    let r = py.allow_threads(|| amplicon::tumor_mutational_burden(vcf, bed, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
 /// MultiMerge Genomics: tools for genomic files of any size. Validate,
 /// normalize chromosome names, compare reference genomes, sort, index and
 /// query by region; interval operations on BED; statistics, filtering and
@@ -1379,5 +2752,39 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parquet_options, m)?)?;
     m.add_function(wrap_pyfunction!(index_file, m)?)?;
     m.add_function(wrap_pyfunction!(query_region, m)?)?;
+    m.add_function(wrap_pyfunction!(clinvar_findings, m)?)?;
+    m.add_function(wrap_pyfunction!(gene_regions, m)?)?;
+    m.add_function(wrap_pyfunction!(variant_lookup, m)?)?;
+    m.add_function(wrap_pyfunction!(pileup, m)?)?;
+    m.add_function(wrap_pyfunction!(pharmcat_prepare, m)?)?;
+    m.add_function(wrap_pyfunction!(pharmcat_run, m)?)?;
+    m.add_function(wrap_pyfunction!(relatedness, m)?)?;
+    m.add_function(wrap_pyfunction!(trio_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(runs_of_homozygosity, m)?)?;
+    m.add_function(wrap_pyfunction!(genetic_sex, m)?)?;
+    m.add_function(wrap_pyfunction!(build_panel, m)?)?;
+    m.add_function(wrap_pyfunction!(panel_from_frequencies, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_ancestry, m)?)?;
+    m.add_function(wrap_pyfunction!(polygenic_score, m)?)?;
+    m.add_function(wrap_pyfunction!(count_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(differential_expression, m)?)?;
+    m.add_function(wrap_pyfunction!(crispr_count, m)?)?;
+    m.add_function(wrap_pyfunction!(crispr_test, m)?)?;
+    m.add_function(wrap_pyfunction!(sketch_references, m)?)?;
+    m.add_function(wrap_pyfunction!(gather, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(find_resistance_genes, m)?)?;
+    m.add_function(wrap_pyfunction!(genome_distances, m)?)?;
+    m.add_function(wrap_pyfunction!(sketch_distances, m)?)?;
+    m.add_function(wrap_pyfunction!(tree_from_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(viral_mutations, m)?)?;
+    m.add_function(wrap_pyfunction!(in_silico_pcr, m)?)?;
+    m.add_function(wrap_pyfunction!(amplicon_asvs, m)?)?;
+    m.add_function(wrap_pyfunction!(train_classifier, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_asvs, m)?)?;
+    m.add_function(wrap_pyfunction!(alpha_diversity, m)?)?;
+    m.add_function(wrap_pyfunction!(beta_diversity, m)?)?;
+    m.add_function(wrap_pyfunction!(taxa_composition, m)?)?;
+    m.add_function(wrap_pyfunction!(tumor_mutational_burden, m)?)?;
     Ok(())
 }

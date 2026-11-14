@@ -1,8 +1,10 @@
 # Test of the marimo interface IN A REAL BROWSER (the system's Edge or Chrome,
 # driven by Playwright): starts `marimo run`, enters each screen through the
 # menu, fills in and submits the forms, and checks what shows on the page and
-# what was written to disk. It covers what test_ui.py cannot see: the
-# navigation, the rendered components, the websocket and screen 2 (clustering).
+# what was written to disk; then, on every screen, picks an example from the
+# list and submits the form as the example fills it in. It covers what
+# test_ui.py cannot see: the navigation, the rendered components, the websocket
+# and screen 2 (clustering).
 #
 # Usage: python trials/python/test_browser.py ui_main.py [folder_for_screenshots]
 #
@@ -142,6 +144,15 @@ with open("five_columns.vcf", "w", newline="\n") as f:  # not a VCF: no REF, ALT
 with open("quals.vcf", "w", newline="\n") as f:
     f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
     f.write("chr1\t10\ta\tA\tG\t12.50\tPASS\t.\nchr1\t20\tb\tC\tT\t30.0\tPASS\t.\n")
+for _env in ("MMG_HUMAN_DEMO", "MMG_RESEARCH_DEMO"):
+    if os.environ.get(_env) and os.path.exists(os.environ[_env]):
+        shutil.copy(os.environ[_env], os.path.basename(os.environ[_env]))
+if os.environ.get("PHARMCAT_JAR") and os.path.exists(os.environ["PHARMCAT_JAR"]):
+    os.makedirs("mmgen_tools/pharmcat", exist_ok=True)
+    _pc = os.path.dirname(os.environ["PHARMCAT_JAR"])
+    for _f in os.listdir(_pc):
+        if _f.endswith("-all.jar") or (_f.startswith("pharmcat_positions_") and _f.endswith(".vcf")):
+            shutil.copy(os.path.join(_pc, _f), os.path.join("mmgen_tools/pharmcat", _f))
 
 
 def records(path):
@@ -210,7 +221,25 @@ MENU = {
     12: ("12. FASTQ Quality & Trimming", "12. FASTQ Quality Report & Trimming"),
     13: ("13. K-mer Counting", "13. K-mer Counting"),
     14: ("14. Formats & Conversion", "14. Formats & Conversion"),
+    15: ("15. Which Test Sees What", "15. Which Test Sees What"),
+    16: ("16. Relatedness, Trios & Paternity", "16. Relatedness, Trios & Paternity"),
+    17: ("17. Ancestry & Polygenic Scores", "17. Ancestry & Polygenic Scores"),
+    18: ("18. Disease Findings & Gene Panels", "18. Disease Findings & Gene Panels"),
+    19: ("19. Pharmacogenomics (PharmCAT)", "19. Pharmacogenomics (PharmCAT)"),
+    20: ("20. Sex Chromosomes & Homozygosity", "20. Sex Chromosomes & Homozygosity"),
+    21: ("21. Variant Lookup & Allele Counts", "21. Variant Lookup & Allele Counts"),
+    22: ("22. RNA-seq: Gene Counts", "22. RNA-seq: Gene Counts & Differential Expression"),
+    23: ("23. CRISPR Screens (MAGeCK)", "23. CRISPR Screens (MAGeCK)"),
+    24: ("24. Metagenomics: Species & Abundance", "24. Metagenomics: Species & Abundance"),
+    25: ("25. Antimicrobial Resistance Genes", "25. Antimicrobial Resistance Genes"),
+    26: ("26. Outbreaks: Trees, Viral Mutations & PCR", "26. Outbreaks: Trees, Viral Mutations & PCR"),
+    27: ("27. 16S Amplicons: Taxonomy & Diversity", "27. 16S Amplicons: Taxonomy & Diversity"),
+    28: ("28. Tumor Mutational Burden (TMB)", "28. Tumor Mutational Burden (TMB)"),
 }
+RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
+# The human-genome examples need the demo data and PharmCAT (see test_ui.py).
+HUMAN_DEMO = os.environ.get("MMG_HUMAN_DEMO")
+PHARMCAT_JAR = os.environ.get("PHARMCAT_JAR")
 
 # Words that would mean a piece of the interface is still in Portuguese.
 PORTUGUESE = re.compile(r"\b(ficheiros?|arquivos?|voltar|aguardando|selecione|m[oó]dulo|mem[oó]ria|iniciar|n[aã]o|s[aã]o|voc[eê]|sucesso|conclu[ií]d[oa])\b", re.I)
@@ -311,8 +340,26 @@ def multiselect(pg, options):
 
 
 def choose(pg, index, label):
-    pg.locator("select:visible").nth(index).select_option(label=label)
+    """Picks an option in the index-th list of the form (the example list and
+    the BED operation sit outside the form)."""
+    pg.locator("form select:visible").nth(index).select_option(label=label)
     pg.wait_for_timeout(200)
+
+
+NO_EXAMPLE = "(none: fill in the form yourself)"
+
+
+def example(pg, label):
+    """Picks an example in the screen's example list; the form is filled in."""
+    pg.locator("select:visible").filter(has=pg.locator("option", has_text=NO_EXAMPLE)).first.select_option(label=label)
+    pg.get_by_text("The form below is filled in with this example").first.wait_for(timeout=60000)
+    pg.wait_for_timeout(800)
+
+
+def operation(pg, label):
+    """The BED operation, on screen 9: the first list of the page."""
+    pg.locator("select:visible").first.select_option(label=label)
+    pg.wait_for_timeout(1200)
 
 
 def submit(pg, label):
@@ -548,11 +595,11 @@ try:
             check(f"query: {len(expected)} records in chr2:1000-30000", f"{len(expected):,} record(s) in chr2:1000-30000" in (t or ""), (t or "")[-300:])
 
             radio(pg, "Interval operations (BED)")
-            choose(pg, 0, "intersect: A against B (bedtools intersect)")
+            operation(pg, "intersect: A against B (bedtools intersect)")
             pg.get_by_text("B: BED file(s):").first.wait_for(timeout=30000)
             multiselect(pg, ["peaks.bed"])
             multiselect(pg, ["genes.bed"])
-            choose(pg, 1, "unique: the lines of A that touch B (-u)")
+            choose(pg, 0, "unique: the lines of A that touch B (-u)")
             submit(pg, "Run intersect")
             t = wait_for(pg, "Intersect done|ERROR", 60)
             shot(pg, "screen9_intersect")
@@ -660,7 +707,7 @@ try:
             check("convert to Parquet with QUAL as text: back to text, the same bytes", back_ok, (t or "")[-300:])
             pg.get_by_role("button", name="Refresh the file list").click()
             pg.wait_for_timeout(1500)
-            options = pg.locator("select:visible").first.locator("option").all_inner_texts()
+            options = pg.locator("form select:visible").first.locator("option").all_inner_texts()
             check("'Refresh the file list' offers the new file", "quals.vcf.parquet" in options, options)
 
         print("== screen 2: clustering")
@@ -700,6 +747,101 @@ try:
                 pg.wait_for_timeout(1500)
             check("the table changes page", nxt is not None and pg.locator("tbody tr").first.inner_text() != first,
                   first if nxt is not None else pg.evaluate(JS_BUTTONS))
+
+        print("== one example on every screen: picked from the list, submitted as it comes")
+        flows = [
+            (1, None, "A 30 kb bacterial genome (FASTA), k = 31", "Start batch ingestion", "Batch processed successfully|ERROR",
+             lambda t: number(t, "extracted:") == 29970, "mmgen_examples/toy_bacterium_K31.arrow"),
+            (2, None, "31-mers of two genomes with different GC content", "Load and merge the k-mers", "Engine finished|ERROR",
+             lambda t: number(t, "Engine finished.") == 4000, None),
+            (3, None, "The 31-mers of the 30 kb genome", "Build the De Bruijn graph", "Graph resolved successfully|ERROR",
+             lambda t: number(t, "Longest contig:") == 30000, "mmgen_examples/MMGEN_Contigs_K31.fasta"),
+            (4, None, "A patient with 3 SNPs against the healthy genome", "Run the search", "Genome scan complete|ERROR",
+             lambda t: number(t, "patient):") == 93, None),
+            (5, None, "The same gene with a nonsense mutation", "Translate to protein", "Translation complete|ERROR",
+             lambda t: "MSTHEGENEIS" in t, None),
+            (6, None, "The 31-mers of the 30 kb genome, 1 MB filter, 5 hashes", "Build the Bloom filter", "built successfully|ERROR",
+             lambda t: number(t, "Bits set:") is not None, None),
+            (7, None, "A circular plasmid in 4 contigs that overlap by 54 bases", "Close the genome", "Scaffolding complete|ERROR",
+             lambda t: number(t, "continuous sequence:") == 20000 and number(t, "Circular genomes detected:") == 1, None),
+            (8, None, "Three samples (one gzipped), merged by position", "Start the Multimerge engine", "VCF Multimerge complete|ERROR",
+             lambda t: number(t, "Variants written:") == 600, "mmgen_examples/merged_by_position.vcf"),
+            (9, None, "SAM alignments → a sorted BAM with its .bai index", "🚀 Sort", "Sorted|ERROR",
+             lambda t: number(t, "Records written:") == 600, "mmgen_examples/alignments.sorted.bam.bai"),
+            (10, "Compare reference genomes", "GRCh38 against GRCh37: different genomes", "Compare", "DIFFERENT reference genomes|ERROR",
+             lambda t: "GRCh37" in t, None),
+            (11, "Normalize", "Left-align indels in repeats, with the genome", "🧹 Normalize", "Normalized|ERROR",
+             lambda t: number(t, "Indels left-aligned:") == 3, "mmgen_examples/indels.norm.vcf"),
+            (12, None, "Paired-end reads with an adapter and low-quality ends (R1)", "Measure", "Duplicated reads|ERROR",
+             lambda t: "Illumina Universal" in t, "mmgen_examples/reads_R1.report.html"),
+            (13, None, "Reads at 30× coverage (k = 31): the error peak and the coverage peak", "Count", "Counted|ERROR",
+             lambda t: "peak:" in t, None),
+            (14, None, "SAM → BAM", "Convert", "Converted|ERROR", lambda t: "alignments.bam" in t, "mmgen_examples/alignments.bam"),
+            (21, "Allele counts at a position (BAM)", "Reads over a heterozygous SNP (simulated)", "Count", "Bases|ERROR",
+             lambda t: number(t, "Depth") is not None, None),
+            (20, "Runs of homozygosity", "A child of first cousins (simulated)", "Find the runs", "F_ROH|ERROR",
+             lambda t: number(t, "Runs:") == 2, None),
+            (22, "Differential expression", "The four simulated samples: treated against control", "Compare", "Genes tested|ERROR",
+             lambda t: "gene03" in t, None),
+        ]
+        if RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO):
+            flows += [
+                (22, "Differential expression", "Airway: dexamethasone against untreated (Himes et al. 2014)", "Compare",
+                 "Genes tested|ERROR", lambda t: "3,013" in t, None),
+                (23, "Count guides in reads", "The MAGeCK demo: two samples of 2,500 reads", "✂️ Count", "Guides counted|ERROR",
+                 lambda t: "sample2" in t, "mmgen_examples/research/crispr/guide_counts.txt"),
+                (23, "Rank genes (MAGeCK RRA)", "The MAGeCK demo screen (100 genes)", "✂️ Rank the genes", "Genes ranked|ERROR",
+                 lambda t: "Negative selection" in t, None),
+                (24, "Which species, and how much", "ZymoBIOMICS EVEN community: 8 bacteria and 2 yeasts", "🦠 Identify",
+                 "Species found|ERROR", lambda t: "Escherichia" in t and "Saccharomyces" in t, None),
+                (25, None, "K. pneumoniae KPNIH1: a KPC carbapenemase outbreak strain", "💉 Search", "Resistance genes|ERROR",
+                 lambda t: "KPC-3" in t, None),
+                (26, "Distances and a tree", "SARS-CoV-2: 20 lineages, rooted on lineage A", "🌳 Build the tree", "Tree built|ERROR",
+                 lambda t: "B.1.617.2_Delta" in t, None),
+                (26, "Mutations of viral genomes", "SARS-CoV-2: 20 lineages against the Wuhan-Hu-1 reference", "🧬 Find the mutations",
+                 "Mutations found|ERROR", lambda t: "S:D614G" in t, None),
+                (26, "In-silico PCR", "CDC N1 and N2 assays on 20 SARS-CoV-2 genomes", "🧪 Run the PCR", "PCR done|ERROR",
+                 lambda t: "CDC_N1" in t, None),
+                (27, "Diversity", "Early against late after weaning (Bray-Curtis)", "🌿 Measure", "Diversity measured|ERROR",
+                 lambda t: "PERMANOVA" in t, None),
+                (27, "Taxonomy", "The ASVs of the SOP, with the RDP 19 classifier (V4)", "🌿 Classify", "ASVs classified|ERROR",
+                 lambda t: "Muribaculaceae" in t, "mmgen_examples/research/16s/taxonomy.tsv"),
+                (28, None, "HCC1395 breast-cancer cell line, chromosome 17", "🎯 Measure the TMB", "TMB measured|ERROR",
+                 lambda t: "mutations per megabase" in t, None),
+            ]
+        else:
+            print("  (the research examples are skipped: set MMG_RESEARCH_DEMO to the research demo data zip)")
+        if HUMAN_DEMO and os.path.exists(HUMAN_DEMO):
+            flows += [
+                (16, "Trio and paternity test", "HG002 with his parents (the Ashkenazi trio)", "Analyze the trio", r"Exclusions \(father|ERROR",
+                 lambda t: "is not excluded" in t and "Combined paternity index" in t, None),
+                (17, None, "The seven GIAB genomes against the 1000 Genomes groups (chr22)", "Estimate", "best single group|ERROR",
+                 lambda t: "EAS" in t and "HG005" in t, None),
+                (18, None, "HG002: pathogenic and likely pathogenic, at least 1 review star", "Find", "Alleles checked|ERROR",
+                 lambda t: "F11" in t, None),
+                (20, None, "HG002, chromosomes X and Y", "Infer", "one X and a Y|Undetermined|ERROR", lambda t: "XY" in t, None),
+                (21, None, "The F11 variant of HG002 in his parents", "Look up", "Each person at each variant|ERROR",
+                 lambda t: "carries it" in t, None),
+            ]
+            if PHARMCAT_JAR and os.path.exists(PHARMCAT_JAR):
+                flows.append((19, None, "HG002 (son of the Ashkenazi trio)", "Run PharmCAT", "PharmCAT results|ERROR",
+                              lambda t: "CYP2C19" in t, None))
+        else:
+            print("  (the human-genome examples are skipped: set MMG_HUMAN_DEMO to the demo data zip)")
+        for n, task, label, button, pattern, good, written in flows:
+            with page(browser) as pg:
+                enter(pg, n)
+                if task:
+                    radio(pg, task)
+                try:
+                    example(pg, label)
+                    submit(pg, button)
+                    t = wait_for(pg, pattern, 300)
+                except Exception as err:
+                    t = f"{err!r} | {text_of(pg)[-300:]}"
+                shot(pg, f"example_screen{n}")
+                ok = t is not None and "ERROR" not in t and good(t) and (written is None or os.path.exists(written))
+                check(f"screen {n}, example '{label}'", ok, (t or text_of(pg))[-400:])
 
         check("no JavaScript error on the page", not js_errors, js_errors[:3])
         browser.close()

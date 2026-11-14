@@ -220,6 +220,135 @@ else:
     except RuntimeError:
         check("no GPU: asking for the GPU raises an error", True)
 
+# ---------------------------------------------------------------- human genetics, research, microbiology (experimental)
+NEW = ["relatedness", "trio_analysis", "runs_of_homozygosity", "genetic_sex", "build_panel", "panel_from_frequencies",
+       "estimate_ancestry", "polygenic_score", "clinvar_findings", "gene_regions", "variant_lookup", "pileup",
+       "pharmcat_prepare", "pharmcat_run", "count_reads", "differential_expression", "crispr_count", "crispr_test",
+       "sketch_references", "gather", "classify_reads", "find_resistance_genes", "genome_distances", "sketch_distances",
+       "tree_from_matrix", "viral_mutations", "in_silico_pcr", "amplicon_asvs", "train_classifier", "classify_asvs",
+       "alpha_diversity", "beta_diversity", "taxa_composition", "tumor_mutational_burden"]
+check("every function of the newer modules is there", all(hasattr(mmg, f) for f in NEW), [f for f in NEW if not hasattr(mmg, f)])
+rng = random.Random(7)
+DNA = lambda n: "".join(rng.choice("ACGT") for _ in range(n))
+COMP = str.maketrans("ACGT", "TGCA")
+revcomp = lambda s: s.translate(COMP)[::-1]
+
+
+def mutate(s, rate):
+    return "".join(rng.choice("ACGT".replace(c, "")) if rng.random() < rate else c for c in s)
+
+
+# A trio on 3,000 SNPs: the child gets one allele from each parent.
+sites = sorted(rng.sample(range(10_000, 40_000_000), 3000))
+genotype = lambda: rng.choice(["0/0", "0/1", "0/1", "1/1"])
+father, mother, stranger = ([genotype() for _ in sites] for _ in range(3))
+child = ["/".join(sorted([rng.choice(f.split("/")), rng.choice(m.split("/"))])) for f, m in zip(father, mother)]
+
+
+def person_vcf(name, gts):
+    return write(f"{name}.vcf", ["##fileformat=VCFv4.2", "##contig=<ID=chr1,length=248956422>",
+                                 '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                                 f"#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{name}"]
+                 + [f"chr1\t{pos}\t.\tA\tG\t50\tPASS\t.\tGT\t{g}" for pos, g in zip(sites, gts)])
+
+
+vc, vf, vm, vs = (person_vcf(n, g) for n, g in (("child", child), ("father", father), ("mother", mother), ("stranger", stranger)))
+tr = mmg.trio_analysis(vc, vf, vm)
+check("trio_analysis: the true father is not excluded, no Mendelian error", tr["verdict"] == "not_excluded" and tr["errors"] == 0, str(tr)[:200])
+check("trio_analysis: a stranger is excluded", mmg.trio_analysis(vc, vs, vm)["verdict"] == "excluded")
+rel = sorted(x["relationship"] for x in mmg.relatedness([vc, vf, vm])["pairs"])
+check("relatedness: two parent-child pairs and the unrelated parents", rel == ["parent_offspring", "parent_offspring", "unrelated"], str(rel))
+check("the human-genome results carry the notice", "no responsibility" in tr.get("notice", ""))
+
+# RNA-seq: 300 genes, 3 + 3 samples, one gene 8x up in the treated.
+names = [f"ctrl_{i}" for i in (1, 2, 3)] + [f"trt_{i}" for i in (1, 2, 3)]
+rows = []
+for g in range(300):
+    mean = rng.uniform(50, 2000)
+    rows.append(f"gene{g}\t" + "\t".join(str(max(0, int(rng.gauss(mean * (8 if g == 7 and s.startswith("trt") else 1), mean ** 0.5 * 2))))
+                                          for s in names))
+counts = write("rna_counts.tsv", ["gene\t" + "\t".join(names)] + rows)
+design = write("rna_samples.tsv", ["sample\tcondition"] + [f"{s}\t{s.split('_')[0]}" for s in names])
+de = mmg.differential_expression(counts, design, "condition", "ctrl")
+pl_ = de["plot"]
+up = [g for g, l, q in zip(pl_["gene"], pl_["log2_fold_change"], pl_["padj"]) if l is not None and q is not None and l > 2 and q < 0.01]
+check("differential_expression: the planted gene is up, ~8x", up == ["gene7"], str(up))
+
+# CRISPR screen: 40 genes x 4 guides; the guides of ESS1 drop out.
+crows = []
+for g in ["ESS1"] + [f"G{i}" for i in range(39)]:
+    for k in range(4):
+        before = [rng.randint(300, 700) for _ in range(2)]
+        after = [max(1, b // 20) if g == "ESS1" else rng.randint(300, 700) for b in before]
+        crows.append(f"{g}_{k}\t{g}\t" + "\t".join(map(str, before + after)))
+ct = write("crispr_counts.txt", ["sgRNA\tGene\tc1\tc2\tt1\tt2"] + crows)
+cr = mmg.crispr_test(ct, ["t1", "t2"], control=["c1", "c2"])
+check("crispr_test: the depleted gene ranks first in negative selection", cr["rank_plot"]["neg"]["gene"][0] == "ESS1", str(cr["rank_plot"]["neg"]["gene"][:3]))
+
+# Microbiology: two genomes and a close relative of the first.
+gA, gB = DNA(60_000), DNA(60_000)
+gA2 = mutate(gA, 0.01)
+fa = {n: write(f"{n}.fa", [f">{n}", s]) for n, s in (("A", gA), ("A2", gA2), ("B", gB))}
+db = p("refs.sig")
+mmg.sketch_references([[fa["A"]], [fa["B"]]], db, names=["A", "B"], scaled=10)
+reads = []
+for i in range(2000):
+    j = rng.randrange(0, len(gA) - 150)
+    reads += [f"@r{i}", gA[j:j + 150], "+", "I" * 150]
+ga = mmg.gather([write("sample.fastq", reads)], [db], threshold_bp=5000)
+check("gather: the reads come from genome A", [m["name"] for m in ga["matches"]][:1] == ["A"], str([m["name"] for m in ga["matches"]]))
+gd = mmg.genome_distances([fa["A"], fa["A2"], fa["B"]], names=["A", "A2", "B"], tree_output=p("tree.nwk"))
+d = gd["distance"]
+check("genome_distances: A is nearest A2, and the tree is written", d[0][1] < d[0][2] and gd["ani"][0][1] > 0.98 and os.path.exists(p("tree.nwk")), str(d))
+
+# A virus: one substitution in the second codon of a gene (GCT -> TCT, A2S).
+ref = list(DNA(3000))
+ref[100:106] = list("ATGGCT")
+ref = "".join(ref)
+virus = ref[:103] + "T" + ref[104:]
+vr = write("virus_ref.fa", [">ref1", ref])
+vg = write("virus_sample.fa", [">sample1", virus])
+vgff = write("virus_ref.gff3", ["##gff-version 3", "ref1\t.\tCDS\t101\t1000\t.\t+\t0\tID=cds1;gene=G1"])
+vm_ = mmg.viral_mutations(vr, [vg], annotation=vgff)
+g0 = vm_["genomes"][0]
+check("viral_mutations: the substitution and its amino-acid change", [s["label"] for s in g0["substitutions"]] == ["G104T"] and
+      [a["label"] for a in g0["aa_substitutions"]] == ["G1:A2S"], str(g0)[:300])
+
+# In-silico PCR: a primer pair that gives a 300-base product.
+panel = write("panel.tsv", ["target\tforward\treverse\tsize", f"T1\t{ref[200:220]}\t{revcomp(ref[480:500])}\t250-350"])
+pc = mmg.in_silico_pcr(panel, [vr])
+check("in_silico_pcr: one product of 300 bases", [a["size"] for a in pc["amplicons"]] == [300] and pc["rows"][0]["present"] == [True], str(pc["amplicons"])[:200])
+
+# 16S: a classifier trained on three genera; diversity of a small table.
+lineage = {"Lactobacillus": "Bacteria;Firmicutes;Bacilli;Lactobacillales;Lactobacillaceae;Lactobacillus;",
+           "Bacteroides": "Bacteria;Bacteroidetes;Bacteroidia;Bacteroidales;Bacteroidaceae;Bacteroides;",
+           "Escherichia": "Bacteria;Proteobacteria;Gammaproteobacteria;Enterobacterales;Enterobacteriaceae;Escherichia;"}
+template = {g: DNA(450) for g in lineage}
+ref16 = write("ref16s.fa", [x for g in lineage for i in range(6) for x in (f">{lineage[g]}", mutate(template[g], 0.02))])
+model = p("c.model")
+mmg.train_classifier(ref16, model)
+asv = write("asv.fa", [">ASV_1", mutate(template["Bacteroides"], 0.02)])
+cl = mmg.classify_asvs(asv, model, p("taxonomy.tsv"))
+check("classify_asvs: the right genus", cl["assignments"][0]["lineage"][-1:] == ["Bacteroides"], str(cl["assignments"][0])[:200])
+tab = write("table.tsv", ["ASV\tS1\tS2\tS3\tS4", "ASV_1\t100\t90\t5\t0", "ASV_2\t0\t10\t80\t100", "ASV_3\t50\t50\t50\t50"])
+meta = write("meta.tsv", ["sample\tgroup", "S1\tx", "S2\tx", "S3\ty", "S4\ty"])
+al = mmg.alpha_diversity(tab)
+check("alpha_diversity: observed ASVs per sample", [r["observed"] for r in al["rows"]] == [2, 3, 3, 2], str([r["observed"] for r in al["rows"]]))
+be = mmg.beta_diversity(tab, metadata=meta, permutations=99)
+check("beta_diversity: Bray-Curtis S1-S4 and PERMANOVA groups", abs(be["distances"][0][3] - (1 - 2 * 50 / 300)) < 1e-9 and be["permanova"]["groups"] == ["x", "y"],
+      str(be["distances"][0]))
+
+# Tumor mutational burden: 40 somatic SNVs in a 1-Mb region.
+tvcf = write("tumor.vcf", ["##fileformat=VCFv4.2", "##contig=<ID=chr1,length=248956422>",
+                           '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+                           '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">',
+                           '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">',
+                           "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR"]
+             + [f"chr1\t{1_000_001 + 20_000 * i}\t.\tC\tT\t60\tPASS\t.\tGT:AD:DP\t0/1:20,10:30" for i in range(40)])
+tbed = write("panel.bed", ["chr1\t1000000\t2000000"])
+tm = mmg.tumor_mutational_burden(tvcf, tbed)
+check("tumor_mutational_burden: 40 per Mb", tm["counted"] == 40 and abs(tm["tmb"] - 40.0) < 1e-9, str(tm)[:200])
+
 print()
 print(f"{done - len(failures)} of {done} checks passed")
 if failures:

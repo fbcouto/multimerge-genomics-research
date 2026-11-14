@@ -10,11 +10,10 @@ def imports():
     import marimo as mo
     import polars as pl
     import numpy as np
-    import glob
     import os
     import asyncio
     import multimerge_genomics as mmg
-    return asyncio, glob, mmg, mo, np, os, pl
+    return asyncio, mmg, mo, np, os, pl
 
 
 @app.cell
@@ -33,11 +32,13 @@ def global_state(mo):
 
 @app.cell
 def file_helpers(mmg, mo, os):
-    # Shared by screens 9-14: the files of the folder each screen offers, the
-    # default output names, a look at the first records of a result, and the
-    # Python call that does the same thing (shown under every result, so each
-    # screen is also a recipe for a script).
+    # Shared by the screens: the files of the folder each screen offers (and
+    # those of the examples folder), the default output names, a look at the
+    # first records of a result, and the Python call that does the same thing
+    # (shown under every result of screens 9-14, so each screen is also a
+    # recipe for a script).
     NO_FILE = "(no matching file in this folder)"
+    EXAMPLES_DIR = "mmgen_examples"
     FILE_KINDS = {
         "vcf": (".vcf", ".vcf.gz", ".vcf.bgz", ".vcf.lz4", ".vcf.parquet"),
         "bed": (".bed", ".bed.gz", ".bed.bgz", ".bed.lz4", ".bed.parquet"),
@@ -50,14 +51,61 @@ def file_helpers(mmg, mo, os):
         "mapping": (".txt", ".tsv", ".map"),
         "indexed": (".vcf.gz", ".vcf.bgz", ".bed.gz", ".bed.bgz", ".gff.gz", ".gff3.gz", ".gtf.gz", ".bam"),
         "parquet": (".parquet",),
+        # Screens 1-8.
+        "kmer_input": (".fa", ".fa.gz", ".fasta", ".fasta.gz", ".fna", ".fna.gz", ".fq", ".fq.gz", ".fastq", ".fastq.gz"),
+        "plain_fasta": (".fa", ".fasta", ".fna"),
+        "arrow": (".arrow",),
+        "kmer_text": (".txt",),
+        "vcf_merge": (".vcf", ".vcf.gz"),
+        # Human-genome screens.
+        "bed_any": (".bed", ".bed.gz"),
+        "jar": (".jar",),
+        "table": (".tsv", ".tsv.gz", ".txt", ".txt.gz", ".csv", ".csv.gz"),
+        "sig": (".sig",),
+        # Research screens.
+        "sheet": (".tsv", ".txt", ".files", ".csv"),
+        "model": (".model",),
     }
+    SKIP_DIRS = {"target", ".git", ".venv", "venv", "node_modules", "__pycache__", "__marimo__", "dist", "dist_colab", "dist_windows", "dist_windows_cuda"}
+
+    def files_under(folder, *kinds, depth=4, limit=4000):
+        """The files under `folder` (and its subfolders, a few levels deep) with
+        an extension of `kinds`, then those of the examples folder."""
+        ends = tuple(s for k in kinds for s in FILE_KINDS[k])
+        found = []
+        root = (folder or ".").strip().rstrip("/\\") or "."
+
+        def walk(path, level):
+            try:
+                entries = sorted(os.scandir(path), key=lambda e: e.name.lower())
+            except OSError:
+                return
+            for e in entries:
+                if len(found) >= limit:
+                    return
+                if e.is_dir(follow_symlinks=False):
+                    if level < depth and e.name not in SKIP_DIRS and not e.name.startswith(("_backup", ".")):
+                        walk(e.path, level + 1)
+                elif e.name.lower().endswith(ends):
+                    rel = e.path if root != "." else os.path.relpath(e.path, ".")
+                    found.append(rel.replace("\\", "/"))
+
+        if os.path.isdir(root):
+            walk(root, 0)
+        if os.path.isdir(EXAMPLES_DIR) and not os.path.abspath(EXAMPLES_DIR).startswith(os.path.abspath(root) + os.sep):
+            walk(EXAMPLES_DIR, 0)
+        return found or [NO_FILE]
     COMPRESSIONS = (".gz", ".bgz", ".lz4", ".parquet")
     FORMAT_EXTENSIONS = ("vcf", "bed", "gff", "gff3", "gtf", "sam", "bam", "fa", "fasta", "fna", "fq", "fastq", "tsv", "txt")
 
     def files_with(*kinds):
-        """The files of the current folder with an extension of `kinds`."""
+        """The files of the current folder with an extension of `kinds`, then
+        those of the examples folder (as 'mmgen_examples/name')."""
         ends = tuple(s for k in kinds for s in FILE_KINDS[k])
         found = sorted(n for n in os.listdir(".") if n.lower().endswith(ends) and os.path.isfile(n))
+        if os.path.isdir(EXAMPLES_DIR):
+            found += sorted(f"{EXAMPLES_DIR}/{n}" for n in os.listdir(EXAMPLES_DIR)
+                            if n.lower().endswith(ends) and os.path.isfile(os.path.join(EXAMPLES_DIR, n)))
         return found or [NO_FILE]
 
     def real_files(*kinds):
@@ -79,13 +127,18 @@ def file_helpers(mmg, mo, os):
             return stem, "." + fmt + ext
         return base, ext
 
+    def beside(source, name):
+        """`name` in the folder of `source` (a result goes next to its input)."""
+        folder = os.path.dirname(source)
+        return f"{folder}/{name}" if folder else name
+
     def output_name(typed, source, tag, ext=None):
         """The name typed in the form, or <source>.<tag><extension> when it was left blank."""
         typed = (typed or "").strip()
         if typed:
             return typed
         stem, source_ext = split_name(source)
-        return f"{stem}.{tag}{source_ext if ext is None else ext}"
+        return beside(source, f"{stem}.{tag}{source_ext if ext is None else ext}")
 
     def clashes(output, inputs):
         """The output would overwrite one of the inputs."""
@@ -132,6 +185,43 @@ def file_helpers(mmg, mo, os):
         return mo.callout(mo.md(head + why + "\n\nScreen **10** (Validate a file) gives the full report."),
                           kind="warn" if kept else "danger")
 
+    # Example gene panels, for teaching (the same lists as the demo data's
+    # panels.json). Clinical panels are curated by each laboratory.
+    GENE_PANELS = {
+        "Hereditary breast and ovarian cancer": ["BRCA1", "BRCA2", "PALB2", "TP53", "PTEN", "CDH1", "STK11", "ATM", "CHEK2", "BARD1", "BRIP1", "RAD51C", "RAD51D"],
+        "Lynch syndrome (hereditary colorectal cancer)": ["MLH1", "MSH2", "MSH6", "PMS2", "EPCAM"],
+        "Familial hypercholesterolemia": ["LDLR", "APOB", "PCSK9", "LDLRAP1"],
+        "Cardiomyopathy": ["MYH7", "MYBPC3", "TNNT2", "TNNI3", "TPM1", "ACTC1", "MYL2", "MYL3", "LMNA", "TTN", "PLN", "DSP", "PKP2"],
+        "Inherited arrhythmia": ["KCNQ1", "KCNH2", "SCN5A", "RYR2", "CASQ2"],
+        "Bleeding and clotting": ["F2", "F5", "F8", "F9", "F11", "VWF"],
+        "Carrier screening (common recessive conditions)": ["CFTR", "HBB", "HBA1", "HBA2", "HEXA", "GBA1", "ASPA", "FANCC", "BLM", "PAH", "SERPINA1", "GJB2", "MEFV"],
+        "Pharmacogenes": ["CYP2C19", "CYP2C9", "CYP2D6", "CYP3A5", "CYP4F2", "DPYD", "TPMT", "NUDT15", "SLCO1B1", "UGT1A1", "VKORC1", "IFNL3", "NAT2", "CYP2B6", "RYR1", "CACNA1S"],
+    }
+
+    def bed_next_to(vcf):
+        """The callable-regions BED of a VCF: x.callable.bed next to x.vcf.gz,
+        or the Genome in a Bottle *_benchmark*.bed of the same name."""
+        folder, stem = os.path.dirname(vcf) or ".", split_name(vcf)[0]
+        cands = [os.path.join(folder, stem + ".callable.bed")]
+        if "_benchmark" in stem:
+            prefix = stem.split("_benchmark")[0] + "_benchmark"
+            cands += [os.path.join(folder, prefix + "_noinconsistent.bed"), os.path.join(folder, prefix + ".bed")]
+        return next((c.replace("\\", "/") for c in cands if os.path.exists(c)), None)
+
+    def words(text):
+        """'BRCA1, BRCA2; TP53' -> ['BRCA1', 'BRCA2', 'TP53']."""
+        return [w for w in (text or "").replace(",", " ").replace(";", " ").split() if w]
+
+    def human_notice():
+        """The notice on every screen that reads a person's genome."""
+        return mo.callout(mo.md(
+            "**⚠️ Experimental software, for teaching and research only.** These results are not a medical diagnosis, "
+            "not a paternity test with legal value and not advice on any treatment or medicine. The authors and "
+            "contributors take no responsibility for decisions made on the basis of them. A finding must be confirmed "
+            "by an accredited laboratory and interpreted by a qualified professional (a physician or a genetic "
+            "counselor). Analyze only the genomes of people who have agreed to it: genetic data are sensitive "
+            "personal data, about the person and about their relatives."), kind="danger")
+
     def make_form(widgets, submit):
         """A form with one field per line and plain labels (no JSON tree)."""
         template = "\n\n".join("{" + key + "}" for key in widgets)
@@ -170,6 +260,87 @@ def file_helpers(mmg, mo, os):
         if not rows:
             return mo.md(f"*`{name}` has no records.*")
         return mo.vstack([mo.md(f"**The first {len(rows)} line(s) of `{name}`:**"), mo.plain_text("\n".join(rows))])
+
+    def scatter_chart(points, x_label, y_label, title, labels=(), hlines=(), vlines=(), max_background=4000):
+        """A scatter plot as SVG: `points` are (x, y, kind, tip) with kind "up",
+        "down" or "ns" (not significant, drawn grey underneath; sampled when
+        there are many). `labels`: (x, y, text) written next to their point.
+        Colours of the FASTQ report (validated); text in currentColor."""
+        import math
+        pts = [p for p in points if p[0] is not None and p[1] is not None and math.isfinite(p[0]) and math.isfinite(p[1])]
+        if not pts:
+            return None
+        ns = [p for p in pts if p[2] == "ns"]
+        if len(ns) > max_background:
+            step = len(ns) / max_background
+            ns = [ns[int(i * step)] for i in range(max_background)]
+        shown = ns + [p for p in pts if p[2] != "ns"]
+        xs, ys = [p[0] for p in shown], [p[1] for p in shown]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        if x0 == x1:
+            x0, x1 = x0 - 1, x1 + 1
+        if y0 == y1:
+            y0, y1 = y0 - 1, y1 + 1
+        padx, pady = 0.04 * (x1 - x0), 0.06 * (y1 - y0)
+        x0, x1, y0, y1 = x0 - padx, x1 + padx, y0 - pady, y1 + pady
+        W, H, L, R, T, B = 640, 380, 58, 16, 16, 44
+        pw, ph = W - L - R, H - T - B
+        X = lambda v: L + (v - x0) / (x1 - x0) * pw
+        Y = lambda v: T + ph - (v - y0) / (y1 - y0) * ph
+
+        def ticks(a, b):
+            raw = (b - a) / 6
+            mag = 10 ** math.floor(math.log10(raw))
+            step = next(m * mag for m in (1, 2, 5, 10) if m * mag >= raw)
+            first = math.ceil(a / step) * step
+            return [first + i * step for i in range(int((b - first) / step) + 1)]
+
+        parts = []
+        for v in ticks(y0, y1):
+            parts.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="currentColor" stroke-opacity="0.12"/>')
+            parts.append(f'<text x="{L - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" fill="currentColor" fill-opacity="0.7">{v:g}</text>')
+        for v in ticks(x0, x1):
+            parts.append(f'<text x="{X(v):.1f}" y="{T + ph + 16}" text-anchor="middle" fill="currentColor" fill-opacity="0.7">{v:g}</text>')
+        for v in hlines:
+            if y0 < v < y1:
+                parts.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3"/>')
+        for v in vlines:
+            if x0 < v < x1:
+                parts.append(f'<line y1="{T}" y2="{T + ph}" x1="{X(v):.1f}" x2="{X(v):.1f}" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3"/>')
+        colour = {"up": "#eb6834", "down": "#2a78d6", "ns": "#898781"}
+        for x, y, kind, tip in ns:
+            parts.append(f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="2" fill="{colour["ns"]}" fill-opacity="0.35"/>')
+        for i, (x, y, kind, tip) in enumerate(p for p in shown if p[2] != "ns"):
+            t = f"<title>{tip}</title>" if tip and i < 1500 else ""
+            parts.append(f'<circle cx="{X(x):.1f}" cy="{Y(y):.1f}" r="3" fill="{colour[kind]}" fill-opacity="0.85">{t}</circle>')
+        placed = []  # label boxes already drawn: a label that would overlap one moves down, or is left out
+        for x, y, text in labels:
+            if not (x0 < x < x1 and y0 < y < y1):
+                continue
+            anchor = "end" if X(x) > L + 0.75 * pw else "start"
+            dx = -6 if anchor == "end" else 6
+            width = 7.2 * len(str(text))
+            left = X(x) + dx - (width if anchor == "end" else 0)
+            for shift in (0, 13, 26, -13):
+                top = Y(y) - 4 - 11 + shift
+                box = (left, top, left + width, top + 13)
+                if all(box[2] < b[0] or box[0] > b[2] or box[3] < b[1] or box[1] > b[3] for b in placed):
+                    placed.append(box)
+                    parts.append(f'<text x="{X(x) + dx:.1f}" y="{Y(y) - 4 + shift:.1f}" text-anchor="{anchor}" fill="currentColor" font-weight="600">{text}</text>')
+                    break
+        parts.append(f'<text x="{L + pw / 2:.1f}" y="{H - 6}" text-anchor="middle" fill="currentColor" fill-opacity="0.8">{x_label}</text>')
+        parts.append(f'<text transform="translate(14,{T + ph / 2:.1f}) rotate(-90)" text-anchor="middle" fill="currentColor" fill-opacity="0.8">{y_label}</text>')
+        n_up = sum(1 for p in pts if p[2] == "up")
+        n_down = sum(1 for p in pts if p[2] == "down")
+        n_ns = sum(1 for p in pts if p[2] == "ns")
+        legend = (f'<div style="font: 12px system-ui, sans-serif; display: flex; gap: 16px; margin: 4px 0;">'
+                  f'<span><span style="color:{colour["up"]}">●</span> up ({n_up:,})</span>'
+                  f'<span><span style="color:{colour["down"]}">●</span> down ({n_down:,})</span>'
+                  f'<span><span style="color:{colour["ns"]}">●</span> not significant ({n_ns:,}'
+                  + (f", {len(ns):,} drawn" if len(ns) < n_ns else "") + ")</span></div>")
+        svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width: {W}px; font: 12px system-ui, sans-serif;" role="img" '
+               f'aria-label="{title}">' + "".join(parts) + "</svg>")
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(legend + svg)])
 
     def spectrum_chart(histogram):
         """Bars of the abundance spectrum: how many distinct k-mers were seen once,
@@ -244,24 +415,1116 @@ def file_helpers(mmg, mo, os):
             items.append(mo.md(f"*{beyond:,} distinct k-mer(s) seen more than {x_max:,} times are left out of the chart; the table below has them.*"))
         return mo.vstack(items)
 
+    def tree_chart(tree, title, unit="Mash distance"):
+        """A rectangular tree as SVG, from the layout the engine gives: x is
+        the distance from the root, the leaves one per row in `leaf_order`,
+        an inner node halfway between its children. Branches in currentColor
+        (both themes), leaves as blue dots, a scale bar below."""
+        import html as _html
+        import math
+        nodes = tree.get("nodes") or []
+        leaves = list(tree.get("leaf_order") or [])
+        if not nodes or not leaves:
+            return None
+        row = {n: i for i, n in enumerate(leaves)}
+        ys = {}
+
+        def y_of(i):
+            stack = [i]
+            while stack:  # without recursion: a tree of thousands of leaves is deep
+                u = stack[-1]
+                kids = nodes[u]["children"]
+                if u in ys:
+                    stack.pop()
+                elif not kids:
+                    ys[u] = row.get(u, 0)
+                    stack.pop()
+                elif all(k in ys for k in kids):
+                    ys[u] = sum(ys[k] for k in kids) / len(kids)
+                    stack.pop()
+                else:
+                    stack.extend(k for k in kids if k not in ys)
+            return ys[i]
+
+        depth = max(n["x"] for n in nodes) or 1.0
+        longest = max(len(nodes[i]["name"]) for i in leaves)
+        W, L, T, rowh = 760, 16, 14, 22
+        R = min(330, 7 * longest + 20)
+        H = T + rowh * len(leaves) + 46
+        pw = W - L - R
+        X = lambda v: L + v / depth * pw
+        Y = lambda r: T + rowh * r + rowh / 2
+        parts = []
+        for i, n in enumerate(nodes):
+            if n["parent"] is not None:
+                px = nodes[n["parent"]]["x"]
+                parts.append(f'<line x1="{X(px):.1f}" x2="{X(n["x"]):.1f}" y1="{Y(y_of(i)):.1f}" y2="{Y(y_of(i)):.1f}" '
+                             f'stroke="currentColor" stroke-opacity="0.8" stroke-width="2"><title>branch {n["branch_length"]:.5g}</title></line>')
+            if n["children"]:
+                cy = [y_of(c) for c in n["children"]]
+                parts.append(f'<line x1="{X(n["x"]):.1f}" x2="{X(n["x"]):.1f}" y1="{Y(min(cy)):.1f}" y2="{Y(max(cy)):.1f}" '
+                             f'stroke="currentColor" stroke-opacity="0.8" stroke-width="2"/>')
+        for i in leaves:
+            n = nodes[i]
+            name = _html.escape(n["name"])
+            parts.append(f'<circle cx="{X(n["x"]):.1f}" cy="{Y(y_of(i)):.1f}" r="4" fill="#2a78d6"><title>{name}: {n["x"]:.5g} from the root</title></circle>')
+            parts.append(f'<text x="{X(n["x"]) + 8:.1f}" y="{Y(y_of(i)) + 4:.1f}" fill="currentColor">{name}</text>')
+        raw = depth / 4
+        mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1
+        bar = next(m * mag for m in (1, 2, 5, 10) if m * mag >= raw)
+        yb = H - 22
+        parts.append(f'<line x1="{L}" x2="{X(bar):.1f}" y1="{yb}" y2="{yb}" stroke="currentColor" stroke-width="2"/>')
+        parts.append(f'<text x="{X(bar) + 6:.1f}" y="{yb + 4}" fill="currentColor" fill-opacity="0.8">{bar:g} ({unit})</text>')
+        svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width: {W}px; font: 12px system-ui, sans-serif;" role="img" '
+               f'aria-label="{_html.escape(title)}">' + "".join(parts) + "</svg>")
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(svg)])
+
     return (
+        EXAMPLES_DIR,
+        GENE_PANELS,
+        NO_FILE,
+        bed_next_to,
+        beside,
+        words,
         chosen,
         clashes,
         code_panel,
         error_panel,
         facts,
+        files_under,
         files_with,
+        human_notice,
         make_form,
         output_name,
         preview_panel,
         python_call,
         real_files,
+        scatter_chart,
         size_of,
         skipped_panel,
         spectrum_chart,
         split_name,
+        tree_chart,
         warn,
     )
+
+
+@app.cell
+def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
+    # The examples of every screen. The files are small, written on demand into
+    # mmgen_examples/ by make_examples (the same bytes every time: nothing is
+    # downloaded), and each example is the set of values that fills in the form
+    # of a screen and task.
+    NO_EXAMPLE = "(none: fill in the form yourself)"
+    EXAMPLES_VERSION = "5"
+    HUMAN_DIR = EXAMPLES_DIR + "/human"
+    RESEARCH_DIR = EXAMPLES_DIR + "/research"
+    # The demo packs: (folder, version, zip name, URL where it is published —
+    # None until it is, e.g. as a GitHub Release asset).
+    DEMO_PACKS = {
+        "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", None,
+                  "48 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
+        "research": (RESEARCH_DIR, "3", "mmgen_demo_research_v3.zip", None,
+                     "public data: the airway RNA-seq experiment, the MAGeCK demos, reference sketches, mock-community "
+                     "reads, the AMRFinderPlus catalog, four isolates, 20 SARS-CoV-2 lineages and a PCR panel"),
+    }
+    EXAMPLE_FILES = (
+        "toy_genome.fa", "toy_genome.fa.fai", "cohort.vcf", "cohort.vcf.gz", "sample_a.vcf", "sample_b.vcf.gz",
+        "sample_c.vcf", "indels.vcf", "with_problems.vcf", "five_columns.vcf", "ensembl_names.vcf",
+        "patient_grch38.vcf", "cohort_grch37.vcf", "grch38_ensembl.sizes", "genes.bed", "peaks.bed",
+        "annotation.gff3", "alignments.sam", "alignments.sorted.bam", "pileup_demo.bam", "roh_demo.vcf", "reads_R1.fastq.gz", "reads_R2.fastq.gz",
+        "rnaseq_ctrl_1.bam", "rnaseq_treat_2.bam", "rnaseq_samples.tsv", "rnaseq_counts.tsv",
+        "toy_bacterium.fasta", "toy_patient.fasta", "toy_bacterium_reads.fastq.gz", "toy_bacterium_K31.arrow",
+        "toy_patient_K31.arrow", "toy_bacterium_reads_K31.arrow", "kmers_gc_rich.txt", "kmers_at_rich.txt",
+        "plasmid_contigs.fasta", "chromosome_contigs.fasta", "README.md",
+    )
+
+    def make_examples():
+        """Writes the example files into mmgen_examples/, unless they are all
+        there already, from this version of the examples. Returns True when it
+        wrote them."""
+        import gzip
+        import random
+
+        folder = EXAMPLES_DIR
+        stamp = os.path.join(folder, "VERSION")
+        try:
+            with open(stamp, encoding="utf-8") as fh:
+                if fh.read().strip() == EXAMPLES_VERSION and all(os.path.exists(os.path.join(folder, n)) for n in EXAMPLE_FILES):
+                    return False
+        except OSError:
+            pass
+        os.makedirs(folder, exist_ok=True)
+        rng = random.Random(2026)
+
+        def path(name):
+            return os.path.join(folder, name)
+
+        def write(name, text):
+            if name.endswith(".gz"):  # mtime=0: the same bytes on every run
+                with open(path(name), "wb") as fh:
+                    fh.write(gzip.compress(text.encode("utf-8"), mtime=0))
+            else:
+                with open(path(name), "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+
+        def dna(n, gc=0.5):
+            return "".join(rng.choices("ACGT", weights=[1 - gc, gc, gc, 1 - gc], k=n))
+
+        def revcomp(s):
+            return s.translate(str.maketrans("ACGTN", "TGCAN"))[::-1]
+
+        def other(base):
+            return rng.choice([b for b in "ACGT" if b != base])
+
+        def fasta_text(records):
+            return "".join(f">{name}\n" + "".join(seq[i:i + 60] + "\n" for i in range(0, len(seq), 60)) for name, seq in records)
+
+        # A small genome with three chromosomes (chr10 shows lexical against
+        # natural order) and three repeats where an indel can slide.
+        genome = {"chr1": dna(50_000), "chr2": dna(30_000), "chr10": dna(20_000)}
+
+        def plant(chrom, pos, motif):  # pos is 1-based
+            s = genome[chrom]
+            genome[chrom] = s[:pos - 1] + motif + s[pos - 1 + len(motif):]
+
+        def ref_at(chrom, pos, n=1):
+            return genome[chrom][pos - 1:pos - 1 + n]
+
+        plant("chr1", 20_000, "GTTTTTTC")
+        plant("chr1", 30_000, "G" + "CA" * 6 + "T")
+        plant("chr2", 12_000, "C" + "AG" * 4 + "T")
+        write("toy_genome.fa", fasta_text(genome.items()))
+        fai, offset = [], 0
+        for name, seq in genome.items():
+            offset += len(name) + 2
+            fai.append(f"{name}\t{len(seq)}\t{offset}\t60\t61\n")
+            offset += len(seq) + (len(seq) + 59) // 60
+        write("toy_genome.fa.fai", "".join(fai))
+
+        # Variants on that genome: REF is always the genome's base.
+        contigs = "".join(f"##contig=<ID={c},length={len(s)}>\n" for c, s in genome.items())
+        head = ("##fileformat=VCFv4.2\n##source=MMGEN examples\n##reference=toy_genome.fa\n" + contigs
+                + '##INFO=<ID=DP,Number=1,Type=Integer,Description="Read depth">\n'
+                + '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">\n'
+                + '##FILTER=<ID=q10,Description="Quality below 10">\n'
+                + '##FILTER=<ID=LowDP,Description="Depth below 8">\n'
+                + '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+                + '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">\n')
+        columns_line = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
+
+        def site(chrom, pos):
+            ref = ref_at(chrom, pos)
+            kind = rng.choices(["snp", "del", "ins", "multi"], weights=[78, 8, 8, 6])[0]
+            if kind == "snp":
+                return ref, other(ref)
+            if kind == "multi":
+                return ref, ",".join(rng.sample([b for b in "ACGT" if b != ref], 2))
+            if kind == "del":
+                return ref_at(chrom, pos, rng.randint(2, 6)), ref
+            return ref, ref + dna(rng.randint(1, 5))
+
+        def columns(chrom, pos):
+            ref, alt = site(chrom, pos)
+            n_alt = alt.count(",") + 1
+            qual = "." if rng.random() < 0.03 else f"{rng.uniform(3, 99):.1f}"
+            dp = rng.randint(3, 80)
+            flt = "q10" if qual != "." and float(qual) < 10 else "LowDP" if dp < 8 else "PASS"
+            af = ",".join(f"{rng.uniform(0.001, 0.05) if rng.random() < 0.25 else rng.uniform(0.05, 0.95):.3f}" for _ in range(n_alt))
+            return [chrom, str(pos), ".", ref, alt, qual, flt, f"DP={dp};AF={af}"], n_alt, dp
+
+        def positions(n):
+            spots, names = set(), list(genome)
+            while len(spots) < n:
+                chrom = rng.choices(names, weights=[len(genome[c]) for c in names])[0]
+                spots.add((chrom, rng.randint(100, len(genome[chrom]) - 100)))
+            return sorted(spots, key=lambda cp: (names.index(cp[0]), cp[1]))
+
+        def gt(alleles):
+            return "/".join(str(a) for a in sorted(alleles))
+
+        trio = []
+        for chrom, pos in positions(500):
+            cols, n_alt, dp = columns(chrom, pos)
+            pool = [0, 0, 1] if n_alt == 1 else [0, 1, 2]
+            mother = [rng.choice(pool), rng.choice(pool)]
+            father = [rng.choice(pool), rng.choice(pool)]
+            child = [rng.choice(mother), rng.choice(father)]
+            trio.append("\t".join(cols + ["GT:DP"] + [f"{gt(g)}:{rng.randint(2, dp)}" for g in (mother, father, child)]))
+        write("cohort.vcf", head + columns_line + "\tFORMAT\tmother\tfather\tchild\n" + "\n".join(trio) + "\n")
+        mmg.convert_file(path("cohort.vcf"), path("cohort.vcf.gz"))  # sorted, BGZF: ready for an index
+
+        for name, n in (("sample_a.vcf", 250), ("sample_b.vcf.gz", 200), ("sample_c.vcf", 150)):
+            lines = []
+            for chrom, pos in positions(n):
+                cols, n_alt, _ = columns(chrom, pos)
+                lines.append("\t".join(cols + ["GT", rng.choice(["0/1", "0/1", "1/1"] if n_alt == 1 else ["1/2", "0/1", "0/2"])]))
+            rng.shuffle(lines)
+            write(name, head + columns_line + "\tFORMAT\t" + name.split(".")[0] + "\n" + "\n".join(lines) + "\n")
+
+        # Indels that are not left-aligned, a variant to trim and one to split.
+        b = ref_at("chr2", 5_000, 3)
+        indels = [
+            ("chr1", 20_005, "homopolymer_del", ref_at("chr1", 20_005, 2), ref_at("chr1", 20_005)),
+            ("chr1", 25_000, "snp", ref_at("chr1", 25_000), other(ref_at("chr1", 25_000))),
+            ("chr1", 30_010, "repeat_del", ref_at("chr1", 30_010, 3), ref_at("chr1", 30_010)),
+            ("chr2", 5_000, "trim_me", b, b[0] + other(b[1]) + b[2]),
+            ("chr2", 12_008, "repeat_ins", ref_at("chr2", 12_008), ref_at("chr2", 12_008) + "AG"),
+            ("chr10", 8_000, "multiallelic", ref_at("chr10", 8_000), ",".join(rng.sample([x for x in "ACGT" if x != ref_at("chr10", 8_000)], 2))),
+        ]
+        write("indels.vcf", head + columns_line + "\n" + "".join(f"{c}\t{p}\t{i}\t{r}\t{a}\t50\tPASS\tDP=30\n" for c, p, i, r, a in indels))
+
+        def good(chrom, pos):
+            return f"{chrom}\t{pos}\t.\t{ref_at(chrom, pos)}\t{other(ref_at(chrom, pos))}\t50\tPASS\tDP=20"
+
+        problems = [
+            good("chr1", 1_200), good("chr1", 3_400),
+            good("chr1", 900),                                # out of order
+            "2" + good("chr2", 1_500)[4:],                    # `2` among `chr2`
+            "chr2\t2x00\t.\tA\tG\t50\tPASS\tDP=20",           # a position that is not a number
+            "chr2\t3000\t.\tA\tG\t50",                        # six columns
+            good("chr2", 4_000),
+            "chr10\t500\t.\tAXG\tA\t50\tPASS\tDP=20",         # X is not a base
+            good("chr10", 900),
+        ]
+        write("with_problems.vcf", head + columns_line + "\n" + "\n".join(problems) + "\n")
+        write("five_columns.vcf", "##fileformat=VCFv4.0\n#CHROM\tPOS\tID\tQUAL\tGT\n"
+              + "".join(f"chr1\t{p}\t.\t{q}\t{g}\n" for p, q, g in ((100, 10.5, "0/0"), (200, 50.2, "0/1"), (300, 33.0, "1/1"))))
+
+        ensembl = []
+        for chrom, pos in positions(30):
+            cols, _, _ = columns(chrom, pos)
+            ensembl.append("\t".join([chrom[3:]] + cols[1:]))
+        ensembl += [f"MT\t{p}\t.\t{r}\t{a}\t60.0\tPASS\tDP=40" for p, r, a in ((73, "A", "G"), (263, "A", "G"), (16519, "T", "C"))]
+        write("ensembl_names.vcf", head.replace(contigs, "".join(f"##contig=<ID={c[3:]},length={len(s)}>\n" for c, s in genome.items())
+                                                + "##contig=<ID=MT,length=16569>\n") + columns_line + "\n" + "\n".join(ensembl) + "\n")
+
+        # The lengths of the human chromosomes in the two assemblies.
+        human = [str(i) for i in range(1, 23)] + ["X", "Y", "MT"]
+        grch38 = [248956422, 242193529, 198295559, 190214555, 181538259, 170805979, 159345973, 145138636, 138394717,
+                  133797422, 135086622, 133275309, 114364328, 107043718, 101991189, 90338345, 83257441, 80373285,
+                  58617616, 64444167, 46709983, 50818468, 156040895, 57227415, 16569]
+        grch37 = [249250621, 243199373, 198022430, 191154276, 180915260, 171115067, 159138663, 146364022, 141213431,
+                  135534747, 135006516, 133851895, 115169878, 107349540, 102531392, 90354753, 81195210, 78077248,
+                  59128983, 63025520, 48129895, 51304566, 155270560, 59373566, 16569]
+
+        def human_vcf(name, build, names, lengths):
+            recs = []
+            for _ in range(12):
+                i = rng.randrange(3)
+                ref = rng.choice("ACGT")
+                recs.append((i, rng.randrange(10_000, 1_000_000), ref, other(ref)))
+            recs.sort()
+            write(name, f"##fileformat=VCFv4.2\n##reference={build}\n"
+                  + "".join(f"##contig=<ID={n},length={l}>\n" for n, l in zip(names, lengths)) + columns_line + "\n"
+                  + "".join(f"{names[i]}\t{p}\t.\t{r}\t{a}\t60\tPASS\t.\n" for i, p, r, a in recs))
+
+        human_vcf("patient_grch38.vcf", "GRCh38", ["chr" + n if n != "MT" else "chrM" for n in human], grch38)
+        human_vcf("cohort_grch37.vcf", "GRCh37", human, grch37)
+        write("grch38_ensembl.sizes", "".join(f"{n}\t{l}\n" for n, l in zip(human, grch38)))
+
+        # Genes and peaks (BED), and the same genes as a GFF3 annotation.
+        genes = []
+        for chrom, s in genome.items():
+            x = rng.randint(500, 2_000)
+            while x < len(s) - 7_000:
+                length = rng.randint(1_500, 6_000)
+                genes.append((chrom, x, x + length, rng.choice("+-")))
+                x += length + rng.randint(500, 3_000)
+        write("genes.bed", "".join(f"{c}\t{a}\t{e}\tgene{i + 1:02d}\t0\t{st}\n" for i, (c, a, e, st) in enumerate(genes)))
+        peaks = []
+        for _ in range(120):
+            if rng.random() < 0.6:
+                chrom, a, e, _st = rng.choice(genes)
+                start = max(0, rng.randint(a - 300, e))
+            else:
+                chrom = rng.choice(list(genome))
+                start = rng.randint(0, len(genome[chrom]) - 1_000)
+            end = start + rng.randint(100, 600)
+            peaks.append((chrom, start, end))
+            if rng.random() < 0.25:  # a neighbour a few bases away, for merge -d
+                gap = end + rng.randint(10, 150)
+                peaks.append((chrom, gap, gap + rng.randint(100, 400)))
+        peaks = [p for p in peaks if p[2] <= len(genome[p[0]])]
+        rng.shuffle(peaks)
+        write("peaks.bed", "".join(f"{c}\t{a}\t{e}\tpeak{i + 1:03d}\t{rng.randint(10, 1000)}\n" for i, (c, a, e) in enumerate(peaks)))
+        gff = []
+        exons_of = {}
+        for i, (chrom, a, e, st) in enumerate(genes):
+            gid = f"gene{i + 1:02d}"
+            m = a + rng.randint(1, 50)  # the transcript starts a little after the gene
+            gff.append(f"{chrom}\tMMGEN\tgene\t{a + 1}\t{e}\t.\t{st}\t.\tID={gid};Name={gid}")
+            gff.append(f"{chrom}\tMMGEN\tmRNA\t{m + 1}\t{e}\t.\t{st}\t.\tID={gid}.t1;Parent={gid}")
+            n_ex = rng.randint(2, 4)
+            bounds = [m] + sorted(rng.sample(range(m + 100, e - 100), 2 * n_ex - 2)) + [e]
+            for j in range(n_ex):
+                gff.append(f"{chrom}\tMMGEN\texon\t{bounds[2 * j] + 1}\t{bounds[2 * j + 1]}\t.\t{st}\t.\tID={gid}.t1.exon{j + 1};Parent={gid}.t1")
+                exons_of.setdefault(gid, []).append((chrom, bounds[2 * j], bounds[2 * j + 1]))
+        rng.shuffle(gff)
+        write("annotation.gff3", "##gff-version 3\n" + "".join(f"##sequence-region {c} 1 {len(s)}\n" for c, s in genome.items()) + "\n".join(gff) + "\n")
+
+        # Alignments (SAM), out of order, and the same sorted as BAM.
+        sam = ["@HD\tVN:1.6\tSO:unsorted"] + [f"@SQ\tSN:{c}\tLN:{len(s)}" for c, s in genome.items()] + ["@PG\tID:mmgen\tPN:mmgen_examples"]
+        names = list(genome)
+        for i in range(600):
+            chrom = rng.choices(names, weights=[len(genome[c]) for c in names])[0]
+            pos = rng.randint(1, len(genome[chrom]) - 100)
+            seq, cigar = ref_at(chrom, pos, 100), "100M"
+            if rng.random() < 0.1:  # the first 5 bases do not align
+                seq, cigar, pos = dna(5) + seq[5:], "5S95M", pos + 5
+            qual = "".join(chr(33 + q) for q in rng.choices(range(25, 41), k=100))
+            sam.append(f"read{i + 1:04d}\t{rng.choice([0, 16])}\t{chrom}\t{pos}\t60\t{cigar}\t*\t0\t0\t{seq}\t{qual}\tNM:i:0")
+        write("alignments.sam", "\n".join(sam) + "\n")
+        mmg.sort_genomic([path("alignments.sam")], path("alignments.sorted.bam"))
+
+        # Reads piled on chr1:25,000 (the SNP of indels.vcf): about 40% carry
+        # its ALT allele, as a heterozygous variant looks; a few have a base of
+        # low quality there, which the pileup's quality filter leaves out.
+        snp_ref = ref_at("chr1", 25_000)
+        snp_alt = indels[1][4]
+        pile = ["@HD\tVN:1.6\tSO:unsorted"] + [f"@SQ\tSN:{c}\tLN:{len(s)}" for c, s in genome.items()]
+        for i in range(80):
+            start = rng.randint(25_000 - 95, 25_000)
+            seq = list(ref_at("chr1", start, 100))
+            qual = [chr(33 + rng.randint(30, 40)) for _ in range(100)]
+            k = 25_000 - start
+            if rng.random() < 0.4:
+                seq[k] = snp_alt
+            if i % 16 == 0:
+                qual[k] = "#"  # quality 2
+            pile.append(f"pile{i + 1:03d}\t{rng.choice([0, 16])}\tchr1\t{start}\t60\t100M\t*\t0\t0\t{''.join(seq)}\t{''.join(qual)}")
+        write("pileup_demo.sam", "\n".join(pile) + "\n")
+        mmg.sort_genomic([path("pileup_demo.sam")], path("pileup_demo.bam"), index=True)
+        os.remove(path("pileup_demo.sam"))
+        assert snp_ref != snp_alt
+
+        # A child of first cousins (simulated): SNV calls every ~2 kb on two
+        # chromosomes of 60 and 40 Mb, with no heterozygous call in chr1:20-32 Mb
+        # and chr2:5-9 Mb, the stretches inherited twice from one ancestor.
+        roh_lines = []
+        for chrom, length, runs in (("chr1", 60_000_000, [(20_000_000, 32_000_000)]), ("chr2", 40_000_000, [(5_000_000, 9_000_000)])):
+            pos = 5_000
+            while pos < length - 5_000:
+                in_run = any(a <= pos < b for a, b in runs)
+                ref = rng.choice("ACGT")
+                gt = "1/1" if in_run else rng.choices(["0/1", "1/1"], weights=[0.6, 0.4])[0]
+                roh_lines.append(f"{chrom}\t{pos}\t.\t{ref}\t{other(ref)}\t50\tPASS\t.\tGT\t{gt}")
+                pos += rng.randint(1_000, 3_000)
+        write("roh_demo.vcf", "##fileformat=VCFv4.2\n##contig=<ID=chr1,length=60000000>\n##contig=<ID=chr2,length=40000000>\n"
+              + '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+              + columns_line + "\tFORMAT\tchild\n" + "\n".join(roh_lines) + "\n")
+
+        # Paired-end reads with the Illumina adapter in the short fragments, a
+        # quality drop at the 3' end in some reads, and a few N.
+        def quality_strings(length, count, drop):
+            out = []
+            for _ in range(count):
+                tail = rng.randint(10, 30) if drop else 0
+                out.append("".join(chr(33 + max(2, min(41, int((12 if i >= length - tail else 38 - 6 * i / length) + rng.uniform(-4, 3)))))
+                                   for i in range(length)))
+            return out
+
+        good_q, bad_q = quality_strings(100, 60, False), quality_strings(100, 30, True)
+        adapter1, adapter2 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC", "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"
+        r1, r2 = [], []
+        for i in range(3_000):
+            chrom = rng.choice(names)
+            size = rng.randint(50, 99) if rng.random() < 0.35 else rng.randint(100, 300)
+            start = rng.randint(0, len(genome[chrom]) - size)
+            frag = genome[chrom][start:start + size]
+            for mate, seq, adapter in ((r1, frag, adapter1), (r2, revcomp(frag), adapter2)):
+                read = list((seq + adapter + dna(100))[:100])
+                qual = list(rng.choice(bad_q if rng.random() < 0.3 else good_q))
+                if rng.random() < 0.02:
+                    j = rng.randrange(100)
+                    read[j], qual[j] = "N", "#"
+                mate.append(f"@pair{i + 1:05d} {1 if mate is r1 else 2}:N:0:1\n{''.join(read)}\n+\n{''.join(qual)}\n")
+        write("reads_R1.fastq.gz", "".join(r1))
+        write("reads_R2.fastq.gz", "".join(r2))
+
+        # A 30 kb "bacterium", a patient with 3 SNPs, reads at 30x with 0.5% of
+        # errors, and their 31-mers as screen 1 writes them.
+        bacterium = dna(30_000)
+        write("toy_bacterium.fasta", fasta_text([("toy_bacterium", bacterium)]))
+        patient = list(bacterium)
+        for p in (5_000, 15_000, 25_000):
+            patient[p] = {"A": "C", "C": "G", "G": "T", "T": "A"}[patient[p]]
+        write("toy_patient.fasta", fasta_text([("toy_patient", "".join(patient))]))
+        quals150 = quality_strings(150, 60, False)
+        reads = []
+        for i in range(6_000):
+            start = rng.randint(0, len(bacterium) - 150)
+            read = bacterium[start:start + 150]
+            read = list(revcomp(read) if rng.random() < 0.5 else read)
+            for j in range(150):
+                if rng.random() < 0.005:
+                    read[j] = other(read[j])
+            reads.append(f"@read{i + 1:05d}\n{''.join(read)}\n+\n{rng.choice(quals150)}\n")
+        write("toy_bacterium_reads.fastq.gz", "".join(reads))
+        for name in ("toy_bacterium", "toy_patient"):
+            pl.DataFrame({"K-mers": [mmg.read_fasta_batch([path(name + ".fasta")], 31)]}).write_ipc(path(name + "_K31.arrow"))
+        pl.DataFrame({"K-mers": [mmg.read_fastq_batch([path("toy_bacterium_reads.fastq.gz")], 20, 31)]}).write_ipc(path("toy_bacterium_reads_K31.arrow"))
+
+        # Screen 2: 31-mers of two genomes with different GC content.
+        for name, gc in (("kmers_gc_rich.txt", 0.65), ("kmers_at_rich.txt", 0.35)):
+            s = dna(2_030, gc)
+            write(name, "\n".join(s[i:i + 31] for i in range(2_000)) + "\n")
+
+        # Screen 7: a circular plasmid in 4 pieces and a linear chromosome in 5.
+        plasmid = dna(20_000)
+        cuts = [0, 4_800, 9_900, 15_200, 20_000]
+        pieces = [plasmid[cuts[i]:cuts[i + 1]] + (plasmid + plasmid)[cuts[i + 1]:cuts[i + 1] + 54] for i in range(4)]
+        rng.shuffle(pieces)
+        write("plasmid_contigs.fasta", fasta_text((f"contig_{i + 1}", s) for i, s in enumerate(pieces)))
+        linear = dna(24_000)
+        cuts = [0, 5_000, 10_400, 15_100, 19_800, 24_000]
+        pieces = [linear[cuts[i]:cuts[i + 1] + 30] for i in range(5)]
+        rng.shuffle(pieces)
+        write("chromosome_contigs.fasta", fasta_text((f"contig_{i + 1}", s) for i, s in enumerate(pieces)))
+
+        # RNA-seq: four samples (two control, two treated) of reads from the
+        # exons of the toy genome's genes, with three genes planted as changed
+        # (8x up, 3x up, 8x down); counts with a little extra-Poisson spread.
+        # A random generator of its own, so the files above do not change.
+        rng2 = random.Random(7)
+        rna_genes = sorted(exons_of)
+        base_expr = {g: rng2.randint(60, 400) for g in rna_genes}
+        changed = {rna_genes[2]: 8.0, rna_genes[6]: 3.0, rna_genes[9]: 0.125}
+        rna_rows = []
+        for sample, cond in (("ctrl_1", "control"), ("ctrl_2", "control"), ("treat_1", "treated"), ("treat_2", "treated")):
+            depth = rng2.uniform(0.8, 1.25)
+            lines = ["@HD\tVN:1.6\tSO:unsorted"] + [f"@SQ\tSN:{c}\tLN:{len(s)}" for c, s in genome.items()]
+            for g in rna_genes:
+                mean = base_expr[g] * depth * (changed.get(g, 1.0) if cond == "treated" else 1.0)
+                n = max(0, int(round(rng2.gauss(mean, (mean + 0.02 * mean * mean) ** 0.5))))
+                usable = [x for x in exons_of[g] if x[2] - x[1] >= 120]
+                for k in range(n if usable else 0):
+                    c, a, e = rng2.choice(usable)
+                    pos = rng2.randint(a + 1, e - 99)
+                    lines.append(f"{sample}.{g}.{k}\t{rng2.choice([0, 16])}\t{c}\t{pos}\t60\t100M\t*\t0\t0\t{ref_at(c, pos, 100)}\t{'I' * 100}\tNH:i:1")
+            write(f"rnaseq_{sample}.sam", "\n".join(lines) + "\n")
+            mmg.sort_genomic([path(f"rnaseq_{sample}.sam")], path(f"rnaseq_{sample}.bam"))
+            os.remove(path(f"rnaseq_{sample}.sam"))
+            rna_rows.append(f"{sample}\t{cond}")
+        write("rnaseq_samples.tsv", "sample\tcondition\n" + "\n".join(rna_rows) + "\n")
+        mmg.count_reads([path(f"rnaseq_{s.split(chr(9))[0]}.bam") for s in rna_rows], path("annotation.gff3"),
+                        path("rnaseq_counts.tsv"), sample_names=[s.split("\t")[0] for s in rna_rows])
+
+        write("README.md", "# MMGEN examples\n\nSmall simulated files, written by the web interface (`ui_main.py`) when an example "
+              "is picked on a screen. They are made up: no real person or organism. Delete the folder at any time; "
+              "it is written again when needed.\n\n"
+              "* `toy_genome.fa` (+ `.fai`): a genome of 100,000 bases in three chromosomes (chr1, chr2, chr10), with three repeats.\n"
+              "* `cohort.vcf` (+ `cohort.vcf.gz`, sorted BGZF): 500 variants of a trio (mother, father, child) on that genome.\n"
+              "* `sample_a.vcf`, `sample_b.vcf.gz`, `sample_c.vcf`: three single-sample VCF files, out of order.\n"
+              "* `indels.vcf`: indels that are not left-aligned, a variant to trim and one to split.\n"
+              "* `with_problems.vcf`, `five_columns.vcf`: files with planted defects, for the validator.\n"
+              "* `ensembl_names.vcf`: chromosomes named 1, 2, 10, MT.\n"
+              "* `patient_grch38.vcf`, `cohort_grch37.vcf`, `grch38_ensembl.sizes`: headers of the two human assemblies.\n"
+              "* `genes.bed`, `peaks.bed`, `annotation.gff3`: intervals and an annotation on the toy genome.\n"
+              "* `alignments.sam`, `alignments.sorted.bam`: 600 aligned reads, out of order and sorted.\n"
+              "* `pileup_demo.bam` (+ `.bai`): 80 reads piled on chr1:25,000, about 40% with the ALT allele of the SNP there.\n"
+              "* `roh_demo.vcf`: a simulated child of first cousins, with two long runs of homozygosity.\n"
+              "* `rnaseq_*.bam`, `rnaseq_samples.tsv`, `rnaseq_counts.tsv`: four simulated RNA-seq samples (two control, two "
+              "treated) on the toy genome's genes, with three genes changed by treatment.\n"
+              "* `human/`: the human-genome demo data (public data cut from Genome in a Bottle, ClinVar, RefSeq and the "
+              "PGS Catalog), unpacked from `mmgen_demo_human_v1.zip` when a human-genome example is picked.\n"
+              "* `reads_R1.fastq.gz`, `reads_R2.fastq.gz`: 3,000 read pairs with an adapter and low-quality ends.\n"
+              "* `toy_bacterium.fasta`, `toy_patient.fasta` (3 SNPs), `toy_bacterium_reads.fastq.gz` (30x, 0.5% errors) "
+              "and their 31-mers (`*_K31.arrow`).\n"
+              "* `kmers_gc_rich.txt`, `kmers_at_rich.txt`: 31-mers of two genomes with different GC content.\n"
+              "* `plasmid_contigs.fasta`, `chromosome_contigs.fasta`: contigs that overlap at their ends.\n")
+        with open(stamp, "w", encoding="utf-8") as fh:
+            fh.write(EXAMPLES_VERSION)
+        return True
+
+    _E = EXAMPLES_DIR + "/"
+    _TRIO = "`cohort.vcf` holds 500 variants of a trio (mother, father and child) on a small simulated genome: SNPs, insertions, deletions and multiallelic sites."
+    EXAMPLES = {
+        ("qc", None): [
+            ("A 30 kb bacterial genome (FASTA), k = 31",
+             "Every 31-base window of a simulated genome of 30,000 bases becomes a k-mer: expect 29,970 distinct k-mers in `toy_bacterium_K31.arrow`, the file that screens 3, 4 and 6 read.",
+             {"files": [_E + "toy_bacterium.fasta"], "kmer_size": 31}),
+            ("Sequencing reads at 30× coverage (FASTQ.gz), mean quality ≥ 20",
+             "6,000 reads of 150 bases from the same genome, from both strands, with 0.5% of sequencing errors. Each error makes k-mers that are not in the genome, and the reverse strand doubles the rest: expect several times the 29,970 k-mers of the genome.",
+             {"files": [_E + "toy_bacterium_reads.fastq.gz"], "kmer_size": 31, "min_quality": 20}),
+            ("A patient with 3 mutations (FASTA), k = 31",
+             "The same genome with three single-base changes. Its k-mers, `toy_patient_K31.arrow`, are compared with the healthy genome's on screen 4.",
+             {"files": [_E + "toy_patient.fasta"], "kmer_size": 31}),
+        ],
+        ("cluster", None): [
+            ("31-mers of two genomes with different GC content",
+             "2,000 k-mers of 31 bases from a GC-rich genome (65% GC) and 2,000 from an AT-rich one (35%). Load them, then click **Cluster the k-mers**. This screen is experimental: its grouping has not been validated.",
+             {"sample_a": _E + "kmers_gc_rich.txt", "sample_b": _E + "kmers_at_rich.txt"}),
+        ],
+        ("assembly", None): [
+            ("The 31-mers of the 30 kb genome",
+             "A genome without repeats is rebuilt as a single contig of 30,000 bases, written to `MMGEN_Contigs_K31.fasta` next to the input.",
+             {"kmer_file": _E + "toy_bacterium_K31.arrow"}),
+            ("The 31-mers of the reads, sequencing errors included",
+             "Every sequencing error opens a branch in the graph, and the reverse strand makes a second copy of it, so the assembly breaks into many short contigs. This module does not correct errors: assemble error-free sequences, or look at the errors first with the k-mer spectrum (screen 13).",
+             {"kmer_file": _E + "toy_bacterium_reads_K31.arrow"}),
+        ],
+        ("variant", None): [
+            ("A patient with 3 SNPs against the healthy genome",
+             "Each SNP changes the 31 k-mers that cover it: expect 3 × 31 = 93 k-mers found only in the patient.",
+             {"reference": _E + "toy_bacterium_K31.arrow", "patient": _E + "toy_patient_K31.arrow", "filter_mb": 16, "num_hashes": 5}),
+        ],
+        ("annotation", None): [
+            ("A short gene: start codon, 14 codons, stop codon",
+             "Translates to MSTHEGENEISREAD followed by the stop codon (the red asterisk).",
+             {"dna": "ATGTCTACTCATGAAGGTGAAAATGAAATTTCTCGAGAAGCTGATTAA"}),
+            ("The same gene with a nonsense mutation",
+             "One base changed (C → T) turns the arginine codon CGA into the stop codon TGA: the protein ends after 11 amino acids.",
+             {"dna": "ATGTCTACTCATGAAGGTGAAAATGAAATTTCTTGAGAAGCTGATTAA"}),
+            ("The same gene with one base deleted (a frameshift)",
+             "Without the C of the fourth codon, every codon after it is read out of frame: the protein changes from there on, and the stop codon is lost.",
+             {"dna": "ATGTCTACTATGAAGGTGAAAATGAAATTTCTCGAGAAGCTGATTAA"}),
+            ("A mutated stretch of E. coli (a result of screen 4)",
+             "One of the k-mers that screen 4 reported in a simulated patient made from E. coli.",
+             {"dna": "ATTTACCCTTGCTTTCACATAATCTGCCCGCCGATTTTGCTGCGTTGCGTAAATA"}),
+        ],
+        ("bloom", None): [
+            ("The 31-mers of the 30 kb genome, 1 MB filter, 5 hashes",
+             "29,970 k-mers × 5 hashes set about 150 thousand of the 8.4 million bits of the filter: a saturation under 2%, so false positives are rare.",
+             {"kmer_file": _E + "toy_bacterium_K31.arrow", "filter_mb": 1, "num_hashes": 5}),
+            ("The 31-mers of the reads (many more), same filter",
+             "The sequencing errors multiply the k-mers: the same filter fills up much more, and the chance of a false positive grows with it.",
+             {"kmer_file": _E + "toy_bacterium_reads_K31.arrow", "filter_mb": 1, "num_hashes": 5}),
+        ],
+        ("scaffold", None): [
+            ("A circular plasmid in 4 contigs that overlap by 54 bases",
+             "The four pieces of a plasmid of 20,000 bases, out of order: each overlaps the next by 54 bases, and the last overlaps the first. Expect one scaffold of 20,000 bases, recognized as circular.",
+             {"contigs_fasta": _E + "plasmid_contigs.fasta", "overlap": 54}),
+            ("A linear chromosome in 5 contigs that overlap by 30 bases",
+             "Five pieces of a sequence of 24,000 bases: expect one scaffold of 24,000 bases, not circular.",
+             {"contigs_fasta": _E + "chromosome_contigs.fasta", "overlap": 30}),
+        ],
+        ("vcf", None): [
+            ("Three samples (one gzipped), merged by position",
+             "Three VCF files out of order, 600 variants in all, become one file sorted by chromosome (in lexical order: chr1, chr10, chr2) and position. Variants at the same position keep the order of the input files: the sort is stable.",
+             {"files": [_E + "sample_a.vcf", _E + "sample_b.vcf.gz", _E + "sample_c.vcf"], "sort_by": "POS", "output_name": _E + "merged_by_position.vcf"}),
+            ("The same three, by quality (highest first)",
+             "The same 600 variants ordered by QUAL, from the highest; a missing QUAL (`.`) counts as 0.",
+             {"files": [_E + "sample_a.vcf", _E + "sample_b.vcf.gz", _E + "sample_c.vcf"], "sort_by": "QUAL", "output_name": _E + "merged_by_quality.vcf"}),
+        ],
+        ("sort", "Sort & merge"): [
+            ("Two VCF samples out of order → one sorted .vcf.gz with its index",
+             "The output keeps the chromosome order of the `##contig` lines (chr1, chr2, chr10), as bcftools does, and is written as BGZF with a `.tbi` index, ready for **Index & query a region**.",
+             {"files": [_E + "sample_a.vcf", _E + "sample_b.vcf.gz"], "index": True}),
+            ("Peaks (BED) in natural chromosome order",
+             "BED files are sorted in lexical order by default (chr1, chr10, chr2), as bedtools does; the natural order puts chr2 before chr10.",
+             {"files": [_E + "peaks.bed"], "order": "natural"}),
+            ("A GFF3 annotation: each gene before its transcript and exons",
+             "The lines of `annotation.gff3` come shuffled. Sorted by position, a feature that starts at the same base as another but is longer comes first, so a parent precedes its children.",
+             {"files": [_E + "annotation.gff3"]}),
+            ("SAM alignments → a sorted BAM with its .bai index",
+             "600 reads out of order. With the index asked for, the output is a BAM; its `@HD` line now says `SO:coordinate`.",
+             {"files": [_E + "alignments.sam"], "index": True}),
+        ],
+        ("sort", "Index & query a region"): [
+            ("One region of a VCF (the .tbi is built first)",
+             "`cohort.vcf.gz` is sorted and compressed as BGZF. The first run writes `cohort.vcf.gz.tbi`; after that, only the blocks that hold the region are read.",
+             {"file": _E + "cohort.vcf.gz", "regions": "chr1:10000-20000"}),
+            ("The reads of a BAM that touch a region",
+             "The `.bai` index is built first; then the reads of chr2 between 5,000 and 6,000 are shown.",
+             {"file": _E + "alignments.sorted.bam", "regions": "chr2:5000-6000"}),
+            ("Several regions, saved to a file",
+             "A whole chromosome (chr10) and the first 10,000 bases of chr2, written to `cohort.regions.vcf` with the header.",
+             {"file": _E + "cohort.vcf.gz", "regions": "chr2:1-10000, chr10", "output": _E + "cohort.regions.vcf"}),
+        ],
+        ("sort", "merge"): [
+            ("Join peaks that overlap or are up to 100 bases apart",
+             "`peaks.bed` holds about 150 peaks, some of them pairs a few bases apart: with a distance of 100, those pairs become one interval.",
+             {"a": [_E + "peaks.bed"], "distance": 100}),
+        ],
+        ("sort", "intersect"): [
+            ("The peaks that touch a gene (-u)",
+             "Each peak that overlaps at least one gene of `genes.bed` is written once, as it is.",
+             {"a": [_E + "peaks.bed"], "b": [_E + "genes.bed"], "mode": "unique"}),
+        ],
+        ("sort", "subtract"): [
+            ("The parts of the genes that no peak covers",
+             "Each gene is clipped where a peak overlaps it; a gene with a peak in the middle becomes two pieces.",
+             {"a": [_E + "genes.bed"], "b": [_E + "peaks.bed"]}),
+        ],
+        ("sort", "complement"): [
+            ("The stretches of the genome outside every gene",
+             "The intergenic regions of the toy genome, from the chromosome lengths in `toy_genome.fa.fai`.",
+             {"a": [_E + "genes.bed"], "genome": _E + "toy_genome.fa.fai"}),
+        ],
+        ("sort", "closest"): [
+            ("The closest gene to each peak, with the distance",
+             "A peak inside a gene is at distance 0; a peak between two genes gets the nearer one.",
+             {"a": [_E + "peaks.bed"], "b": [_E + "genes.bed"]}),
+        ],
+        ("sort", "coverage"): [
+            ("How much of each gene the peaks cover",
+             "For each gene: how many peaks overlap it, how many of its bases they cover, its length and the covered fraction.",
+             {"a": [_E + "genes.bed"], "b": [_E + "peaks.bed"]}),
+        ],
+        ("sort", "slop"): [
+            ("Each gene with 1,000 bases added on both sides",
+             "A common way to include the promoter and the downstream region; intervals stop at the chromosome ends given by `toy_genome.fa.fai`.",
+             {"a": [_E + "genes.bed"], "genome": _E + "toy_genome.fa.fai", "left": 1000, "right": 1000}),
+        ],
+        ("validate", "Validate a file"): [
+            ("A VCF with planted problems",
+             "`with_problems.vcf` has a position out of order, `2` among `chr2`, a position that is not a number, a line with too few columns and an invalid base. Each kind of problem is reported once, at the line where it first shows up, with how to fix it.",
+             {"file": _E + "with_problems.vcf"}),
+            ("A file that is not a VCF: only 5 columns",
+             "`five_columns.vcf` has the columns CHROM, POS, ID, QUAL and GT. A VCF needs at least eight: CHROM, POS, ID, REF, ALT, QUAL, FILTER and INFO.",
+             {"file": _E + "five_columns.vcf"}),
+            ("A clean multi-sample VCF",
+             _TRIO + " Expect no problem.",
+             {"file": _E + "cohort.vcf"}),
+            ("Sequencing reads (FASTQ.gz)",
+             "3,000 reads of the first file of a pair: the validator checks the four lines of every read.",
+             {"file": _E + "reads_R1.fastq.gz"}),
+        ],
+        ("validate", "Rename chromosomes (chr1 ↔ 1)"): [
+            ("Ensembl names (1, 2, 10, MT) → UCSC (chr1, chr2, chr10, chrM)",
+             "The records and the `##contig` lines are renamed; MT becomes chrM.",
+             {"file": _E + "ensembl_names.vcf", "style": "chr"}),
+            ("UCSC names → Ensembl, in a BED file",
+             "chr1, chr2 and chr10 become 1, 2 and 10.",
+             {"file": _E + "peaks.bed", "style": "no_chr"}),
+        ],
+        ("validate", "Compare reference genomes"): [
+            ("GRCh38 against GRCh37: different genomes",
+             "The two headers declare the human chromosomes with their lengths in GRCh38 and in GRCh37. The lengths differ, so coordinates from one file mean other bases in the other.",
+             {"a": _E + "patient_grch38.vcf", "b": _E + "cohort_grch37.vcf"}),
+            ("The same genome (GRCh38), named two ways",
+             "A VCF with `chr1` against a chromosome-sizes file with `1`: the lengths match, so it is the same genome; only the names must be made equal before combining them.",
+             {"a": _E + "patient_grch38.vcf", "b": _E + "grch38_ensembl.sizes"}),
+        ],
+        ("vcftools", "Statistics"): [
+            ("A trio: mother, father and child", _TRIO, {"file": _E + "cohort.vcf"}),
+            ("A file that is not a VCF (5 columns)",
+             "Nothing can be counted: the screen says why, with the validator's report.",
+             {"file": _E + "five_columns.vcf"}),
+        ],
+        ("vcftools", "Filter"): [
+            ("High-quality SNPs that passed every filter",
+             _TRIO + " Keeps the sites whose ALT alleles are all SNPs, with QUAL of at least 30 and FILTER PASS.",
+             {"file": _E + "cohort.vcf", "expression": 'TYPE == "snp" && QUAL >= 30 && FILTER == "PASS"'}),
+            ("Rare variants (allele frequency under 5%)",
+             "Keeps the sites whose `INFO/AF` is below 0.05.",
+             {"file": _E + "cohort.vcf", "expression": "INFO/AF < 0.05"}),
+            ("One chromosome, and only the child",
+             "The records of chr2, with the genotype column of the child alone.",
+             {"file": _E + "cohort.vcf", "regions": "chr2", "samples": "child"}),
+        ],
+        ("vcftools", "Normalize"): [
+            ("Split the multiallelic sites of the trio",
+             "Each site with two ALT alleles becomes two records, one per allele, with the genotypes rewritten for each.",
+             {"file": _E + "cohort.vcf", "split": True}),
+            ("Left-align indels in repeats, with the genome",
+             "`indels.vcf` has a deletion in a run of T, a deletion and an insertion in dinucleotide repeats, all written at the right end of the repeat. With `toy_genome.fa`, each moves to the leftmost position where it can be written, as `bcftools norm -f` does; a variant with extra bases is trimmed and a multiallelic site is split.",
+             {"file": _E + "indels.vcf", "split": True, "reference": _E + "toy_genome.fa"}),
+        ],
+        ("fastq", "Quality report"): [
+            ("Paired-end reads with an adapter and low-quality ends (R1)",
+             "3,000 reads of 100 bases. About a third come from fragments shorter than the read, so the Illumina adapter shows at their 3' end; some reads lose quality at the end, and a few have an N.",
+             {"file": _E + "reads_R1.fastq.gz"}),
+            ("Reads at 30× from a bacterial genome",
+             "6,000 reads of 150 bases with 0.5% of errors and no adapter.",
+             {"file": _E + "toy_bacterium_reads.fastq.gz"}),
+        ],
+        ("fastq", "Trim reads"): [
+            ("Single-end: the adapter found automatically, quality 20",
+             "The adapter is detected in the first reads; the ends below quality 20 and the adapter are cut, and the reads that end up shorter than 20 bases are dropped.",
+             {"file": _E + "reads_R1.fastq.gz", "adapter": "auto", "quality": 20, "min_length": 20}),
+            ("Paired-end: R1 and R2 trimmed in step",
+             "When one read of a pair is dropped, so is its mate: the two outputs keep the same reads in the same order.",
+             {"file": _E + "reads_R1.fastq.gz", "file2": _E + "reads_R2.fastq.gz", "adapter": "auto", "quality": 20, "min_length": 20}),
+            ("Strict: quality 30, N removed, reads under 50 bases dropped",
+             "Harder settings cut more and drop more reads: compare the counts with the first example.",
+             {"file": _E + "reads_R1.fastq.gz", "adapter": "AGATCGGAAGAGC", "quality": 30, "min_length": 50, "trim_n": True}),
+        ],
+        ("kmercount", None): [
+            ("Reads at 30× coverage (k = 31): the error peak and the coverage peak",
+             "Most k-mers seen once are sequencing errors; the k-mers of the genome form a second peak near 20×. A read of 150 bases holds 120 k-mers of 31, so a coverage of 30× in bases is 30 × 120 / 150 = 24× in k-mers, and the k-mers that hold an error bring it down a little more.",
+             {"files": [_E + "toy_bacterium_reads.fastq.gz"], "k": 31}),
+            ("The genome itself (k = 21): almost every k-mer seen once",
+             "A random genome of 30,000 bases has almost no repeated 21-mer.",
+             {"files": [_E + "toy_bacterium.fasta"], "k": 21}),
+            ("The reads, with the table of the k-mers seen at least 5 times",
+             "Leaving out the k-mers seen fewer than 5 times drops most of the errors from the table.",
+             {"files": [_E + "toy_bacterium_reads.fastq.gz"], "k": 31, "min_count": 5, "output": _E + "reads_31mers.tsv.gz"}),
+        ],
+        ("convert", None): [
+            ("VCF → Parquet, QUAL as numbers",
+             _TRIO + " As Parquet it opens as a table in pandas, polars or DuckDB.",
+             {"file": _E + "cohort.vcf", "target": ".parquet", "numbers": "number"}),
+            ("VCF → Parquet, QUAL kept as text",
+             "QUAL is stored exactly as written, so converting back gives the same bytes.",
+             {"file": _E + "cohort.vcf", "target": ".parquet", "numbers": "text", "output": _E + "cohort.text.vcf.parquet"}),
+            ("SAM → BAM", "The 600 alignments of `alignments.sam` in the binary format.",
+             {"file": _E + "alignments.sam", "target": ".bam"}),
+            ("BED → gzip (BGZF)", "The peaks compressed as BGZF, which any gzip reader opens and which can be indexed.",
+             {"file": _E + "peaks.bed", "target": ".gz"}),
+        ],
+    }
+    # The human-genome screens use the demo data in mmgen_examples/human: real,
+    # public genomes of the Genome in a Bottle project, cut to chr22, the genes
+    # of the example panels and the PharmCAT positions.
+    _H = HUMAN_DIR + "/"
+    _R = RESEARCH_DIR + "/"
+    _GIAB = ("Genome in a Bottle (GIAB) reference genomes are public data from consenting volunteers of the Personal Genome "
+             "Project, used worldwide to test sequencing. The demo keeps chr22, the example panel genes and the "
+             "pharmacogene positions.")
+    EXAMPLES.update({
+        ("findings", "ClinVar findings"): [
+            ("HG002: pathogenic and likely pathogenic, at least 1 review star",
+             _GIAB + " HG002 is the son of the Ashkenazi trio. Expect one finding in one copy: a variant ClinVar classifies as "
+             "pathogenic, with 2 stars, in F11 (coagulation factor XI). One copy of a variant for a recessive condition is a "
+             "carrier state; most people carry a few.",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed", "clinvar": _H + "clinvar_demo.vcf.gz",
+              "classes": ["plp"], "min_stars": 1}),
+            ("HG002, a hereditary-cancer panel: every classification",
+             "The same person, only the genes of the hereditary breast and ovarian cancer panel, and every ClinVar class with any "
+             "number of stars: most matches are benign; a few are uncertain or conflicting.",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed", "clinvar": _H + "clinvar_demo.vcf.gz",
+              "classes": ["plp", "vus", "conflicting", "blb", "risk"], "min_stars": 0, "panel": "Hereditary breast and ovarian cancer"}),
+            ("HG005: pathogenic and likely pathogenic, at least 1 review star",
+             _GIAB + " HG005 is the son of the Han Chinese trio.",
+             {"vcf": _H + "giab/HG005.vcf.gz", "callable": _H + "giab/HG005.callable.bed", "clinvar": _H + "clinvar_demo.vcf.gz",
+              "classes": ["plp"], "min_stars": 1}),
+        ],
+        ("findings", "Gene panel from an annotation"): [
+            ("Hereditary breast and ovarian cancer: the gene coordinates as BED",
+             "The 13 genes of the panel, found in the RefSeq GRCh38 annotation (its accessions NC_0000.. are turned into chr names).",
+             {"gff": _H + "panel_genes.gff3.gz", "panel": "Hereditary breast and ovarian cancer", "padding": 0}),
+            ("Pharmacogenes, with 1,000 bases on each side",
+             "The genes that drug-response tests look at, padded to include their promoters.",
+             {"gff": _H + "panel_genes.gff3.gz", "panel": "Pharmacogenes", "padding": 1000}),
+        ],
+        ("pgx", None): [
+            ("HG002 (son of the Ashkenazi trio)",
+             _GIAB + " PharmCAT reads the genotype at each of its 1,226 positions; the X chromosome is not in this release of "
+             "the GIAB calls, so its genes stay without a call.",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed"}),
+            ("HG005 (son of the Han Chinese trio)", _GIAB,
+             {"vcf": _H + "giab/HG005.vcf.gz", "callable": _H + "giab/HG005.callable.bed"}),
+            ("HG001 (NA12878)", _GIAB + " NA12878 is one of the most studied human genomes.",
+             {"vcf": _H + "giab/HG001.vcf.gz", "callable": _H + "giab/HG001.callable.bed"}),
+        ],
+        ("lookup", "Look up variants in relatives (cascade testing)"): [
+            ("The F11 variant of HG002 in his parents",
+             _GIAB + " HG002 carries one copy of a pathogenic F11 variant (screen 18). Which parent passed it on?",
+             {"variants": "chr4:186274193:G:T", "vcfs": [_H + "giab/HG002.vcf.gz", _H + "giab/HG003.vcf.gz", _H + "giab/HG004.vcf.gz"],
+              "use_beds": True}),
+            ("Four pharmacogene variants in the Han Chinese trio",
+             "CYP2C19*2, CYP2C19*17, CYP3A5*3 and the VKORC1 promoter variant (GRCh38 positions from dbSNP) in HG005, HG006 and HG007.",
+             {"variants": "chr10:94781859:G:A\nchr10:94761900:C:T\nchr7:99672916:T:C\nchr16:31096368:C:T",
+              "vcfs": [_H + "giab/HG005.vcf.gz", _H + "giab/HG006.vcf.gz", _H + "giab/HG007.vcf.gz"], "use_beds": True}),
+            ("By rsID, through ClinVar",
+             "rs121965063 is resolved to its coordinates with the ClinVar file, then looked up in the trio.",
+             {"variants": "rs121965063", "vcfs": [_H + "giab/HG002.vcf.gz", _H + "giab/HG003.vcf.gz", _H + "giab/HG004.vcf.gz"],
+              "use_beds": True, "clinvar": _H + "clinvar_demo.vcf.gz"}),
+        ],
+        ("kin", "Relatedness of several people"): [
+            ("The seven GIAB genomes: two trios and NA12878",
+             _GIAB + " Expect four parent-offspring pairs (HG002 with HG003 and HG004, HG005 with HG006 and HG007) and every "
+             "other pair unrelated; the two couples are not related to each other. Between people of different ancestries "
+             "the kinship comes out negative, a known effect of the KING estimator.",
+             {"vcfs": [_H + f"giab/HG00{_i}.vcf.gz" for _i in range(1, 8)], "use_beds": True}),
+        ],
+        ("kin", "Trio and paternity test"): [
+            ("HG002 with his parents (the Ashkenazi trio)",
+             _GIAB + " The father is not excluded: the few opposite homozygotes between him and the son are at the level of "
+             "genotyping errors, and the paternity index is very high. Expect a few de novo candidates.",
+             {"child": _H + "giab/HG002.vcf.gz", "father": _H + "giab/HG003.vcf.gz", "mother": _H + "giab/HG004.vcf.gz",
+              "use_beds": True, "af": _H + "af_1000g_demo.vcf.gz", "af_field": "EUR_AF"}),
+            ("A wrong father: HG006 tested as the father of HG002",
+             "The same son and mother, with a man of the other trio as the alleged father: opposite homozygotes at a rate "
+             "far above the error level, so he is excluded.",
+             {"child": _H + "giab/HG002.vcf.gz", "father": _H + "giab/HG006.vcf.gz", "mother": _H + "giab/HG004.vcf.gz",
+              "use_beds": True, "af": _H + "af_1000g_demo.vcf.gz", "af_field": "AF"}),
+            ("A duo: HG005 and his father, no mother",
+             "Without the mother, fewer sites are informative and the index is smaller, but a true father is still not excluded.",
+             {"child": _H + "giab/HG005.vcf.gz", "father": _H + "giab/HG006.vcf.gz", "mother": "none",
+              "use_beds": True, "af": _H + "af_1000g_demo.vcf.gz", "af_field": "EAS_AF"}),
+        ],
+        ("anc", "Ancestry"): [
+            ("The seven GIAB genomes against the 1000 Genomes groups (chr22)",
+             _GIAB + " The panel holds the allele frequencies of the five 1000 Genomes super-populations on chr22. Expect "
+             "HG001 European, the Han Chinese trio East Asian, and the Ashkenazi trio mostly European with a South Asian share: "
+             "Ashkenazi and Middle Eastern ancestry fall between the panel's groups. One chromosome gives rough errors.",
+             {"panel": _H + "ancestry_panel_chr22_1000g.tsv.gz", "vcfs": [_H + f"giab/HG00{_i}.vcf.gz" for _i in range(1, 8)], "use_beds": True}),
+        ],
+        ("anc", "Polygenic score"): [
+            ("A breast-cancer score (PGS000004, 313 variants) for HG002",
+             _GIAB + " The demo data keeps the score's variants. The result is where HG002's weighted sum falls among the panel's "
+             "groups — a statistical summary that transfers poorly across ancestries, not a risk for a person.",
+             {"scoring": _H + "pgs/PGS000004_hmPOS_GRCh38.txt.gz", "vcfs": [_H + "giab/HG002.vcf.gz"], "use_beds": True,
+              "panel": _H + "pgs_panel_1000g.tsv.gz"}),
+            ("A coronary-artery-disease score (PGS003438) for the seven GIAB genomes",
+             "The same score for seven people: compare each one with the group of their own ancestry.",
+             {"scoring": _H + "pgs/PGS003438_hmPOS_GRCh38.txt.gz", "vcfs": [_H + f"giab/HG00{_i}.vcf.gz" for _i in range(1, 8)],
+              "use_beds": True, "panel": _H + "pgs_panel_1000g.tsv.gz"}),
+        ],
+        ("anc", "Build a reference panel"): [
+            ("From the frequencies of a sites VCF (1000 Genomes)",
+             "The 1000 Genomes sites file gives each super-population's frequency in INFO (AFR_AF, EUR_AF...): one panel column each.",
+             {"source": _H + "af_1000g_demo.vcf.gz", "kind": "freq", "groups": "AFR, AMR, EAS, EUR, SAS", "min_maf": 0.05}),
+        ],
+        ("rnaseq", "Count reads per gene"): [
+            ("Four simulated RNA-seq samples on the toy genome",
+             "Two control and two treated samples of reads from the exons of the toy genome's genes (`annotation.gff3`). "
+             "Each read that falls in the exons of one gene is counted for it: expect one column per sample, one row per gene.",
+             {"bams": [_E + f"rnaseq_{_s}.bam" for _s in ("ctrl_1", "ctrl_2", "treat_1", "treat_2")], "annotation": _E + "annotation.gff3"}),
+        ],
+        ("rnaseq", "Differential expression"): [
+            ("The four simulated samples: treated against control",
+             "Three genes were planted as changed by the treatment: gene03 (8 times up), gene07 (3 times up) and gene10 "
+             "(8 times down). With only two samples per group, expect those three, and maybe a false one.",
+             {"counts": _E + "rnaseq_counts.tsv", "samples": _E + "rnaseq_samples.tsv", "condition": "condition", "reference": "control"}),
+            ("Airway: dexamethasone against untreated (Himes et al. 2014)",
+             "Airway smooth-muscle cells of four donors, treated with the corticosteroid dexamethasone or not (GEO GSE52778), "
+             "compared within each donor (`~ cell_line + dex`). Expect thousands of genes changed, among them the classic "
+             "glucocorticoid-response genes FKBP5, TSC22D3, DUSP1, KLF15 and ZBTB16, strongly up.",
+             {"counts": _R + "rnaseq/airway_counts.tsv.gz", "samples": _R + "rnaseq/airway_samples.tsv", "condition": "dex",
+              "reference": "untrt", "factors": "cell_line", "names": _R + "rnaseq/airway_gene_names.tsv"}),
+        ],
+        ("crispr", "Count guides in reads"): [
+            ("The MAGeCK demo: two samples of 2,500 reads",
+             "Reads of 30 bases whose first 20 are a guide of the library (2,550 guides). MAGeCK itself maps 1,453 and 1,471 of "
+             "the 2,500 reads of each sample; the counts here are the same, guide by guide.",
+             {"library": _R + "crispr/demo2_library.txt", "fastqs": [_R + "crispr/demo2_sample1.fastq.gz", _R + "crispr/demo2_sample2.fastq.gz"],
+              "labels": "sample1, sample2"}),
+        ],
+        ("crispr", "Rank genes (MAGeCK RRA)"): [
+            ("The MAGeCK demo screen (100 genes)",
+             "Guide counts before and after a screen in HL60 and KBM7 cells. The genes whose guides drop out are the ones the "
+             "cells need; the result is the same, line by line, as MAGeCK's.",
+             {"counts": _R + "crispr/demo1_counts.txt", "treatment": "HL60.final, KBM7.final", "control": "HL60.initial, KBM7.initial"}),
+            ("A leukemia screen: 73,151 guides, 7,115 genes (about a minute)",
+             "The genome-wide screen of MAGeCK's tutorial in two leukemia cell lines. Expect ribosomal-protein genes (RPL3, RPL8, "
+             "RPS2...) at the top of the negative selection: knocking out an essential gene kills the cell, and its guides vanish.",
+             {"counts": _R + "crispr/leukemia_counts.csv.gz", "treatment": "HL60.final, KBM7.final", "control": "HL60.initial, KBM7.initial"}),
+        ],
+        ("meta", "Which species, and how much"): [
+            ("ZymoBIOMICS EVEN community: 8 bacteria and 2 yeasts",
+             "30,000 read pairs of a public run of a mock community with known composition (8 bacteria at 12% and 2 yeasts at "
+             "2% of the DNA), against the sketches of 43 reference genomes and a human decoy. Expect the ten species; the "
+             "proportions come out near the truth, less so for strains far from the reference genome (Listeria, Bacillus).",
+             {"samples": [_R + "microbio/ERR2984773_zymo_even_D6300_first30k_R1.fastq.gz", _R + "microbio/ERR2984773_zymo_even_D6300_first30k_R2.fastq.gz"],
+              "databases": [_R + "microbio/references_k31_s1000.sig"]}),
+            ("ZymoBIOMICS LOG community: from 89% down to 0.0001%",
+             "The same species in amounts that fall tenfold each step. With 30,000 read pairs only the abundant ones are seen: "
+             "detection depends on depth.",
+             {"samples": [_R + "microbio/ERR2935805_zymo_log_D6310_first30k_R1.fastq.gz", _R + "microbio/ERR2935805_zymo_log_D6310_first30k_R2.fastq.gz"],
+              "databases": [_R + "microbio/references_k31_s1000.sig"]}),
+        ],
+        ("meta", "Classify the reads"): [
+            ("EVEN community, read by read, against the ten species",
+             "Each read pair is assigned to the species whose k-mers it shares most, with a denser sketch (scaled 20); host "
+             "(human) reads are counted apart.",
+             {"input": _R + "microbio/ERR2984773_zymo_even_D6300_first30k_R1.fastq.gz", "input2": _R + "microbio/ERR2984773_zymo_even_D6300_first30k_R2.fastq.gz",
+              "databases": [_R + "microbio/zymo_species_k31_s20.sig"]}),
+        ],
+        ("meta", "Sketch reference genomes"): [
+            ("The four isolates of screen 25",
+             "One sketch per genome, with the same hashes as sourmash: small files that stand for whole genomes.",
+             {"genomes": [_R + f"microbio/isolates/{_g}.fna.gz" for _g in ("kpneumoniae_KPNIH1_KPC-3", "kpneumoniae_ATCC_BAA-2146_NDM-1",
+                                                                            "saureus_USA300_MRSA", "saureus_NCTC8325_MSSA")],
+              "output": _R + "microbio/isolates.sig"}),
+        ],
+        ("amr", None): [
+            ("K. pneumoniae KPNIH1: a KPC carbapenemase outbreak strain",
+             "The isolate of a hospital outbreak (ST258). Expect blaKPC-3, a carbapenemase, among its resistance genes.",
+             {"inputs": [_R + "microbio/isolates/kpneumoniae_KPNIH1_KPC-3.fna.gz"]}),
+            ("K. pneumoniae ATCC BAA-2146: NDM-1",
+             "A reference strain carrying the metallo-beta-lactamase NDM-1 and several other resistance genes.",
+             {"inputs": [_R + "microbio/isolates/kpneumoniae_ATCC_BAA-2146_NDM-1.fna.gz"]}),
+            ("S. aureus USA300 (MRSA)",
+             "A community-acquired MRSA: expect mecA, whose copy here differs slightly from the catalog's alleles (identity just "
+             "under 100%).",
+             {"inputs": [_R + "microbio/isolates/saureus_USA300_MRSA.fna.gz"]}),
+            ("S. aureus NCTC 8325 (no mecA)",
+             "A methicillin-susceptible strain: no mecA, but the genes S. aureus carries by nature.",
+             {"inputs": [_R + "microbio/isolates/saureus_NCTC8325_MSSA.fna.gz"]}),
+        ],
+        ("outbreak", "Distances and a tree"): [
+            ("SARS-CoV-2: 20 lineages, rooted on lineage A",
+             "One genome per Pango lineage, from lineage A (January 2020) to KP.3.1.1 (2024), in one multi-FASTA: each "
+             "record is a genome. Expect the two Delta genomes side by side and the Omicron lineages (BA.1 to KP.3.1.1) "
+             "in one clade, far from the rest. Rooted on lineage A, the oldest; at the midpoint the root would fall inside "
+             "Omicron, the longest branch.",
+             {"genomes": [_R + "outbreak/sars_cov_2_20_lineages.fasta"], "records": True, "outgroup": "A_MN985325.1"}),
+            ("Klebsiella pneumoniae: 13 isolates of known sequence types",
+             "Sketches of 13 public genomes, named by strain and sequence type (ST). Isolates of the same ST should be "
+             "neighbors in the tree, at about 99.7-99.9% ANI: ST258 (the KPC outbreak clone), ST11, ST15, ST307. ST258 and "
+             "ST11 then group together: both belong to clonal group 258.",
+             {"genomes": [_R + "outbreak/klebsiella_pneumoniae_13_k31_s100.sig"]}),
+            ("Four bacterial isolates, from their genomes (FASTA)",
+             "Two K. pneumoniae and two S. aureus, sketched here from their assemblies (a few seconds): two species, so two "
+             "distant pairs; within each pair, the ANI says how close the strains are.",
+             {"genomes": [_R + f"microbio/isolates/{_g}.fna.gz" for _g in ("kpneumoniae_KPNIH1_KPC-3", "kpneumoniae_ATCC_BAA-2146_NDM-1",
+                                                                            "saureus_USA300_MRSA", "saureus_NCTC8325_MSSA")]}),
+        ],
+        ("outbreak", "Mutations of viral genomes"): [
+            ("SARS-CoV-2: 20 lineages against the Wuhan-Hu-1 reference",
+             "Each genome is aligned to NC_045512.2 and its changes are named as Nextclade names them (the same changes, "
+             "genome by genome, as Nextclade 3.29). Look for S:D614G and ORF1b:P314L in every lineage after B.1, S:N501Y "
+             "in Alpha, Beta, Gamma and Omicron, S:L452R and S:P681R in Delta, and the many spike changes of Omicron.",
+             {"reference": _R + "outbreak/NC_045512.2.fna.gz", "annotation": _R + "outbreak/NC_045512.2.gff3.gz",
+              "genomes": [_R + "outbreak/sars_cov_2_20_lineages.fasta"]}),
+        ],
+        ("amplicon", "Amplicon variants (ASVs)"): [
+            ("mothur MiSeq SOP: 19 mouse stool samples and a Mock community",
+             "16S V4 reads (2 x 250) of the mothur tutorial: mice sampled early (days 0-9) and late (days 141-150) after "
+             "weaning, 2,000 read pairs each, and a Mock community of 20 known strains. Each pair is merged, reads with more "
+             "than one expected error are dropped, the rest denoised into ASVs and chimeras removed. Expect about three "
+             "quarters of the reads kept, and the Mock's 20 strains among the most abundant ASVs.",
+             {"sheet": _R + "16s/samples.tsv"}),
+        ],
+        ("amplicon", "Taxonomy"): [
+            ("The ASVs of the SOP, with the RDP 19 classifier (V4)",
+             "The naive Bayesian classifier of the RDP, trained on the V4 region of the RDP training set 19. Expect the "
+             "mouse gut families: Muribaculaceae first, then Lachnospiraceae, Bacteroidaceae, Lactobacillaceae; few ASVs "
+             "reach a genus at confidence 0.8, as is usual for 250-base V4 reads.",
+             {"fasta": _R + "16s/sop_asvs.fasta", "model": _R + "16s/rdp19_v4_classifier.model", "table": _R + "16s/sop_asv_table.tsv"}),
+        ],
+        ("amplicon", "Diversity"): [
+            ("Early against late after weaning (Bray-Curtis)",
+             "The 19 mouse samples: alpha diversity per sample, and how far apart the samples are (Bray-Curtis), drawn by "
+             "principal coordinates. The gut community changes as the mice grow: expect early and late apart, and "
+             "PERMANOVA p near 0.001.",
+             {"table": _R + "16s/sop_asv_table_mouse.tsv", "metadata": _R + "16s/samples_design.tsv", "column": "time"}),
+            ("The same with Jaccard (which ASVs are present, not how many)",
+             "Presence and absence only: the first axis alone separates early from late.",
+             {"table": _R + "16s/sop_asv_table_mouse.tsv", "metadata": _R + "16s/samples_design.tsv", "column": "time", "metric": "jaccard"}),
+        ],
+        ("amplicon", "Train a classifier"): [
+            ("RDP training set 19, V4 region only (a few seconds)",
+             "Only the stretch between the 515F and 806R primers of each reference sequence is used: a smaller model "
+             "that suits V4 reads better than one trained on whole 16S genes.",
+             {"reference": _R + "16s/rdp_19_toGenus_trainset.fa.gz", "primer_f": "GTGYCAGCMGCCGCGGTAA", "primer_r": "GGACTACNVGGGTWTCTAAT",
+              "output": _R + "16s/my_v4_classifier.model"}),
+        ],
+        ("tmb", None): [
+            ("HCC1395 breast-cancer cell line, chromosome 17",
+             "The SEQC2 somatic reference calls of a triple-negative breast-cancer cell line (high-confidence SNVs and "
+             "indels) counted over its high-confidence region of chromosome 17. These calls carry no depth or allele "
+             "fraction, so those filters cannot apply (the screen says so). Expect about 15-20 mutations per megabase: a "
+             "high burden.",
+             {"vcf": _R + "tumor/HCC1395_somatic_chr17.vcf.gz", "bed": _R + "tumor/HCC1395_high_confidence_chr17.bed"}),
+            ("The same, coding sequences only (as an exome or a panel counts)",
+             "Only the variants inside the coding sequences (CDS) of the RefSeq annotation, over the coding bases of the "
+             "region: what a whole-exome or panel test would count.",
+             {"vcf": _R + "tumor/HCC1395_somatic_chr17.vcf.gz", "bed": _R + "tumor/HCC1395_high_confidence_chr17.bed",
+              "annotation": _R + "tumor/refseq_chr17_cds.gff3.gz", "coding": True}),
+        ],
+        ("outbreak", "In-silico PCR"): [
+            ("CDC N1 and N2 assays on 20 SARS-CoV-2 genomes",
+             "The two primer pairs of the CDC test (with their probes) against every lineage. Both should give their "
+             "product in all 20 genomes (72 and 67 bases); the table shows where a newer lineage has a mismatch under a "
+             "primer or the probe, what assay designers watch for.",
+             {"panel": _R + "outbreak/pcr_demo_panel.tsv", "inputs": [_R + "outbreak/sars_cov_2_20_lineages.fasta"], "records": True}),
+            ("16S and mecA on four bacterial isolates",
+             "Universal 16S primers give one product per rRNA operon (a bacterium has several copies); the mecA pair "
+             "(methicillin resistance) gives its 533-base product only in the MRSA, not in the susceptible S. aureus.",
+             {"panel": _R + "outbreak/pcr_demo_panel.tsv",
+              "inputs": [_R + f"microbio/isolates/{_g}.fna.gz" for _g in ("kpneumoniae_KPNIH1_KPC-3", "kpneumoniae_ATCC_BAA-2146_NDM-1",
+                                                                           "saureus_USA300_MRSA", "saureus_NCTC8325_MSSA")]}),
+        ],
+        ("chrom", "Genetic sex"): [
+            ("HG001 (NA12878), chromosome X",
+             "Two X chromosomes give heterozygous calls on chrX at about the rate of the autosomes: expect XX.",
+             {"vcf": _H + "giab/HG001.chrX.vcf.gz"}),
+            ("HG002, chromosomes X and Y",
+             "One X gives no heterozygous call outside the pseudoautosomal regions, and there are calls on Y: expect XY.",
+             {"vcf": _H + "giab/HG002.chrXY.vcf.gz"}),
+            ("A file without chrX",
+             "The demo cut of HG002 has no sex chromosomes: the screen says it cannot tell.",
+             {"vcf": _H + "giab/HG002.vcf.gz"}),
+        ],
+        ("chrom", "Runs of homozygosity"): [
+            ("A child of first cousins (simulated)",
+             "A child of related parents inherits some stretches twice from the same ancestor: there, (almost) no heterozygous call. "
+             "Expect two runs, chr1:20-32 Mb and chr2:5-9 Mb (F_ROH is computed against the whole human autosome length).",
+             {"vcf": _E + "roh_demo.vcf", "min_length": 1_000_000}),
+            ("HG002, with runs from 300 kb",
+             _GIAB + " A person whose parents are not related has few and short runs.",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed", "min_length": 300_000}),
+            ("The same child, strict method",
+             "With the strict method any heterozygous call ends a run. On this simulated child (no genotyping errors) both "
+             "methods find the same two runs; on real data, the strict one splits runs at every genotyping error.",
+             {"vcf": _E + "roh_demo.vcf", "min_length": 1_000_000, "method": "strict"}),
+        ],
+        ("lookup", "Allele counts at a position (BAM)"): [
+            ("Reads over a heterozygous SNP (simulated)",
+             "80 simulated reads cover chr1:25,000 of the toy genome; about 40% carry the ALT allele, as a heterozygous variant "
+             "looks. A few bases there have quality 2 and are left out by the quality filter.",
+             {"bam": _E + "pileup_demo.bam", "position": "chr1:25000", "min_baseq": 13}),
+        ],
+    })
+
+    def make_demo_pack(kind):
+        """Unpacks a demo pack ("human" or "research") into mmgen_examples/,
+        from its zip in this folder (or downloaded, once it is published).
+        Returns True when it unpacked it."""
+        import shutil
+        import urllib.request
+        import zipfile
+        folder, version, pack_name, url, what = DEMO_PACKS[kind]
+        try:
+            with open(os.path.join(folder, "VERSION"), encoding="utf-8") as fh:
+                if fh.read().strip() == version:
+                    return False
+        except OSError:
+            pass
+        shutil.rmtree(folder, ignore_errors=True)  # an older version, or half unpacked
+        os.makedirs(EXAMPLES_DIR, exist_ok=True)
+        pack = next((c for c in (pack_name, os.path.join(EXAMPLES_DIR, pack_name)) if os.path.exists(c)), None)
+        if pack is None and url:
+            pack = os.path.join(EXAMPLES_DIR, pack_name)
+            urllib.request.urlretrieve(url, pack)
+        if pack is None:
+            raise RuntimeError(
+                f"this example needs the demo data `{pack_name}` ({what}). Put it in this folder: it is unpacked "
+                f"into `{folder}/` the first time.")
+        with zipfile.ZipFile(pack) as z:
+            z.extractall(EXAMPLES_DIR)
+        return True
+
+    def make_human_demo():
+        return make_demo_pack("human")
+
+    def example_picker(page, task=None):
+        """The list of examples of a screen and task."""
+        options = {NO_EXAMPLE: ""}
+        for i, item in enumerate(EXAMPLES.get((page, task), [])):
+            options[item[0]] = str(i)
+        return mo.ui.dropdown(options=options, value=NO_EXAMPLE, label="🧪 **Try an example:**", full_width=True)
+
+    def example_for(page, task, picked):
+        """The form values of the picked example and a note about it; writes
+        the example files the first time. ({}, None) when none is picked."""
+        items = EXAMPLES.get((page, task), [])
+        if not picked or not str(picked).isdigit() or int(picked) >= len(items):
+            return {}, None
+        label, about, values = items[int(picked)]
+        flat = [x for v in values.values() for x in (v if isinstance(v, list) else [v])]
+        try:
+            with mo.status.spinner("Writing the example files..."):
+                make_examples()
+                for _kind, (_folder, *_rest) in DEMO_PACKS.items():
+                    if any(isinstance(x, str) and x.startswith(_folder) for x in flat):
+                        make_demo_pack(_kind)
+        except Exception as err:
+            return {}, mo.callout(mo.md(f"**🔥 ERROR:** the example files could not be written in `{EXAMPLES_DIR}/`: {err}"), kind="danger")
+        return dict(values), mo.callout(mo.md(
+            f"**🧪 {label}**\n\n{about}\n\nThe form below is filled in with this example (its files are in `{EXAMPLES_DIR}/`): "
+            "submit it as it is, or change a field first."), kind="info")
+
+    def label_of(options, value, default):
+        """The label a dropdown shows for one of its values (examples keep values)."""
+        return next((k for k, v in options.items() if v == value), default)
+
+    return EXAMPLES, HUMAN_DIR, RESEARCH_DIR, example_for, example_picker, label_of, make_demo_pack, make_examples, make_human_demo
 
 
 @app.cell
@@ -282,6 +1545,20 @@ def main_menu(get_page, mmg, mo, set_page):
     btn_menu_fastq = mo.ui.button(label="📈 12. FASTQ Quality & Trimming", on_change=lambda _: set_page("fastq"))
     btn_menu_kmercount = mo.ui.button(label="🔢 13. K-mer Counting", on_change=lambda _: set_page("kmercount"))
     btn_menu_convert = mo.ui.button(label="📦 14. Formats & Conversion", on_change=lambda _: set_page("convert"))
+    btn_menu_guide = mo.ui.button(label="📚 15. Which Test Sees What (a guide)", on_change=lambda _: set_page("guide"))
+    btn_menu_kin = mo.ui.button(label="👪 16. Relatedness, Trios & Paternity", on_change=lambda _: set_page("kin"))
+    btn_menu_anc = mo.ui.button(label="🌍 17. Ancestry & Polygenic Scores", on_change=lambda _: set_page("anc"))
+    btn_menu_findings = mo.ui.button(label="🧾 18. Disease Findings & Gene Panels", on_change=lambda _: set_page("findings"))
+    btn_menu_pgx = mo.ui.button(label="💊 19. Pharmacogenomics (PharmCAT)", on_change=lambda _: set_page("pgx"))
+    btn_menu_chrom = mo.ui.button(label="🧫 20. Sex Chromosomes & Homozygosity", on_change=lambda _: set_page("chrom"))
+    btn_menu_lookup = mo.ui.button(label="🔎 21. Variant Lookup & Allele Counts", on_change=lambda _: set_page("lookup"))
+    btn_menu_rnaseq = mo.ui.button(label="📊 22. RNA-seq: Gene Counts & Differential Expression", on_change=lambda _: set_page("rnaseq"))
+    btn_menu_crispr = mo.ui.button(label="✂️ 23. CRISPR Screens (MAGeCK)", on_change=lambda _: set_page("crispr"))
+    btn_menu_meta = mo.ui.button(label="🦠 24. Metagenomics: Species & Abundance", on_change=lambda _: set_page("meta"))
+    btn_menu_amr = mo.ui.button(label="💉 25. Antimicrobial Resistance Genes", on_change=lambda _: set_page("amr"))
+    btn_menu_outbreak = mo.ui.button(label="🌳 26. Outbreaks: Trees, Viral Mutations & PCR", on_change=lambda _: set_page("outbreak"))
+    btn_menu_amplicon = mo.ui.button(label="🌿 27. 16S Amplicons: Taxonomy & Diversity", on_change=lambda _: set_page("amplicon"))
+    btn_menu_tmb = mo.ui.button(label="🎯 28. Tumor Mutational Burden (TMB)", on_change=lambda _: set_page("tmb"))
 
     # What this installation really has: the GPU modules fall back to the CPU.
     _engine = mmg.engine_info()
@@ -316,20 +1593,56 @@ def main_menu(get_page, mmg, mo, set_page):
             {btn_menu_kmercount}
             {btn_menu_convert}
         </div>
+
+        <h4 {_section}>Human genetics — experimental, for teaching and research</h4>
+        <div {_grid}>
+            {btn_menu_guide}
+            {btn_menu_kin}
+            {btn_menu_anc}
+            {btn_menu_findings}
+            {btn_menu_pgx}
+            {btn_menu_chrom}
+            {btn_menu_lookup}
+        </div>
+
+        <h4 {_section}>Research, microbiology and oncology — experimental</h4>
+        <div {_grid}>
+            {btn_menu_rnaseq}
+            {btn_menu_crispr}
+            {btn_menu_meta}
+            {btn_menu_amr}
+            {btn_menu_outbreak}
+            {btn_menu_amplicon}
+            {btn_menu_tmb}
+        </div>
         <p style="color: gray; font-size: 0.85em; margin-top: 40px;">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
     </div>
     """)
 
     menu_screen
     return (
+        btn_menu_amr,
+        btn_menu_outbreak,
+        btn_menu_amplicon,
+        btn_menu_tmb,
+        btn_menu_anc,
         btn_menu_annotation,
+        btn_menu_crispr,
+        btn_menu_meta,
         btn_menu_assembly,
         btn_menu_bloom,
+        btn_menu_chrom,
+        btn_menu_kin,
         btn_menu_cluster,
         btn_menu_convert,
         btn_menu_fastq,
+        btn_menu_findings,
+        btn_menu_guide,
+        btn_menu_lookup,
+        btn_menu_pgx,
         btn_menu_kmercount,
         btn_menu_qc,
+        btn_menu_rnaseq,
         btn_menu_scaffold,
         btn_menu_sort,
         btn_menu_validate,
@@ -341,67 +1654,64 @@ def main_menu(get_page, mmg, mo, set_page):
 
 
 @app.cell
-def qc_page_ui(get_page, glob, mo, set_page):
+def qc_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "qc")
 
     btn_back_qc = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    qc_example = example_picker("qc")
 
-    _files = glob.glob("*.fastq") + glob.glob("*.fastq.gz") + glob.glob("*.fasta") + glob.glob("*.fasta.gz") + glob.glob("*.fa")
-    if not _files: _files = ["No file found"]
-
-    form_qc = mo.ui.form(
-        element=mo.ui.dictionary({
-            "files": mo.ui.multiselect(options=_files, label="🧬 DNA files (several allowed, .gz too):"),
-            "kmer_size": mo.ui.slider(start=21, stop=63, step=2, value=55, label="K-mer size:"),
-            "min_quality": mo.ui.slider(start=0, stop=40, step=1, value=20, label="Minimum mean quality (FASTQ only):")
-        }),
-        bordered=True,
-        submit_button_label="🚀 Start batch ingestion"
-    )
-
-    ui_qc = mo.vstack([
+    _ui = mo.vstack([
         btn_back_qc,
         mo.md("<br>\n\n# 🧬 1. Data Ingestion & QC (Batch / GZIP)"),
         mo.callout(mo.md("The engine reads **several files at once** (for example paired-end R1 and R2) and decompresses `.gz` files on the fly, straight into memory, so nothing extra is written to disk."), kind="info"),
-        form_qc
+        qc_example,
     ])
-
-    ui_qc
-    return btn_back_qc, form_qc, ui_qc
+    _ui
+    return btn_back_qc, qc_example
 
 
 @app.cell
-async def qc_page_backend(asyncio, form_qc, get_page, mmg, mo, pl):
+def qc_page_form(example_for, files_with, get_page, make_form, mo, qc_example):
+    mo.stop(get_page() != "qc")
+    _ex, _about = example_for("qc", None, qc_example.value)
+    form_qc = make_form({
+        "files": mo.ui.multiselect(options=files_with("kmer_input"), value=_ex.get("files", []), label="🧬 DNA files (FASTA or FASTQ; several allowed, .gz too):", full_width=True),
+        "kmer_size": mo.ui.slider(start=21, stop=63, step=2, value=_ex.get("kmer_size", 55), show_value=True, label="K-mer size:"),
+        "min_quality": mo.ui.slider(start=0, stop=40, step=1, value=_ex.get("min_quality", 20), show_value=True, label="Minimum mean quality (FASTQ only):"),
+    }, "🚀 Start batch ingestion")
+    mo.vstack([_x for _x in (_about, form_qc) if _x is not None])
+    return (form_qc,)
+
+
+@app.cell
+async def qc_page_backend(asyncio, beside, chosen, form_qc, get_page, mmg, mo, pl, split_name, warn):
     mo.stop(get_page() != "qc")
     mo.stop(form_qc.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
-    _paths = form_qc.value.get("files", [])
-    mo.stop(not _paths or _paths[0].startswith("No file"), mo.callout(mo.md("⚠️ Select at least one file."), kind="warn"))
+    _paths = [_p for _p in form_qc.value.get("files", []) if chosen(_p)]
+    mo.stop(not _paths, warn("Select at least one file."))
 
     _k = form_qc.value["kmer_size"]
     _min_quality = form_qc.value["min_quality"]
 
-    _is_fasta = any(c.endswith(".fasta") or c.endswith(".fa") or c.endswith(".fasta.gz") for c in _paths)
+    _is_fasta = any(_c.lower().endswith((".fa", ".fasta", ".fna", ".fa.gz", ".fasta.gz", ".fna.gz")) for _c in _paths)
 
     try:
         with mo.status.spinner(f"Processing {len(_paths)} file(s) in parallel (K={_k})..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
 
             if _is_fasta:
-                _kmer_bytes = mmg.read_fasta_batch(_paths, _k)
+                _kmer_bytes = await asyncio.to_thread(mmg.read_fasta_batch, _paths, _k)
             else:
-                _kmer_bytes = mmg.read_fastq_batch(_paths, _min_quality, _k)
+                _kmer_bytes = await asyncio.to_thread(mmg.read_fastq_batch, _paths, _min_quality, _k)
 
         with mo.status.spinner("Saving the k-mers (Arrow file)..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
             _df = pl.DataFrame({"K-mers": [_kmer_bytes]})
 
-            if len(_paths) > 1:
-                _base_name = "Multi_Batch"
-            else:
-                _base_name = _paths[0].split(".")[0]
-
-            _out_name = f"{_base_name}_K{_k}.arrow"
+            # Next to the (first) input: x.fastq.gz -> x_K55.arrow.
+            _base_name = "Multi_Batch" if len(_paths) > 1 else split_name(_paths[0])[0]
+            _out_name = beside(_paths[0], f"{_base_name}_K{_k}.arrow")
             _df.write_ipc(_out_name)
 
         _panel = mo.vstack([
@@ -422,36 +1732,45 @@ async def qc_page_backend(asyncio, form_qc, get_page, mmg, mo, pl):
 
 
 @app.cell
-def cluster_page_ui(get_page, glob, mo, set_page):
+def cluster_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "cluster")
 
     # A global variable (no leading "_"), like on the other screens: marimo only
     # keeps a component alive when it is bound to a global variable. As
     # `_btn_back`, this button did nothing when clicked.
     btn_back_cluster = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    cluster_example = example_picker("cluster")
 
-    _files = glob.glob("*.arrow") + glob.glob("*.txt") + glob.glob("*.fasta")
-    if not _files: _files = ["No file found"]
-
-    form_samples = mo.ui.form(
-        element=mo.ui.dictionary({
-            "sample_a": mo.ui.dropdown(options=_files, label="📂 Sample A (.txt, one 31-mer per line):"),
-            "sample_b": mo.ui.dropdown(options=_files, label="📂 Sample B (.txt, one 31-mer per line):")
-        }), bordered=True, submit_button_label="🚀 1. Load and merge the k-mers"
-    )
-
-    _ui = mo.vstack([btn_back_cluster, mo.md("<br>\n\n# 🧬 Taxonomic Clustering"), form_samples])
+    _ui = mo.vstack([
+        btn_back_cluster,
+        mo.md("<br>\n\n# 🧬 Taxonomic Clustering"),
+        mo.callout(mo.md("**Experimental.** Each k-mer gets a MinHash signature, the signatures are projected to 3 dimensions (PCA) and grouped with HDBSCAN. The grouping has not been validated."), kind="info"),
+        cluster_example,
+    ])
     _ui
-    return btn_back_cluster, form_samples
+    return btn_back_cluster, cluster_example
 
 
 @app.cell
-async def cluster_page_backend(asyncio, form_samples, get_page, mmg, mo, np, pl):
+def cluster_page_form(cluster_example, example_for, files_with, get_page, make_form, mo):
+    mo.stop(get_page() != "cluster")
+    _ex, _about = example_for("cluster", None, cluster_example.value)
+    _files = files_with("arrow", "kmer_text")
+    form_samples = make_form({
+        "sample_a": mo.ui.dropdown(options=_files, value=_ex.get("sample_a"), label="📂 Sample A (.txt, one 31-mer per line):", full_width=True),
+        "sample_b": mo.ui.dropdown(options=_files, value=_ex.get("sample_b"), label="📂 Sample B (.txt, one 31-mer per line):", full_width=True),
+    }, "🚀 1. Load and merge the k-mers")
+    mo.vstack([_x for _x in (_about, form_samples) if _x is not None])
+    return (form_samples,)
+
+
+@app.cell
+async def cluster_page_backend(asyncio, chosen, form_samples, get_page, mmg, mo, np, pl, warn):
     mo.stop(get_page() != "cluster")
     mo.stop(form_samples.value is None, mo.md("🧬 *Waiting for the two samples...*"))
 
     _p_a, _p_b = form_samples.value["sample_a"], form_samples.value["sample_b"]
-    mo.stop(not _p_a or not _p_b or _p_a.startswith("No file"), mo.callout(mo.md("⚠️ Select both samples."), kind="warn"))
+    mo.stop(not chosen(_p_a) or not chosen(_p_b), warn("Select both samples."))
     # An .arrow next to a .txt went to the text reader, which read the binary as lines.
     mo.stop(
         _p_a.endswith(".arrow") != _p_b.endswith(".arrow"),
@@ -459,7 +1778,7 @@ async def cluster_page_backend(asyncio, form_samples, get_page, mmg, mo, np, pl)
     )
 
     with mo.status.spinner("Reading the files, sorting and merging the k-mers..."):
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
 
         if _p_a.endswith(".arrow") and _p_b.endswith(".arrow"):
             _col_a = pl.read_ipc(_p_a).get_column("K-mers")
@@ -475,20 +1794,20 @@ async def cluster_page_backend(asyncio, form_samples, get_page, mmg, mo, np, pl)
             )
             _bytes_a = _col_a.to_numpy().tobytes()
             _bytes_b = _col_b.to_numpy().tobytes()
-            _merged_bytes = mmg.sort_merge_bytes(_bytes_a, _bytes_b)
+            _merged_bytes = await asyncio.to_thread(mmg.sort_merge_bytes, _bytes_a, _bytes_b)
         else:
-            _merged_bytes = mmg.read_and_merge_kmer_files(_p_a, _p_b)
+            _merged_bytes = await asyncio.to_thread(mmg.read_and_merge_kmer_files, _p_a, _p_b)
 
         _merged = np.frombuffer(_merged_bytes, dtype=np.uint64)
 
     with mo.status.spinner("Computing MinHash signatures on the CPU..."):
-        await asyncio.sleep(0.1)
-        _signature_bytes = mmg.minhash_signatures(_merged_bytes, 50)
+        await asyncio.sleep(0)
+        _signature_bytes = await asyncio.to_thread(mmg.minhash_signatures, _merged_bytes, 50)
         signature_matrix = np.frombuffer(_signature_bytes, dtype=np.uint64).reshape(-1, 50)
 
         df_kmers = pl.DataFrame({
             "K-mer (u64)": _merged,
-            "DNA_sequence": mmg.decode_kmers(_merged_bytes, 31)
+            "DNA_sequence": await asyncio.to_thread(mmg.decode_kmers, _merged_bytes, 31)
         })
 
     _panel = mo.md(f"✅ Engine finished. **{df_kmers.height:,}** k-mers ready for clustering.")
@@ -497,13 +1816,11 @@ async def cluster_page_backend(asyncio, form_samples, get_page, mmg, mo, np, pl)
 
 
 @app.cell
-def cluster_page_hdbscan(df_kmers, get_page, mo):
+def cluster_page_hdbscan(df_kmers, get_page, make_form, mo):
     mo.stop(get_page() != "cluster")
 
-    form_cluster = mo.ui.form(
-        element=mo.ui.dictionary({"sample_percent": mo.ui.slider(start=1, stop=100, step=1, value=5, label="HDBSCAN sample (%):")}),
-        bordered=True, submit_button_label="🧬 2. Cluster the k-mers"
-    )
+    form_cluster = make_form({"sample_percent": mo.ui.slider(start=1, stop=100, step=1, value=5, show_value=True, label="HDBSCAN sample (%):")},
+                             "🧬 2. Cluster the k-mers")
 
     form_cluster
     return (form_cluster,)
@@ -536,7 +1853,7 @@ async def cluster_page_result(asyncio, df_kmers, form_cluster, get_page, mo, np,
         """))
 
     with mo.status.spinner(f"Sampling {_sample_size:,} points and computing their geometry..."):
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
 
         _indices = np.arange(_total_rows)
         # Only slice when the sample is smaller than the total.
@@ -567,40 +1884,40 @@ async def cluster_page_result(asyncio, df_kmers, form_cluster, get_page, mo, np,
 
 
 @app.cell
-def assembly_page_ui(get_page, glob, mo, set_page):
+def assembly_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "assembly")
     btn_back_assembly = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    assembly_example = example_picker("assembly")
 
-    # The .arrow files written by Module 1.
-    _files = glob.glob("*.arrow")
-    if not _files: _files = ["No file found (.arrow)"]
-
-    form_assembly = mo.ui.form(
-        element=mo.ui.dictionary({
-            "kmer_file": mo.ui.dropdown(options=_files, label="🧬 K-mer file (.arrow):")
-        }),
-        bordered=True,
-        submit_button_label="🧩 Build the De Bruijn graph and assemble"
-    )
-
-    ui_assembly = mo.vstack([
+    _ui = mo.vstack([
         btn_back_assembly,
         mo.md("<br>\n\n# 🧩 Genome Assembly (De Bruijn)"),
         mo.callout(mo.md("This module takes the k-mers from Module 1, splits each one into a prefix (K-1) and a suffix (K-1), and maps the overlaps in memory, in Rust. The unbranched paths of that graph are the contigs."), kind="info"),
-        form_assembly
+        assembly_example,
     ])
-
-    ui_assembly
-    return btn_back_assembly, form_assembly, ui_assembly
+    _ui
+    return assembly_example, btn_back_assembly
 
 
 @app.cell
-async def assembly_page_backend(asyncio, form_assembly, get_page, mmg, mo, os, pl):
+def assembly_page_form(assembly_example, example_for, files_with, get_page, make_form, mo):
+    mo.stop(get_page() != "assembly")
+    _ex, _about = example_for("assembly", None, assembly_example.value)
+    # The .arrow files written by Module 1.
+    form_assembly = make_form({
+        "kmer_file": mo.ui.dropdown(options=files_with("arrow"), value=_ex.get("kmer_file"), label="🧬 K-mer file (.arrow, written by Module 1):", full_width=True),
+    }, "🧩 Build the De Bruijn graph and assemble")
+    mo.vstack([_x for _x in (_about, form_assembly) if _x is not None])
+    return (form_assembly,)
+
+
+@app.cell
+async def assembly_page_backend(asyncio, beside, chosen, form_assembly, get_page, mmg, mo, os, pl, warn):
     mo.stop(get_page() != "assembly")
     mo.stop(form_assembly.value is None, mo.md("🧩 *Waiting for the assembly button...*"))
 
     _path = form_assembly.value.get("kmer_file")
-    mo.stop(not _path or _path.startswith("No file"), mo.callout(mo.md("⚠️ Select a valid .arrow file."), kind="warn"))
+    mo.stop(not chosen(_path), warn("Select a valid .arrow file."))
 
     try:
         # K comes from the file name (file_K55.arrow -> 55).
@@ -608,19 +1925,19 @@ async def assembly_page_backend(asyncio, form_assembly, get_page, mmg, mo, os, p
         _k_size = int(_k_text)
 
         with mo.status.spinner(f"1/3 Reading the k-mers (K={_k_size})..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
             _df = pl.read_ipc(_path)
             _kmer_bytes = _df.get_column("K-mers").item(0)
 
         with mo.status.spinner("2/3 Rust: building the graph and walking its paths..."):
-            await asyncio.sleep(0.1)
-            _nodes, _edges = mmg.build_debruijn_graph(_kmer_bytes, _k_size)
-            contig_list = mmg.assemble_debruijn(_kmer_bytes, _k_size)
+            await asyncio.sleep(0)
+            _nodes, _edges = await asyncio.to_thread(mmg.build_debruijn_graph, _kmer_bytes, _k_size)
+            contig_list = await asyncio.to_thread(mmg.assemble_debruijn, _kmer_bytes, _k_size)
 
         with mo.status.spinner("3/3 Saving to disk and preparing the table..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
 
-            _out_name = f"MMGEN_Contigs_K{_k_size}.fasta"
+            _out_name = beside(_path, f"MMGEN_Contigs_K{_k_size}.fasta")
             with open(_out_name, "w", encoding="utf-8") as fasta_file:
                 for i, c in enumerate(contig_list):
                     fasta_file.write(f">NODE_{i+1}_length_{len(c)}\n{c}\n")
@@ -655,7 +1972,7 @@ async def assembly_page_backend(asyncio, form_assembly, get_page, mmg, mo, os, p
 
 
 @app.cell
-def variant_page_ui(get_page, get_patient_msg, glob, mo, os, set_page, set_patient_msg):
+def variant_page_ui(example_picker, get_page, get_patient_msg, mo, os, set_page, set_patient_msg):
     mo.stop(get_page() != "variant")
 
     def _back(_):
@@ -689,45 +2006,46 @@ def variant_page_ui(get_page, get_patient_msg, glob, mo, os, set_page, set_patie
         set_patient_msg("✅ Done! 'mutated_patient.fasta' was written to disk with 3 mutations.")
 
     btn_generate = mo.ui.button(label="💉 Generate simulated patient", on_click=lambda _: generate_patient())
+    variant_example = example_picker("variant")
 
-    _files = glob.glob("*.arrow")
-    if not _files: _files = ["No file found (.arrow)"]
-
-    form_variant = mo.ui.form(
-        element=mo.ui.dictionary({
-            "reference": mo.ui.dropdown(options=_files, label="🧬 1. Healthy reference genome (.arrow):"),
-            "patient": mo.ui.dropdown(options=_files, label="🩸 2. Patient sample (.arrow):"),
-            "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Bloom filter size (MB):"),
-            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Hashes per k-mer:")
-        }),
-        bordered=True,
-        submit_button_label="🔍 3. Run the search"
-    )
-
-    ui_variant = mo.vstack([
+    _ui = mo.vstack([
         btn_back_variant,
         mo.md("<br>\n\n# ⚠️ Variant Calling (SNPs)"),
-        mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below creates a simulated patient from `ecoli.fasta`, with 3 planted mutations; run it through Module 1 to get its `.arrow` file."), kind="info"),
+        mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below creates a simulated patient from `ecoli.fasta`, with 3 planted mutations; run it through Module 1 to get its `.arrow` file. Or pick the example: a small genome and a patient, ready as k-mers."), kind="info"),
         btn_generate,
         # The button's feedback (an empty one gave "****", which Markdown draws
         # as a horizontal rule).
         mo.md(f"**{get_patient_msg()}**" if get_patient_msg() else ""),
-        form_variant
+        variant_example,
     ])
-
-    ui_variant
-    return btn_back_variant, btn_generate, form_variant, generate_patient, ui_variant
+    _ui
+    return btn_back_variant, btn_generate, generate_patient, variant_example
 
 
 @app.cell
-async def variant_page_backend(asyncio, form_variant, get_page, mmg, mo, pl):
+def variant_page_form(example_for, files_with, get_page, make_form, mo, variant_example):
+    mo.stop(get_page() != "variant")
+    _ex, _about = example_for("variant", None, variant_example.value)
+    _files = files_with("arrow")
+    form_variant = make_form({
+        "reference": mo.ui.dropdown(options=_files, value=_ex.get("reference"), label="🧬 1. Healthy reference genome (.arrow):", full_width=True),
+        "patient": mo.ui.dropdown(options=_files, value=_ex.get("patient"), label="🩸 2. Patient sample (.arrow):", full_width=True),
+        "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=_ex.get("filter_mb", 16), show_value=True, label="Bloom filter size (MB):"),
+        "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=_ex.get("num_hashes", 5), show_value=True, label="Hashes per k-mer:"),
+    }, "🔍 3. Run the search")
+    mo.vstack([_x for _x in (_about, form_variant) if _x is not None])
+    return (form_variant,)
+
+
+@app.cell
+async def variant_page_backend(asyncio, chosen, form_variant, get_page, mmg, mo, pl, warn):
     mo.stop(get_page() != "variant")
     mo.stop(form_variant.value is None, mo.md("🧪 *Waiting for the settings...*"))
 
     _ref = form_variant.value.get("reference")
     _pat = form_variant.value.get("patient")
 
-    mo.stop(not _ref or not _pat or _ref.startswith("No file"), mo.callout(mo.md("⚠️ Select both files."), kind="warn"))
+    mo.stop(not chosen(_ref) or not chosen(_pat), warn("Select both files."))
     mo.stop(_ref == _pat, mo.callout(mo.md("⚠️ The reference and the patient cannot be the same file!"), kind="warn"))
 
     _k_text = _ref.split("_K")[-1].split(".arrow")[0]
@@ -739,18 +2057,18 @@ async def variant_page_backend(asyncio, form_variant, get_page, mmg, mo, pl):
 
     try:
         with mo.status.spinner("1/3 Loading the k-mers..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
             _ref_bytes = pl.read_ipc(_ref).get_column("K-mers").item(0)
             _pat_bytes = pl.read_ipc(_pat).get_column("K-mers").item(0)
 
         with mo.status.spinner(f"2/3 Building the reference Bloom filter on the {_where}..."):
-            await asyncio.sleep(0.1)
-            _bloom_bytes = mmg.build_bloom_filter(_ref_bytes, _mb, _hashes)
+            await asyncio.sleep(0)
+            _bloom_bytes = await asyncio.to_thread(mmg.build_bloom_filter, _ref_bytes, _mb, _hashes)
 
         with mo.status.spinner(f"3/3 Looking for k-mers found only in the patient ({_where})..."):
-            await asyncio.sleep(0.1)
-            _mutation_bytes = mmg.extract_mutations(_pat_bytes, _bloom_bytes, _hashes)
-            _mutated_seqs = mmg.decode_kmers_128(_mutation_bytes, _k_size)
+            await asyncio.sleep(0)
+            _mutation_bytes = await asyncio.to_thread(mmg.extract_mutations, _pat_bytes, _bloom_bytes, _hashes)
+            _mutated_seqs = await asyncio.to_thread(mmg.decode_kmers_128, _mutation_bytes, _k_size)
 
         _total_mutations = len(_mutated_seqs)
         _preview = _mutated_seqs[:15] if _total_mutations > 0 else ["No mutation found."]
@@ -775,31 +2093,35 @@ The patient's {len(_pat_bytes) // 16:,} k-mers were checked against the referenc
 
 
 @app.cell
-def annotation_page_ui(get_page, mo, set_page):
+def annotation_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "annotation")
     btn_back_annotation = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    annotation_example = example_picker("annotation")
 
-    form_annotation = mo.ui.form(
-        element=mo.ui.dictionary({
-            "dna": mo.ui.text_area(
-                label="🧬 Paste the mutated DNA from Module 4 (or a whole contig):",
-                # One of the mutated sequences found in the E. coli example.
-                value="ATTTACCCTTGCTTTCACATAATCTGCCCGCCGATTTTGCTGCGTTGCGTAAATA"
-            )
-        }),
-        bordered=True,
-        submit_button_label="⚙️ Translate to protein"
-    )
-
-    ui_annotation = mo.vstack([
+    _ui = mo.vstack([
         btn_back_annotation,
         mo.md("<br>\n\n# 📘 Functional Annotation (Translation)"),
         mo.callout(mo.md("DNA alone is only an instruction manual. To see whether a mutation matters, we translate the code three letters at a time (codons) and check whether the **protein** changed. Paste a sequence below to try it."), kind="info"),
-        form_annotation
+        annotation_example,
     ])
+    _ui
+    return annotation_example, btn_back_annotation
 
-    ui_annotation
-    return btn_back_annotation, form_annotation, ui_annotation
+
+@app.cell
+def annotation_page_form(annotation_example, example_for, get_page, make_form, mo):
+    mo.stop(get_page() != "annotation")
+    _ex, _about = example_for("annotation", None, annotation_example.value)
+    form_annotation = make_form({
+        "dna": mo.ui.text_area(
+            label="🧬 Paste the mutated DNA from Module 4 (or a whole contig):",
+            # One of the mutated sequences found in the E. coli example.
+            value=_ex.get("dna", "ATTTACCCTTGCTTTCACATAATCTGCCCGCCGATTTTGCTGCGTTGCGTAAATA"),
+            full_width=True,
+        ),
+    }, "⚙️ Translate to protein")
+    mo.vstack([_x for _x in (_about, form_annotation) if _x is not None])
+    return (form_annotation,)
 
 
 @app.cell
@@ -812,9 +2134,9 @@ async def annotation_page_backend(asyncio, form_annotation, get_page, mmg, mo):
 
     try:
         with mo.status.spinner("Translating DNA into protein in Rust (Rayon, multi-core)..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
             # Rust takes a list of sequences and returns a list of proteins.
-            _results = mmg.translate_proteins([_dna])
+            _results = await asyncio.to_thread(mmg.translate_proteins, [_dna])
             _protein = _results[0]
 
         # Make the stop codons (*) stand out. (&#42; and not "*": with asterisks
@@ -841,39 +2163,41 @@ async def annotation_page_backend(asyncio, form_annotation, get_page, mmg, mo):
 
 
 @app.cell
-def bloom_page_ui(get_page, glob, mo, set_page):
+def bloom_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "bloom")
     btn_back_bloom = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
-
-    _files = glob.glob("*.arrow")
-    _options = _files if _files else ["No file found (.arrow)"]
-
-    form_bloom = mo.ui.form(
-        element=mo.ui.dictionary({
-            "kmer_file": mo.ui.dropdown(options=_options, label="🧬 Genome (.arrow):"),
-            "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=16, label="Filter size (MB):"),
-            "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=5, label="Number of hashes:")
-        }),
-        bordered=True,
-        submit_button_label="🔍 Build the Bloom filter"
-    )
+    bloom_example = example_picker("bloom")
 
     _ui = mo.vstack([
         btn_back_bloom,
         mo.md("<br>\n\n# 🔍 Probabilistic Bloom Filters"),
-        form_bloom
+        mo.callout(mo.md("A Bloom filter answers \"have I seen this k-mer?\" in a fixed amount of memory: each k-mer sets a few bits, chosen by its hashes. It never misses a k-mer it holds, but the fuller it gets, the more often it says yes to one it does not hold (a false positive)."), kind="info"),
+        bloom_example,
     ])
     _ui
-    return btn_back_bloom, form_bloom
+    return bloom_example, btn_back_bloom
 
 
 @app.cell
-async def bloom_page_backend(asyncio, form_bloom, get_page, mmg, mo, np, pl):
+def bloom_page_form(bloom_example, example_for, files_with, get_page, make_form, mo):
+    mo.stop(get_page() != "bloom")
+    _ex, _about = example_for("bloom", None, bloom_example.value)
+    form_bloom = make_form({
+        "kmer_file": mo.ui.dropdown(options=files_with("arrow"), value=_ex.get("kmer_file"), label="🧬 Genome (.arrow):", full_width=True),
+        "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=_ex.get("filter_mb", 16), show_value=True, label="Filter size (MB):"),
+        "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=_ex.get("num_hashes", 5), show_value=True, label="Number of hashes:"),
+    }, "🔍 Build the Bloom filter")
+    mo.vstack([_x for _x in (_about, form_bloom) if _x is not None])
+    return (form_bloom,)
+
+
+@app.cell
+async def bloom_page_backend(asyncio, chosen, form_bloom, get_page, mmg, mo, np, pl, warn):
     mo.stop(get_page() != "bloom")
     mo.stop(form_bloom.value is None, mo.md("🔍 *Set the parameters above and click 'Build'...*"))
 
     _path = form_bloom.value.get("kmer_file")
-    mo.stop(not _path or _path.startswith("No file"), mo.md("⚠️ Select a valid .arrow file."))
+    mo.stop(not chosen(_path), warn("Select a valid .arrow file."))
 
     _filter_mb = form_bloom.value["filter_mb"]
     _num_hashes = form_bloom.value["num_hashes"]
@@ -881,12 +2205,12 @@ async def bloom_page_backend(asyncio, form_bloom, get_page, mmg, mo, np, pl):
     _where = "GPU" if mmg.engine_info()["gpu"] else "CPU"
 
     with mo.status.spinner(f"🔥 Building the filter on the {_where}..."):
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
         _df = pl.read_ipc(_path)
         _kmer_bytes = _df.get_column("K-mers").item(0)
         _total_kmers = len(_kmer_bytes) // 16
 
-        _bloom_bytes = mmg.build_bloom_filter(_kmer_bytes, _filter_mb, _num_hashes)
+        _bloom_bytes = await asyncio.to_thread(mmg.build_bloom_filter, _kmer_bytes, _filter_mb, _num_hashes)
 
         # Statistics
         _arr_8 = np.frombuffer(_bloom_bytes, dtype=np.uint8)
@@ -906,47 +2230,47 @@ async def bloom_page_backend(asyncio, form_bloom, get_page, mmg, mo, np, pl):
 
 
 @app.cell
-def scaffold_page_ui(get_page, glob, mo, set_page):
+def scaffold_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "scaffold")
     btn_back_scaffold = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    scaffold_example = example_picker("scaffold")
 
-    _files = glob.glob("*.fasta") + glob.glob("*.fa")
-    if not _files: _files = ["No file found (FASTA)"]
-
-    form_scaffold = mo.ui.form(
-        element=mo.ui.dictionary({
-            "contigs_fasta": mo.ui.dropdown(options=_files, label="🧩 Contigs file (FASTA):"),
-            # With K=55 in the assembly, the contigs overlap by exactly K-1 (54).
-            "overlap": mo.ui.slider(start=21, stop=100, step=1, value=54, label="Exact overlap at the ends (bases):")
-        }),
-        bordered=True,
-        submit_button_label="🏗️ Close the genome (scaffolding)"
-    )
-
-    ui_scaffold = mo.vstack([
+    _ui = mo.vstack([
         btn_back_scaffold,
         mo.md("<br>\n\n# 🧬 Genome Scaffolding"),
         mo.callout(mo.md("The De Bruijn graph produced contigs. Scaffolding takes those blocks and stitches them together wherever their ends overlap exactly, trying to rebuild the original chromosome, circular ones included."), kind="info"),
-        form_scaffold
+        scaffold_example,
     ])
-
-    ui_scaffold
-    return btn_back_scaffold, form_scaffold, ui_scaffold
+    _ui
+    return btn_back_scaffold, scaffold_example
 
 
 @app.cell
-async def scaffold_page_backend(asyncio, form_scaffold, get_page, mmg, mo):
+def scaffold_page_form(example_for, files_with, get_page, make_form, mo, scaffold_example):
+    mo.stop(get_page() != "scaffold")
+    _ex, _about = example_for("scaffold", None, scaffold_example.value)
+    form_scaffold = make_form({
+        "contigs_fasta": mo.ui.dropdown(options=files_with("plain_fasta"), value=_ex.get("contigs_fasta"), label="🧩 Contigs file (FASTA):", full_width=True),
+        # With K=55 in the assembly, the contigs overlap by exactly K-1 (54).
+        "overlap": mo.ui.slider(start=21, stop=100, step=1, value=_ex.get("overlap", 54), show_value=True, label="Exact overlap at the ends (bases):"),
+    }, "🏗️ Close the genome (scaffolding)")
+    mo.vstack([_x for _x in (_about, form_scaffold) if _x is not None])
+    return (form_scaffold,)
+
+
+@app.cell
+async def scaffold_page_backend(asyncio, chosen, form_scaffold, get_page, mmg, mo, warn):
     mo.stop(get_page() != "scaffold")
     mo.stop(form_scaffold.value is None, mo.md("🏗️ *Waiting for a FASTA file...*"))
 
     _path = form_scaffold.value.get("contigs_fasta")
     _overlap = form_scaffold.value.get("overlap")
 
-    mo.stop(not _path or _path.startswith("No file"), mo.callout(mo.md("⚠️ Select a valid FASTA file produced by Module 3."), kind="warn"))
+    mo.stop(not chosen(_path), warn("Select a valid FASTA file produced by Module 3."))
 
     try:
         with mo.status.spinner("Reading the contigs..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
             with open(_path, "r") as f:
                 lines = f.readlines()
 
@@ -963,8 +2287,8 @@ async def scaffold_page_backend(asyncio, form_scaffold, get_page, mmg, mo):
                 contigs.append("".join(current))
 
         with mo.status.spinner(f"Stitching ends with an exact overlap of {_overlap} bases, in Rust..."):
-            await asyncio.sleep(0.1)
-            scaffolds, circular = mmg.build_scaffolds(contigs, _overlap)
+            await asyncio.sleep(0)
+            scaffolds, circular = await asyncio.to_thread(mmg.build_scaffolds, contigs, _overlap)
 
         _panel = mo.vstack([
             mo.callout(mo.md(f"""
@@ -987,45 +2311,44 @@ async def scaffold_page_backend(asyncio, form_scaffold, get_page, mmg, mo):
 
 
 @app.cell
-def vcf_page_ui(get_page, glob, mo, set_page):
+def vcf_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "vcf")
     btn_back_vcf = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    vcf_example = example_picker("vcf")
 
-    _files = sorted(glob.glob("*.vcf") + glob.glob("*.vcf.gz"))
-    if not _files:
-        _files = ["No file found (put the VCF files in the project folder)"]
-
-    form_vcf = mo.ui.form(
-        element=mo.ui.dictionary({
-            "files": mo.ui.multiselect(options=_files, label="🗄️ Files (VCF, VCF.GZ):"),
-            "sort_by": mo.ui.dropdown(options=["POS", "QUAL"], value="POS", label="📊 Sort by:"),
-            "output_name": mo.ui.text(value="Merged_Sorted.vcf", label="💾 Output file name:")
-        }),
-        bordered=True,
-        submit_button_label="🚀 Start the Multimerge engine"
-    )
-
-    ui_vcf = mo.vstack([
+    _ui = mo.vstack([
         btn_back_vcf,
         mo.md("<br>\n\n# 🗄️ 8. VCF Multimerge & Sorting"),
         mo.callout(mo.md("Bulk sorting of genetic variants. Select one or more `.vcf` or `.vcf.gz` files: the engine merges them all into a single output, with a stable sort, for files of any size (what does not fit in memory is sorted in runs on disk)."), kind="info"),
-        form_vcf
+        vcf_example,
     ])
-
-    ui_vcf
-    return btn_back_vcf, form_vcf, ui_vcf
+    _ui
+    return btn_back_vcf, vcf_example
 
 
 @app.cell
-async def vcf_page_backend(asyncio, form_vcf, get_page, mmg, mo, os):
+def vcf_page_form(example_for, files_with, get_page, make_form, mo, vcf_example):
+    mo.stop(get_page() != "vcf")
+    _ex, _about = example_for("vcf", None, vcf_example.value)
+    form_vcf = make_form({
+        "files": mo.ui.multiselect(options=files_with("vcf_merge"), value=_ex.get("files", []), label="🗄️ Files (VCF, VCF.GZ):", full_width=True),
+        "sort_by": mo.ui.dropdown(options=["POS", "QUAL"], value=_ex.get("sort_by", "POS"), label="📊 Sort by:", full_width=True),
+        "output_name": mo.ui.text(value=_ex.get("output_name", "Merged_Sorted.vcf"), label="💾 Output file name:", full_width=True),
+    }, "🚀 Start the Multimerge engine")
+    mo.vstack([_x for _x in (_about, form_vcf) if _x is not None])
+    return (form_vcf,)
+
+
+@app.cell
+async def vcf_page_backend(asyncio, chosen, form_vcf, get_page, mmg, mo, os, warn):
     mo.stop(get_page() != "vcf")
     mo.stop(form_vcf.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
-    _paths = list(form_vcf.value.get("files", []))
+    _paths = [_p for _p in form_vcf.value.get("files", []) if chosen(_p)]
     _sort_by = form_vcf.value.get("sort_by")
     _output = (form_vcf.value.get("output_name") or "").strip() or "Merged_Sorted.vcf"
 
-    mo.stop(not _paths or _paths[0].startswith("No file"), mo.callout(mo.md("⚠️ Select at least one file."), kind="warn"))
+    mo.stop(not _paths, warn("Select at least one file."))
     # The result of an earlier run shows up in the list (it is a .vcf in the same
     # folder): reading and writing the same file would destroy the data.
     mo.stop(
@@ -1035,7 +2358,7 @@ async def vcf_page_backend(asyncio, form_vcf, get_page, mmg, mo, os):
 
     try:
         with mo.status.spinner(f"Merging and sorting {len(_paths)} file(s) in the Multimerge engine..."):
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
 
             # ONE call with ALL the files: the engine merges and sorts them with a
             # stable sort. (It used to be one CLI call per file, all with the same
@@ -1091,13 +2414,13 @@ def sort_page_ui(get_page, mo, set_page):
             "coverage: how much of each A is covered by B (bedtools coverage)": "coverage",
             "slop: grow every interval (bedtools slop)": "slop",
         },
-        value="merge: join overlapping or nearby intervals (bedtools merge)", label="Operation:",
+        value="merge: join overlapping or nearby intervals (bedtools merge)", label="Operation:", full_width=True,
     )
 
     _ui = mo.vstack([
         btn_back_sort,
         mo.md("<br>\n\n# 📏 9. Sorting, Indexing & Intervals"),
-        mo.callout(mo.md("Sort and merge VCF, BED, GFF/GTF and SAM/BAM files of any size (what does not fit in memory is sorted in runs on disk); build the `.tbi` / `.bai` index of a sorted file and read only the region you ask for; or run the interval operations of bedtools on BED files, which do not need to be sorted. Results are written to this folder."), kind="info"),
+        mo.callout(mo.md("Sort and merge VCF, BED, GFF/GTF and SAM/BAM files of any size (what does not fit in memory is sorted in runs on disk); build the `.tbi` / `.bai` index of a sorted file and read only the region you ask for; or run the interval operations of bedtools on BED files, which do not need to be sorted. Results are written next to their input."), kind="info"),
         mo.hstack([sort_task, btn_refresh_sort], justify="space-between", align="center"),
     ])
     _ui
@@ -1105,11 +2428,21 @@ def sort_page_ui(get_page, mo, set_page):
 
 
 @app.cell
-def sort_page_form(btn_refresh_sort, files_with, get_page, interval_op, make_form, mo, real_files, sort_task):
+def sort_page_example(example_picker, get_page, interval_op, mo, sort_task):
+    mo.stop(get_page() != "sort")
+    # The operation is picked here, above the examples of that operation.
+    _intervals = sort_task.value == "Interval operations (BED)"
+    sort_example = example_picker("sort", interval_op.value if _intervals else sort_task.value)
+    mo.vstack([interval_op, sort_example] if _intervals else [sort_example])
+    return (sort_example,)
+
+
+@app.cell
+def sort_page_form(btn_refresh_sort, example_for, files_with, get_page, interval_op, label_of, make_form, mo, real_files, sort_example, sort_task):
     mo.stop(get_page() != "sort")
     btn_refresh_sort  # a click re-runs this cell, which lists the folder again
     _task = sort_task.value
-    _above = []
+    _ex, _about = example_for("sort", interval_op.value if _task == "Interval operations (BED)" else _task, sort_example.value)
 
     if _task == "Sort & merge":
         _orders = {
@@ -1120,47 +2453,48 @@ def sort_page_form(btn_refresh_sort, files_with, get_page, interval_op, make_for
         }
         for _fai in real_files("genome"):
             _orders[f"the order of {_fai}"] = _fai
+        _by = {"position": "position", "quality (VCF, highest first)": "quality", "read name (SAM)": "name"}
         form_sort = make_form({
-            "files": mo.ui.multiselect(options=files_with("vcf", "bed", "gff", "sam"), label="Files (several are merged into one output):"),
-            "by": mo.ui.dropdown(options={"position": "position", "quality (VCF, highest first)": "quality", "read name (SAM)": "name"},
-                                 value="position", label="Sort by:"),
-            "order": mo.ui.dropdown(options=_orders, value="default: the header for VCF and SAM, lexical for BED and GFF", label="Chromosome order:"),
-            "memory": mo.ui.number(start=0, stop=1_048_576, step=64, value=0, label="Memory budget in MB (0 = half of the free RAM):"),
-            "index": mo.ui.checkbox(value=False, label="Also write the index (.tbi for a .gz output, .bai for a .bam output)"),
-            "output": mo.ui.text(placeholder="blank: <first file>.sorted.<same extension>", label="Output file:", full_width=True),
+            "files": mo.ui.multiselect(options=files_with("vcf", "bed", "gff", "sam"), value=_ex.get("files", []), label="Files (several are merged into one output):", full_width=True),
+            "by": mo.ui.dropdown(options=_by, value=label_of(_by, _ex.get("by"), "position"), label="Sort by:", full_width=True),
+            "order": mo.ui.dropdown(options=_orders, value=label_of(_orders, _ex.get("order"), "default: the header for VCF and SAM, lexical for BED and GFF"), label="Chromosome order:", full_width=True),
+            "memory": mo.ui.number(start=0, stop=1_048_576, step=64, value=_ex.get("memory", 0), label="Memory budget in MB (0 = half of the free RAM):"),
+            "index": mo.ui.checkbox(value=_ex.get("index", False), label="Also write the index (.tbi for a .gz output, .bai for a .bam output)"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <first file>.sorted.<same extension>", label="Output file:", full_width=True),
         }, "🚀 Sort")
     elif _task == "Index & query a region":
+        _indexed = files_with("indexed")
         form_sort = make_form({
-            "file": mo.ui.dropdown(options=files_with("indexed"), label="Sorted file (a .gz written as BGZF, or a .bam):"),
-            "regions": mo.ui.text(placeholder="chr1:1000000-2000000, chr2", label="Region(s), 1-based, end included (blank: only build the index):", full_width=True),
-            "output": mo.ui.text(placeholder="blank: show the records here", label="Save the records to:", full_width=True),
+            "file": mo.ui.dropdown(options=_indexed, value=_ex.get("file"), label="Sorted file (a .gz written as BGZF, or a .bam):", full_width=True),
+            "regions": mo.ui.text(value=_ex.get("regions", ""), placeholder="chr1:1000000-2000000, chr2", label="Region(s), 1-based, end included (blank: only build the index):", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: show the records here", label="Save the records to:", full_width=True),
         }, "🔎 Index and query")
     else:
         _op = interval_op.value
         _bed = files_with("bed")
-        _fields = {"a": mo.ui.multiselect(options=_bed, label="A: BED file(s):")}
+        _fields = {"a": mo.ui.multiselect(options=_bed, value=_ex.get("a", []), label="A: BED file(s):", full_width=True)}
         if _op in ("intersect", "subtract", "closest", "coverage"):
-            _fields["b"] = mo.ui.multiselect(options=_bed, label="B: BED file(s):")
+            _fields["b"] = mo.ui.multiselect(options=_bed, value=_ex.get("b", []), label="B: BED file(s):", full_width=True)
         if _op == "intersect":
-            _fields["mode"] = mo.ui.dropdown(options={
+            _modes = {
                 "regions: the part of each A that overlaps B": "regions",
                 "unique: the lines of A that touch B (-u)": "unique",
                 "absent: the lines of A that do not touch B (-v)": "absent",
-            }, value="regions: the part of each A that overlaps B", label="Write:")
+            }
+            _fields["mode"] = mo.ui.dropdown(options=_modes, value=label_of(_modes, _ex.get("mode"), "regions: the part of each A that overlaps B"), label="Write:", full_width=True)
         if _op == "subtract":
-            _fields["whole"] = mo.ui.checkbox(value=False, label="Drop every A that B touches, instead of clipping it (-A)")
+            _fields["whole"] = mo.ui.checkbox(value=_ex.get("whole", False), label="Drop every A that B touches, instead of clipping it (-A)")
         if _op == "merge":
-            _fields["distance"] = mo.ui.number(start=0, stop=10**9, step=1, value=0, label="Also join intervals up to this many bases apart (-d):")
+            _fields["distance"] = mo.ui.number(start=0, stop=10**9, step=1, value=_ex.get("distance", 0), label="Also join intervals up to this many bases apart (-d):")
         if _op in ("complement", "slop"):
-            _fields["genome"] = mo.ui.dropdown(options=files_with("genome"), label="Genome file (.fai, or chromosome sizes: name and length per line):")
+            _fields["genome"] = mo.ui.dropdown(options=files_with("genome"), value=_ex.get("genome"), label="Genome file (.fai, or chromosome sizes: name and length per line):", full_width=True)
         if _op == "slop":
-            _fields["left"] = mo.ui.number(start=0, stop=10**9, step=1, value=100, label="Bases to add before the start:")
-            _fields["right"] = mo.ui.number(start=0, stop=10**9, step=1, value=100, label="Bases to add after the end:")
-        _fields["output"] = mo.ui.text(placeholder=f"blank: <first A file>.{_op}.<same extension>", label="Output file:", full_width=True)
+            _fields["left"] = mo.ui.number(start=0, stop=10**9, step=1, value=_ex.get("left", 100), label="Bases to add before the start:")
+            _fields["right"] = mo.ui.number(start=0, stop=10**9, step=1, value=_ex.get("right", 100), label="Bases to add after the end:")
+        _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <first A file>.{_op}.<same extension>", label="Output file:", full_width=True)
         form_sort = make_form(_fields, f"🚀 Run {_op}")
-        _above = [interval_op]
 
-    mo.vstack(_above + [form_sort])
+    mo.vstack([_x for _x in (_about, form_sort) if _x is not None])
     return (form_sort,)
 
 
@@ -1340,35 +2674,44 @@ def validate_page_ui(get_page, mo, set_page):
 
 
 @app.cell
-def validate_page_form(btn_refresh_validate, files_with, get_page, make_form, mo, real_files, validate_task):
+def validate_page_example(example_picker, get_page, mo, validate_task):
+    mo.stop(get_page() != "validate")
+    validate_example = example_picker("validate", validate_task.value)
+    validate_example
+    return (validate_example,)
+
+
+@app.cell
+def validate_page_form(btn_refresh_validate, example_for, files_with, get_page, label_of, make_form, mo, real_files, validate_example, validate_task):
     mo.stop(get_page() != "validate")
     btn_refresh_validate  # a click re-runs this cell, which lists the folder again
     _task = validate_task.value
+    _ex, _about = example_for("validate", _task, validate_example.value)
 
     if _task == "Validate a file":
         form_validate = make_form({
-            "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam", "fasta", "fastq"), label="File:"),
-            "max_lines": mo.ui.number(start=0, stop=10**12, step=1000, value=0, label="Check only the first N lines (0 = the whole file):"),
+            "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam", "fasta", "fastq"), value=_ex.get("file"), label="File:", full_width=True),
+            "max_lines": mo.ui.number(start=0, stop=10**12, step=1000, value=_ex.get("max_lines", 0), label="Check only the first N lines (0 = the whole file):"),
         }, "🩺 Validate")
     elif _task.startswith("Rename"):
         _maps = {"(none)": "none"}
         for _m in real_files("mapping"):
             _maps[_m] = _m
+        _styles = {"chr1, chrX, chrM (UCSC)": "chr", "1, X, MT (Ensembl, NCBI)": "no_chr"}
         form_validate = make_form({
-            "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam"), label="File:"),
-            "style": mo.ui.dropdown(options={"chr1, chrX, chrM (UCSC)": "chr", "1, X, MT (Ensembl, NCBI)": "no_chr"},
-                                    value="chr1, chrX, chrM (UCSC)", label="Rename to:"),
-            "mapping": mo.ui.dropdown(options=_maps, value="(none)", label="Mapping file for other names (two columns: name, new name):"),
-            "output": mo.ui.text(placeholder="blank: <file>.chr.<same extension> (or .nochr)", label="Output file:", full_width=True),
+            "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam"), value=_ex.get("file"), label="File:", full_width=True),
+            "style": mo.ui.dropdown(options=_styles, value=label_of(_styles, _ex.get("style"), "chr1, chrX, chrM (UCSC)"), label="Rename to:", full_width=True),
+            "mapping": mo.ui.dropdown(options=_maps, value=label_of(_maps, _ex.get("mapping"), "(none)"), label="Mapping file for other names (two columns: name, new name):", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.chr.<same extension> (or .nochr)", label="Output file:", full_width=True),
         }, "🔁 Rename")
     else:
         _refs = files_with("vcf", "sam", "gff", "genome")
         form_validate = make_form({
-            "a": mo.ui.dropdown(options=_refs, label="File A:"),
-            "b": mo.ui.dropdown(options=_refs, label="File B:"),
+            "a": mo.ui.dropdown(options=_refs, value=_ex.get("a"), label="File A:", full_width=True),
+            "b": mo.ui.dropdown(options=_refs, value=_ex.get("b"), label="File B:", full_width=True),
         }, "⚖️ Compare")
 
-    form_validate
+    mo.vstack([_x for _x in (_about, form_validate) if _x is not None])
     return (form_validate,)
 
 
@@ -1502,17 +2845,26 @@ def vcftools_page_ui(get_page, mo, set_page):
 
 
 @app.cell
-def vcftools_page_form(btn_refresh_vcftools, files_with, get_page, make_form, mo, real_files, vcftools_task):
+def vcftools_page_example(example_picker, get_page, mo, vcftools_task):
+    mo.stop(get_page() != "vcftools")
+    vcftools_example = example_picker("vcftools", vcftools_task.value)
+    vcftools_example
+    return (vcftools_example,)
+
+
+@app.cell
+def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, get_page, label_of, make_form, mo, real_files, vcftools_example, vcftools_task):
     mo.stop(get_page() != "vcftools")
     btn_refresh_vcftools  # a click re-runs this cell, which lists the folder again
     _task = vcftools_task.value
+    _ex, _about = example_for("vcftools", _task, vcftools_example.value)
     _vcfs = files_with("vcf")
-    _above = []
+    _above = [_about] if _about is not None else []
 
     if _task == "Statistics":
-        form_vcftools = make_form({"file": mo.ui.dropdown(options=_vcfs, label="VCF file:")}, "📊 Count")
+        form_vcftools = make_form({"file": mo.ui.dropdown(options=_vcfs, value=_ex.get("file"), label="VCF file:", full_width=True)}, "📊 Count")
     elif _task == "Filter":
-        _above = [mo.accordion({"How to write an expression": mo.md(
+        _above += [mo.accordion({"How to write an expression": mo.md(
             "Fields: `QUAL`, `POS`, `N_ALT` (numbers); `CHROM`, `ID`, `REF`, `ALT`, `FILTER`, `TYPE` (text); `INFO/KEY` "
             "(alone, it tests that the key is present). Operators: `==` `!=` `<` `<=` `>` `>=`, `&&` (and), `||` (or), `!` (not) "
             "and parentheses. A comparison with a missing value is false.\n\n"
@@ -1522,22 +2874,22 @@ def vcftools_page_form(btn_refresh_vcftools, files_with, get_page, make_form, mo
             "Examples: `QUAL >= 30 && FILTER == \"PASS\"` · `TYPE == \"snp\" && INFO/DP > 10` · `!(INFO/AF < 0.01)`"
         )})]
         form_vcftools = make_form({
-            "file": mo.ui.dropdown(options=_vcfs, label="VCF file:"),
-            "expression": mo.ui.text(placeholder='QUAL >= 30 && FILTER == "PASS"', label="Expression (blank: no expression):", full_width=True),
-            "regions": mo.ui.text(placeholder="chr1:1000000-2000000, chrX", label="Regions (blank: the whole genome):", full_width=True),
-            "samples": mo.ui.text(placeholder="sample1, sample2", label="Samples to keep, in this order (blank: all of them):", full_width=True),
-            "output": mo.ui.text(placeholder="blank: <file>.filtered.<same extension>", label="Output file:", full_width=True),
+            "file": mo.ui.dropdown(options=_vcfs, value=_ex.get("file"), label="VCF file:", full_width=True),
+            "expression": mo.ui.text(value=_ex.get("expression", ""), placeholder='QUAL >= 30 && FILTER == "PASS"', label="Expression (blank: no expression):", full_width=True),
+            "regions": mo.ui.text(value=_ex.get("regions", ""), placeholder="chr1:1000000-2000000, chrX", label="Regions (blank: the whole genome):", full_width=True),
+            "samples": mo.ui.text(value=_ex.get("samples", ""), placeholder="sample1, sample2", label="Samples to keep, in this order (blank: all of them):", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.filtered.<same extension>", label="Output file:", full_width=True),
         }, "🔍 Filter")
     else:
         _refs = {"(none: split and trim only, no left-alignment)": "none"}
         for _f in real_files("fasta"):
             _refs[_f] = _f
         form_vcftools = make_form({
-            "file": mo.ui.dropdown(options=_vcfs, label="VCF file:"),
-            "split": mo.ui.checkbox(value=True, label="Split multiallelic sites into one record per allele"),
-            "reference": mo.ui.dropdown(options=_refs, value="(none: split and trim only, no left-alignment)",
-                                        label="Reference genome (FASTA), to check REF and left-align the indels:"),
-            "output": mo.ui.text(placeholder="blank: <file>.norm.<same extension>", label="Output file:", full_width=True),
+            "file": mo.ui.dropdown(options=_vcfs, value=_ex.get("file"), label="VCF file:", full_width=True),
+            "split": mo.ui.checkbox(value=_ex.get("split", True), label="Split multiallelic sites into one record per allele"),
+            "reference": mo.ui.dropdown(options=_refs, value=label_of(_refs, _ex.get("reference"), "(none: split and trim only, no left-alignment)"),
+                                        label="Reference genome (FASTA), to check REF and left-align the indels:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.norm.<same extension>", label="Output file:", full_width=True),
         }, "🧹 Normalize")
 
     mo.vstack(_above + [form_vcftools])
@@ -1674,42 +3026,52 @@ def fastq_page_ui(get_page, mo, set_page):
 
 
 @app.cell
-def fastq_page_form(btn_refresh_fastq, fastq_task, files_with, get_page, make_form, mo, real_files):
+def fastq_page_example(example_picker, fastq_task, get_page, mo):
+    mo.stop(get_page() != "fastq")
+    fastq_example = example_picker("fastq", fastq_task.value)
+    fastq_example
+    return (fastq_example,)
+
+
+@app.cell
+def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, files_with, get_page, label_of, make_form, mo, real_files):
     mo.stop(get_page() != "fastq")
     btn_refresh_fastq  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("fastq", fastq_task.value, fastq_example.value)
     _fastqs = files_with("fastq")
 
     if fastq_task.value == "Quality report":
         form_fastq = make_form({
-            "file": mo.ui.dropdown(options=_fastqs, label="FASTQ file:"),
-            "max_reads": mo.ui.number(start=0, stop=10**12, step=10000, value=0, label="Look only at the first N reads (0 = the whole file):"),
-            "output": mo.ui.text(placeholder="blank: <file>.report.html", label="Report page:", full_width=True),
+            "file": mo.ui.dropdown(options=_fastqs, value=_ex.get("file"), label="FASTQ file:", full_width=True),
+            "max_reads": mo.ui.number(start=0, stop=10**12, step=10000, value=_ex.get("max_reads", 0), label="Look only at the first N reads (0 = the whole file):"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.report.html", label="Report page:", full_width=True),
         }, "📈 Measure")
     else:
         _second = {"(single-end: no second file)": "none"}
         for _f in real_files("fastq"):
             _second[_f] = _f
+        _adapters = {
+            "auto: the known adapter found in the first reads": "auto",
+            "none: no adapter trimming": "none",
+            "Illumina Universal: AGATCGGAAGAGC": "AGATCGGAAGAGC",
+            "Nextera Transposase: CTGTCTCTTATACACATCT": "CTGTCTCTTATACACATCT",
+            "Illumina Small RNA 3': TGGAATTCTCGGGTGCCAAGG": "TGGAATTCTCGGGTGCCAAGG",
+            "BGI/MGI: AAGTCGGAGGCCAAGCGGTC": "AAGTCGGAGGCCAAGCGGTC",
+            "another one: type it below": "custom",
+        }
         form_fastq = make_form({
-            "file": mo.ui.dropdown(options=_fastqs, label="Reads (R1):"),
-            "file2": mo.ui.dropdown(options=_second, value="(single-end: no second file)", label="Mate reads (R2), for paired-end data:"),
-            "adapter": mo.ui.dropdown(options={
-                "auto: the known adapter found in the first reads": "auto",
-                "none: no adapter trimming": "none",
-                "Illumina Universal: AGATCGGAAGAGC": "AGATCGGAAGAGC",
-                "Nextera Transposase: CTGTCTCTTATACACATCT": "CTGTCTCTTATACACATCT",
-                "Illumina Small RNA 3': TGGAATTCTCGGGTGCCAAGG": "TGGAATTCTCGGGTGCCAAGG",
-                "BGI/MGI: AAGTCGGAGGCCAAGCGGTC": "AAGTCGGAGGCCAAGCGGTC",
-                "another one: type it below": "custom",
-            }, value="auto: the known adapter found in the first reads", label="3' adapter:"),
-            "custom": mo.ui.text(placeholder="ACGT... (only with 'another one')", label="Adapter sequence:", full_width=True),
-            "quality": mo.ui.slider(start=0, stop=40, step=1, value=20, show_value=True, label="Trim the 3' end below this Phred quality (0 = off):"),
-            "min_length": mo.ui.number(start=0, stop=100000, step=1, value=20, label="Drop reads shorter than (bases):"),
-            "trim_n": mo.ui.checkbox(value=False, label="Remove N bases from both ends"),
-            "output": mo.ui.text(placeholder="blank: <R1 file>.trimmed.<same extension>", label="Output for R1:", full_width=True),
-            "output2": mo.ui.text(placeholder="blank: <R2 file>.trimmed.<same extension>", label="Output for R2:", full_width=True),
+            "file": mo.ui.dropdown(options=_fastqs, value=_ex.get("file"), label="Reads (R1):", full_width=True),
+            "file2": mo.ui.dropdown(options=_second, value=label_of(_second, _ex.get("file2"), "(single-end: no second file)"), label="Mate reads (R2), for paired-end data:", full_width=True),
+            "adapter": mo.ui.dropdown(options=_adapters, value=label_of(_adapters, _ex.get("adapter"), "auto: the known adapter found in the first reads"), label="3' adapter:", full_width=True),
+            "custom": mo.ui.text(value=_ex.get("custom", ""), placeholder="ACGT... (only with 'another one')", label="Adapter sequence:", full_width=True),
+            "quality": mo.ui.slider(start=0, stop=40, step=1, value=_ex.get("quality", 20), show_value=True, label="Trim the 3' end below this Phred quality (0 = off):"),
+            "min_length": mo.ui.number(start=0, stop=100000, step=1, value=_ex.get("min_length", 20), label="Drop reads shorter than (bases):"),
+            "trim_n": mo.ui.checkbox(value=_ex.get("trim_n", False), label="Remove N bases from both ends"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <R1 file>.trimmed.<same extension>", label="Output for R1:", full_width=True),
+            "output2": mo.ui.text(value=_ex.get("output2", ""), placeholder="blank: <R2 file>.trimmed.<same extension>", label="Output for R2:", full_width=True),
         }, "✂️ Trim")
 
-    form_fastq
+    mo.vstack([_x for _x in (_about, form_fastq) if _x is not None])
     return (form_fastq,)
 
 
@@ -1802,32 +3164,34 @@ async def fastq_page_backend(asyncio, chosen, clashes, code_panel, error_panel, 
 
 
 @app.cell
-def kmercount_page_ui(get_page, mo, set_page):
+def kmercount_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "kmercount")
     btn_back_kmercount = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_kmercount = mo.ui.button(label="🔄 Refresh the file list")
+    kmercount_example = example_picker("kmercount")
     _ui = mo.vstack([
         btn_back_kmercount,
         mo.md("<br>\n\n# 🔢 13. K-mer Counting"),
         mo.callout(mo.md("Count every k-mer (k from 1 to 63) of FASTA and FASTQ files of any size: what does not fit in memory is sorted in runs on disk and merged. Canonical by default, so a k-mer and its reverse complement count as one and reads from the two strands add up. The abundance spectrum shows how many distinct k-mers were seen once, twice, and so on: in sequencing reads, the k-mers seen once are mostly errors, and the peak sits at the coverage."), kind="info"),
-        btn_refresh_kmercount,
+        mo.hstack([kmercount_example, btn_refresh_kmercount], justify="space-between", align="center"),
     ])
     _ui
-    return btn_back_kmercount, btn_refresh_kmercount
+    return btn_back_kmercount, btn_refresh_kmercount, kmercount_example
 
 
 @app.cell
-def kmercount_page_form(btn_refresh_kmercount, files_with, get_page, make_form, mo):
+def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, get_page, kmercount_example, make_form, mo):
     mo.stop(get_page() != "kmercount")
     btn_refresh_kmercount  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("kmercount", None, kmercount_example.value)
     form_kmercount = make_form({
-        "files": mo.ui.multiselect(options=files_with("fasta", "fastq"), label="FASTA / FASTQ files:"),
-        "k": mo.ui.number(start=1, stop=63, step=1, value=31, label="k (1 to 63):"),
-        "canonical": mo.ui.checkbox(value=True, label="Canonical: count a k-mer and its reverse complement as one"),
-        "min_count": mo.ui.number(start=1, stop=10**9, step=1, value=1, label="Leave out of the table the k-mers seen fewer times than:"),
-        "output": mo.ui.text(placeholder="blank: the summary only, no table (for example kmers.tsv.gz)", label="Table of counts:", full_width=True),
+        "files": mo.ui.multiselect(options=files_with("fasta", "fastq"), value=_ex.get("files", []), label="FASTA / FASTQ files:", full_width=True),
+        "k": mo.ui.number(start=1, stop=63, step=1, value=_ex.get("k", 31), label="k (1 to 63):"),
+        "canonical": mo.ui.checkbox(value=_ex.get("canonical", True), label="Canonical: count a k-mer and its reverse complement as one"),
+        "min_count": mo.ui.number(start=1, stop=10**9, step=1, value=_ex.get("min_count", 1), label="Leave out of the table the k-mers seen fewer times than:"),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the summary only, no table (for example kmers.tsv.gz)", label="Table of counts:", full_width=True),
     }, "🔢 Count")
-    form_kmercount
+    mo.vstack([_x for _x in (_about, form_kmercount) if _x is not None])
     return (form_kmercount,)
 
 
@@ -1878,45 +3242,50 @@ async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_pan
 
 
 @app.cell
-def convert_page_ui(get_page, mo, set_page):
+def convert_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "convert")
     btn_back_convert = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_convert = mo.ui.button(label="🔄 Refresh the file list")
+    convert_example = example_picker("convert")
     _ui = mo.vstack([
         btn_back_convert,
         mo.md("<br>\n\n# 📦 14. Formats & Conversion"),
         mo.callout(mo.md("Change only the container of a VCF, BED, GFF/GTF or SAM file, keeping every line and its order: plain text, gzip (written as BGZF, which can also be indexed), LZ4, BAM (from and to SAM) and Parquet, a table of typed columns that pandas, polars, DuckDB or Spark open directly, with the header kept in the file, so it converts back to the same text."), kind="info"),
-        btn_refresh_convert,
+        mo.hstack([convert_example, btn_refresh_convert], justify="space-between", align="center"),
     ])
     _ui
-    return btn_back_convert, btn_refresh_convert
+    return btn_back_convert, btn_refresh_convert, convert_example
 
 
 @app.cell
-def convert_page_form(btn_refresh_convert, files_with, get_page, make_form, mo):
+def convert_page_form(btn_refresh_convert, convert_example, example_for, files_with, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "convert")
     btn_refresh_convert  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("convert", None, convert_example.value)
+    _targets = {
+        "plain text": "text",
+        "gzip, written as BGZF (.gz)": ".gz",
+        "LZ4 (.lz4)": ".lz4",
+        "BAM (.bam), for SAM": ".bam",
+        "Parquet (.parquet)": ".parquet",
+    }
+    _numbers = {
+        "as numbers (filter and sum without conversion)": "number",
+        "as text, exactly as written (a byte-for-byte round trip)": "text",
+    }
     form_convert = make_form({
-        "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam", "parquet"), label="File:"),
-        "target": mo.ui.dropdown(options={
-            "plain text": "text",
-            "gzip, written as BGZF (.gz)": ".gz",
-            "LZ4 (.lz4)": ".lz4",
-            "BAM (.bam), for SAM": ".bam",
-            "Parquet (.parquet)": ".parquet",
-        }, value="gzip, written as BGZF (.gz)", label="Convert to:"),
-        "numbers": mo.ui.radio(options={
-            "as numbers (filter and sum without conversion)": "number",
-            "as text, exactly as written (a byte-for-byte round trip)": "text",
-        }, value="as numbers (filter and sum without conversion)", label="QUAL (VCF) and score (GFF) in a Parquet output:"),
-        "output": mo.ui.text(placeholder="blank: the same name with the new extension", label="Output file:", full_width=True),
+        "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam", "parquet"), value=_ex.get("file"), label="File:", full_width=True),
+        "target": mo.ui.dropdown(options=_targets, value=label_of(_targets, _ex.get("target"), "gzip, written as BGZF (.gz)"), label="Convert to:", full_width=True),
+        "numbers": mo.ui.radio(options=_numbers, value=label_of(_numbers, _ex.get("numbers"), "as numbers (filter and sum without conversion)"),
+                               label="QUAL (VCF) and score (GFF) in a Parquet output:"),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the same name with the new extension", label="Output file:", full_width=True),
     }, "📦 Convert")
-    form_convert
+    mo.vstack([_x for _x in (_about, form_convert) if _x is not None])
     return (form_convert,)
 
 
 @app.cell
-async def convert_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_convert, get_page, mmg, mo, os, preview_panel, python_call, size_of, split_name, warn):
+async def convert_page_backend(asyncio, beside, chosen, clashes, code_panel, error_panel, facts, form_convert, get_page, mmg, mo, os, preview_panel, python_call, size_of, split_name, warn):
     mo.stop(get_page() != "convert")
     mo.stop(form_convert.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_convert.value
@@ -1931,7 +3300,7 @@ async def convert_page_backend(asyncio, chosen, clashes, code_panel, error_panel
         _fmt = {"bam": "sam", "parquet": ""}.get(_fmt, _fmt)
         mo.stop(not _fmt, warn("The name of this file does not say its format (`x.vcf.parquet` would): type the output name, for example `x.vcf.gz`."))
         mo.stop(_target == ".bam" and _fmt != "sam", warn("BAM holds alignments (SAM) only."))
-        _out = _stem + {"text": f".{_fmt}", ".bam": ".bam"}.get(_target, f".{_fmt}{_target}")
+        _out = beside(_path, _stem + {"text": f".{_fmt}", ".bam": ".bam"}.get(_target, f".{_fmt}{_target}"))
     mo.stop(clashes(_out, [_path]), warn("The file is already in that container: choose another one, or type another output name."))
     _parquet = _out.lower().endswith(".parquet")
     _text_numbers = _parquet and _v["numbers"] == "text"
@@ -1963,6 +3332,2242 @@ async def convert_page_backend(asyncio, chosen, clashes, code_panel, error_panel
     except Exception as _err:
         _panel = error_panel(_err)
 
+    _panel
+    return
+
+
+@app.cell
+def guide_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "guide")
+    btn_back_guide = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+
+    # (test, scale, what it sees well, what it does not see, files, what MMGEN does with them)
+    _tests = [
+        ("G-banded karyotype", "Whole chromosomes (> 5–10 Mb)",
+         "Aneuploidies (Down, Turner, Klinefelter syndromes); balanced translocations and inversions",
+         "Microdeletions; single-base variants", "Images; ISCN text", "Nothing: no sequence data"),
+        ("Chromosomal microarray (CGH or SNP array)", "Kilobases to megabases",
+         "Microdeletions and microduplications (CNVs); a SNP array also shows runs of homozygosity (consanguinity, uniparental disomy)",
+         "Balanced rearrangements; single-base variants", "CEL / IDAT, then genotype tables or VCF",
+         "Runs of homozygosity and genetic sex from a VCF (screen 20)"),
+        ("MLPA", "Exons (tens of bases)", "Deletions and duplications of target genes (SMN1, DMD, 22q11.2)",
+         "Point variants outside the probes", "Fragment-analysis tables", "Planned: copy number from the read depth of a BAM"),
+        ("Gene panel or exome (short reads)", "Single base", "SNVs and small indels in the targeted genes or coding regions",
+         "Non-coding regions; long repeat expansions; complex rearrangements; many CNVs", "FASTQ → BAM → VCF",
+         "Quality and trimming (12), sorting and indexing (9), VCF tools (11), gene panels and ClinVar findings (18)"),
+        ("Whole genome, short reads (WGS)", "Single base, plus structural", "Almost everything: SNVs, indels, CNVs, regulatory regions",
+         "Extreme repeat expansions; regions with near-identical copies (pseudogenes, e.g. CYP2D6, SMN1); long-range phasing",
+         "FASTQ, BAM / CRAM, VCF", "The file tools (9–14), for files of any size, and the human-genome screens (16–21)"),
+        ("Trio whole genome (child + parents)", "As WGS, for three people", "De novo variants; inheritance checks; parentage",
+         "As WGS", "Three VCFs (or one with three samples)", "Trio analysis, de novo candidates, parentage and relatedness (screen 16)"),
+        ("Whole genome, long reads (PacBio HiFi, Nanopore)", "Single base over tens of kilobases",
+         "Structural variants, repeat expansions, pseudogene regions, native methylation, phasing",
+         "Very low-frequency variants; it costs much more", "FASTQ / BAM (methylation tags), VCF",
+         "The file tools read its BAM and VCF; no long-read-specific analysis yet"),
+        ("Ancestry and polygenic-score tests (genotyping array or genome)", "Hundreds of thousands of SNPs",
+         "Continental ancestry proportions; polygenic scores", "Fine-scale or ethnic origins; scores carry over poorly to other ancestries",
+         "Genotype tables, VCF", "Ancestry proportions, polygenic scores and reference panels (screen 17)"),
+        ("Optical genome mapping", "Large structures (from ~500 bases up)", "Balanced translocations, inversions, large insertions",
+         "Single-base variants, small indels", "BNX / CMAP", "Nothing"),
+        ("Tumor profiling / liquid biopsy", "Single base at 500–1000× depth",
+         "Low-frequency somatic variants, gene fusions, tumor mutational burden (TMB), microsatellite instability (MSI)",
+         "Very low tumor fraction; inherited variants are filtered out", "BAM, somatic VCF", "Tumor mutational burden from the somatic VCF and the panel's BED (screen 28)"),
+        ("Sanger sequencing, qPCR", "One amplicon or target", "Confirming a known variant; testing relatives for it (cascade testing)",
+         "Anything outside the amplicon", "AB1 traces; Ct values", "A variant looked up in relatives, and the allele counts at a position of a BAM (screen 21)"),
+        ("Pharmacogenomic panel (+ CYP2D6 copy number)", "Selected variants and copy number",
+         "Star alleles and metabolizer phenotype (CYP2C19, CYP2C9, DPYD, TPMT...); HLA risk alleles",
+         "Rare alleles not on the panel; CYP2D6 duplications and hybrids without a copy-number assay", "VCF or genotype table",
+         "Star alleles, phenotypes and guideline texts by PharmCAT (screen 19); CYP2D6 and HLA only as outside calls"),
+        ("Shotgun metagenomics (mNGS)", "All the DNA of a sample", "Bacteria, viruses, fungi and parasites at once; unknown pathogens",
+         "Organisms at very low abundance under the host DNA; RNA viruses unless RNA is sequenced", "FASTQ",
+         "Species and relative abundance, read classification, host reads apart (screen 24)"),
+        ("16S rRNA / ITS amplicons", "One barcode gene", "The bacterial or fungal composition, usually down to genus",
+         "Resistance genes, strains, viruses", "FASTQ → ASV / OTU tables", "Amplicon variants, taxonomy (RDP classifier), alpha and beta diversity, PERMANOVA (screen 27)"),
+        ("Pathogen whole genome", "Single base", "Outbreak tracking (SNP distances), resistance genes and mutations, viral variants",
+         "Mixed infections at a low level", "FASTQ, FASTA assemblies, VCF", "Resistance genes of the AMRFinderPlus catalog (screen 25); distance trees and viral mutations against the reference (screen 26)"),
+        ("Syndromic multiplex PCR panel", "15–40 targets", "Fast detection of the listed pathogens and resistance genes (mecA, KPC, NDM)",
+         "Anything not on the panel", "Ct values / detected-or-not", "In-silico PCR of a panel's primers against genomes or reads (screen 26)"),
+        ("RNA-seq", "Gene expression", "Which genes are switched on or off (for example after a drug)",
+         "DNA variants in genes that are not expressed", "FASTQ → BAM → count table", "Counts per gene and differential expression, as DESeq2 (screen 22)"),
+        ("CRISPR screen", "One gene knocked out per cell", "Which genes cause resistance or sensitivity to a drug or a virus",
+         "Genes whose loss changes nothing the screen measures", "FASTQ → guide counts", "Guide counts and gene ranking, the same as MAGeCK (screen 23)"),
+    ]
+    _areas = [
+        ("Human genetics (inherited)", "The diploid human genome, as inherited", "Exome, panels, array, karyotype",
+         "Pathogenic variants (ACMG criteria), inherited risk"),
+        ("Somatic oncology", "The tumor genome (acquired mutations)", "Tumor panels, liquid biopsy",
+         "Biomarkers (TMB, MSI), mutations with a targeted therapy"),
+        ("Microbiology and metagenomics", "Haploid and viral genomes, plasmids", "Shotgun mNGS, 16S rRNA, pathogen WGS",
+         "Taxonomy (relative abundance), phylogenetic trees, resistance genes (AMR)"),
+        ("Pharmacogenomics", "Polymorphic drug-response genes (CYPs, HLA)", "SNP/NGS panels + copy number (CYP2D6)",
+         "Star alleles (e.g. *1/*4), metabolizer phenotype, CPIC guidelines"),
+    ]
+
+    def _table(head, rows):
+        _md = "| " + " | ".join(head) + " |\n|" + " :--- |" * len(head) + "\n"
+        return _md + "\n".join("| " + " | ".join(r) + " |" for r in rows)
+
+    _ui = mo.vstack([
+        btn_back_guide,
+        mo.md("<br>\n\n# 📚 15. Which Test Sees What"),
+        mo.callout(mo.md("No genetic test sees everything. **A normal result rules out only what that test can see**: a normal exome does not rule out a balanced translocation, and a normal karyotype does not rule out a single-base variant. This guide lists the common tests, from the cheapest to the most expensive, with their blind spots, the files they produce, and what MMGEN does with those files. The screens marked *planned* are being built."), kind="info"),
+        human_notice(),
+        mo.md("### The tests and their blind spots\n\n" + _table(["Test", "Scale", "Sees well", "Does not see", "Files", "In MMGEN"], _tests)),
+        mo.md("### Four areas, four kinds of result\n\n" + _table(["Area", "Genome studied", "Main tests", "Kind of result"], _areas)
+              + "\n\nIn pharmacogenomics the names change: instead of a coordinate (chr10:94,781,859 G>A) a result is a **star allele** "
+              "(CYP2C19 \\*2) and a pair of them, the diplotype (\\*1/\\*2), read against the CPIC guidelines. In metagenomics the result "
+              "is a table of abundances (OTUs or ASVs) and a list of resistance genes."),
+    ])
+    _ui
+    return (btn_back_guide,)
+
+
+@app.cell
+def kin_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "kin")
+    btn_back_kin = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_kin = mo.ui.button(label="🔄 Refresh the file list")
+    kin_task = mo.ui.radio(options=["Relatedness of several people", "Trio and paternity test"], value="Relatedness of several people",
+                           inline=True, label="**What to do:**")
+    kin_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_kin,
+        mo.md("<br>\n\n# 👪 16. Relatedness, Trios & Paternity"),
+        human_notice(),
+        mo.callout(mo.md(
+            "**Relatedness**: for every pair of people, the KING kinship coefficient — about 0.5 for the same person or identical "
+            "twins, 0.25 for parent and child or full siblings, 0.125 for second-degree relatives, 0.0625 for first cousins, 0 for "
+            "unrelated people — and the share of sites where the two are opposite homozygotes (IBS0), near zero only between a "
+            "parent and a child. **Trio**: a child's genotypes checked against the father's and the mother's (Mendelian "
+            "consistency), the variants found in the child only (de novo candidates), and a parentage test: how often the "
+            "alleged father and the child are opposite homozygotes, which a true father explains only by genotyping errors, and "
+            "the combined paternity index from population allele frequencies.\n\n"
+            "**This is not a paternity test with legal value**: that requires an accredited laboratory, verified identities, a "
+            "chain of custody and the consent of everyone tested."), kind="info"),
+        kin_folder,
+        mo.hstack([kin_task, btn_refresh_kin], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_kin, btn_refresh_kin, kin_folder, kin_task
+
+
+@app.cell
+def kin_page_example(example_picker, get_page, kin_task, mo):
+    mo.stop(get_page() != "kin")
+    kin_example = example_picker("kin", kin_task.value)
+    kin_example
+    return (kin_example,)
+
+
+@app.cell
+def kin_page_form(NO_FILE, btn_refresh_kin, example_for, files_under, get_page, kin_example, kin_folder, kin_task, label_of, make_form, mo):
+    mo.stop(get_page() != "kin")
+    btn_refresh_kin  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("kin", kin_task.value, kin_example.value)
+    _vcfs = files_under(kin_folder.value, "vcf")
+    _beds_label = "Use the callable-regions BED next to each VCF (`x.callable.bed`, or the Genome in a Bottle `*_benchmark*.bed`)"
+    if kin_task.value.startswith("Relatedness"):
+        form_kin = make_form({
+            "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="People's VCFs:", full_width=True),
+            "samples": mo.ui.text(value=_ex.get("samples", ""), placeholder="blank: every sample", label="Samples, for a multi-sample VCF:", full_width=True),
+            "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
+        }, "👪 Compare")
+    else:
+        _people = list(_vcfs)
+        _mothers = {"(none: a duo, child and alleged father only)": "none", **{_f: _f for _f in _vcfs if _f != NO_FILE}}
+        _afs = {"(none: no paternity index)": "none", **{_f: _f for _f in _vcfs if _f != NO_FILE}}
+        _fields = {"AF (all populations)": "AF", "AFR_AF (African)": "AFR_AF", "AMR_AF (admixed American)": "AMR_AF",
+                   "EAS_AF (East Asian)": "EAS_AF", "EUR_AF (European)": "EUR_AF", "SAS_AF (South Asian)": "SAS_AF"}
+        form_kin = make_form({
+            "child": mo.ui.dropdown(options=_people, value=_ex.get("child"), label="Child:", full_width=True),
+            "father": mo.ui.dropdown(options=_people, value=_ex.get("father"), label="Alleged father:", full_width=True),
+            "mother": mo.ui.dropdown(options=_mothers, value=label_of(_mothers, _ex.get("mother", "none"), "(none: a duo, child and alleged father only)"), label="Mother:", full_width=True),
+            "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
+            "af": mo.ui.dropdown(options=_afs, value=label_of(_afs, _ex.get("af", "none"), "(none: no paternity index)"),
+                                 label="Population allele frequencies (e.g. the 1000 Genomes sites VCF), for the paternity index:", full_width=True),
+            "af_field": mo.ui.dropdown(options=_fields, value=label_of(_fields, _ex.get("af_field", "AF"), "AF (all populations)"),
+                                       label="Frequencies of which population (the closest to the family's ancestry):", full_width=True),
+            "de_novo": mo.ui.text(value=_ex.get("de_novo", ""), placeholder="blank: only count them", label="Write the de novo candidates to (VCF):", full_width=True),
+        }, "👪 Analyze the trio")
+    mo.vstack([_x for _x in (_about, form_kin) if _x is not None])
+    return (form_kin,)
+
+
+@app.cell
+async def kin_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, form_kin, get_page, kin_task, mmg, mo, python_call, warn, words):
+    mo.stop(get_page() != "kin")
+    mo.stop(form_kin.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_kin.value
+    _names = {"duplicate_or_mz_twin": "the same person or identical twins", "parent_offspring": "parent and child",
+              "full_siblings": "full siblings", "second_degree": "second degree (grandparent, uncle or aunt, half-sibling)",
+              "third_degree": "third degree (first cousins)", "unrelated": "unrelated", "insufficient_data": "too few sites to tell"}
+    if kin_task.value.startswith("Relatedness"):
+        _vcfs = [_p for _p in _v["vcfs"] if chosen(_p)]
+        mo.stop(not _vcfs, warn("Select the VCFs (one per person), or one VCF with several samples."))
+        _kw = {}
+        _samples = words(_v["samples"])
+        if _samples:
+            _kw["samples"] = _samples
+        if _v["use_beds"]:
+            _beds = [bed_next_to(_p) for _p in _vcfs] if len(_vcfs) > 1 else [bed_next_to(_vcfs[0])]
+            if any(_beds):
+                _kw["callable_beds"] = _beds if len(_vcfs) > 1 else _beds[0]
+        mo.stop(len(_vcfs) == 1 and len(_samples) == 1, warn("Two people at least: select more VCFs, or more samples."))
+        try:
+            with mo.status.spinner("Comparing every pair..."):
+                _r = await asyncio.to_thread(mmg.relatedness, _vcfs if len(_vcfs) > 1 else _vcfs[0], **_kw)
+            _lab = [_p["label"] for _p in _r["persons"]]
+            _who = lambda x: _lab[x] if isinstance(x, int) else x
+            _pairs = sorted(_r["pairs"], key=lambda _p: -_p["kinship"])
+            _rows = [("People", f"`{len(_lab)}`: {', '.join(_lab)}"), ("SNV sites used", f"`{_r['snv_sites']:,}` on `{_r['autosomes']}` autosome(s)")]
+            _items = [mo.callout(mo.md("### 👪 Relatedness\n" + facts(_rows)), kind="success")]
+            _items.append(mo.ui.table([{
+                "person A": _who(_p["a"]), "person B": _who(_p["b"]), "kinship": round(_p["kinship"], 4),
+                "relationship": _names.get(_p["relationship"], _p["relationship"]), "sites": _p["sites"],
+                "IBS0 / both heterozygous": round(_p["ibs0_ratio"], 4) if _p["ibs0_ratio"] is not None else "",
+            } for _p in _pairs], selection=None, pagination=True, page_size=15, label="Every pair, most related first"))
+            if _r["autosomes"] < 10:
+                _items.append(warn(f"Only {_r['autosomes']} autosome(s): the relationship classes are tentative. A whole genome tells them apart much better."))
+            _items.append(code_panel(f"r = {python_call('relatedness', _vcfs if len(_vcfs) > 1 else _vcfs[0], **_kw)}", 'print(r["text"])'))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    else:
+        mo.stop(not chosen(_v["child"]) or not chosen(_v["father"]), warn("Select the child and the alleged father."))
+        _mother = None if _v["mother"] == "none" else _v["mother"]
+        mo.stop(len({_v["child"], _v["father"], _mother} - {None}) < (3 if _mother else 2), warn("The child, the father and the mother must be different files."))
+        _kw = {}
+        if _mother:
+            _kw["mother"] = _mother
+        if _v["use_beds"]:
+            for _role, _path in (("child", _v["child"]), ("father", _v["father"]), ("mother", _mother)):
+                if _path and bed_next_to(_path):
+                    _kw[f"{_role}_bed"] = bed_next_to(_path)
+        if _v["af"] != "none":
+            _kw["allele_frequencies"] = _v["af"]
+            _kw["af_field"] = _v["af_field"]
+        if (_v["de_novo"] or "").strip():
+            _kw["de_novo_output"] = _v["de_novo"].strip()
+        try:
+            with mo.status.spinner("Checking the trio (a minute for whole genomes)..."):
+                _r = await asyncio.to_thread(mmg.trio_analysis, _v["child"], _v["father"], **_kw)
+            _verdict = {"not_excluded": ("✅ The alleged father is not excluded", "success"),
+                        "excluded": ("❌ The alleged father is excluded", "danger"),
+                        "inconclusive": ("❔ Inconclusive", "warn")}.get(_r["verdict"], (_r["verdict"], "warn"))
+            _p = _r["probability_of_paternity"]
+            _prob = ("" if _p is None else "> 99.9999%" if _p > 0.999999 else "< 0.0001%" if _p < 0.000001 else f"{100 * _p:.4f}%")
+            _rows = [
+                ("Exclusions (father and child opposite homozygotes)", f"`{_r['father_exclusions']:,}` of `{_r['father_informative']:,}` informative sites "
+                 f"(rate `{_r['exclusion_rate']:.2e}`; genotyping errors alone: `{_r['error_level']:.1e}`"
+                 + (f"; an unrelated man: about `{_r['unrelated_expected_rate']:.2e}`" if _r.get("unrelated_expected_rate") else "") + ")"),
+                ("Mendelian errors", f"`{_r['errors']:,}` of `{_r['sites_checked']:,}` sites ({100 * _r['error_rate']:.3f}%)"),
+                ("De novo candidates", f"`{_r['de_novo']:,}`" + (f", written to `{_kw['de_novo_output']}`" if "de_novo_output" in _kw else "")),
+            ]
+            if _r["log10_cpi"] is not None:
+                _rows.append(("Combined paternity index", f"10^{_r['log10_cpi']:,.0f} over `{_r['cpi_sites']:,}` sites; probability of paternity {_prob} (prior {_r['prior']})"))
+            _items = [mo.callout(mo.md(f"### {_verdict[0]}\n{_r['reason']}\n\n" + facts(_rows)), kind=_verdict[1])]
+            _items.append(mo.callout(mo.md(
+                "**Why the numbers are so large**: the paternity index treats every site as independent, which they are not along a "
+                "chromosome, so it is far larger than the 15-25 markers of a forensic test would give. Read it as a teaching tool. "
+                "De novo candidates are mostly genotyping errors; real de novo variants are confirmed in the laboratory."), kind="info"))
+            _items.append(code_panel(f"r = {python_call('trio_analysis', _v['child'], _v['father'], **_kw)}", 'print(r["text"])'))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def anc_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "anc")
+    btn_back_anc = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_anc = mo.ui.button(label="🔄 Refresh the file list")
+    anc_task = mo.ui.radio(options=["Ancestry", "Polygenic score", "Build a reference panel"], value="Ancestry", inline=True, label="**What to do:**")
+    anc_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_anc,
+        mo.md("<br>\n\n# 🌍 17. Ancestry & Polygenic Scores"),
+        human_notice(),
+        mo.callout(mo.md(
+            "**Ancestry**: the proportions of a person's genome that best match each reference group of a **panel** of allele "
+            "frequencies (for example the five continental groups of the 1000 Genomes Project), as ADMIXTURE's supervised mode "
+            "computes them. The groups are broad samples of present-day people, not ethnic or national identities, and a "
+            "person's answer depends on which groups the panel has. **Polygenic score**: the weighted sum of many small-effect "
+            "variants from a published score (the PGS Catalog), and where it falls among the panel's groups. A score is a "
+            "statistical summary for research and teaching: it is not a diagnosis, and it carries over poorly to ancestries "
+            "unlike those of the study that made it."), kind="info"),
+        anc_folder,
+        mo.hstack([anc_task, btn_refresh_anc], justify="space-between", align="center"),
+    ])
+    _ui
+    return anc_folder, anc_task, btn_back_anc, btn_refresh_anc
+
+
+@app.cell
+def anc_page_example(anc_task, example_picker, get_page, mo):
+    mo.stop(get_page() != "anc")
+    anc_example = example_picker("anc", anc_task.value)
+    anc_example
+    return (anc_example,)
+
+
+@app.cell
+def anc_page_form(NO_FILE, anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "anc")
+    btn_refresh_anc  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("anc", anc_task.value, anc_example.value)
+    _folder = anc_folder.value
+    _vcfs = files_under(_folder, "vcf")
+    _beds_label = "Use the callable-regions BED next to each VCF (`x.callable.bed`, or the Genome in a Bottle `*_benchmark*.bed`)"
+    _tsvgz =[_f for _f in files_under(_folder, "vcf", "table") if _f != NO_FILE]
+    if anc_task.value == "Ancestry":
+        _pan = [_f for _f in _tsvgz if "panel" in _f.lower() and _f.endswith((".tsv", ".tsv.gz", ".txt"))] or [NO_FILE]
+        form_anc = make_form({
+            "panel": mo.ui.dropdown(options=_pan, value=_ex.get("panel"), label="Reference panel (a frequency panel TSV):", full_width=True),
+            "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="People's VCFs:", full_width=True),
+            "samples": mo.ui.text(value=_ex.get("samples", ""), placeholder="blank: every sample", label="Samples, for a multi-sample VCF:", full_width=True),
+            "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
+        }, "🌍 Estimate")
+    elif anc_task.value == "Polygenic score":
+        _scores = [_f for _f in _tsvgz if "pgs" in _f.lower() and not _f.lower().endswith(".vcf.gz")] or [NO_FILE]
+        _pan = {"(none: the score only, no comparison)": "none", **{_f: _f for _f in _tsvgz if "panel" in _f.lower()}}
+        _imp = {"pooled frequency of the panel": "pooled", "AFR": "AFR", "AMR": "AMR", "EAS": "EAS", "EUR": "EUR", "SAS": "SAS"}
+        form_anc = make_form({
+            "scoring": mo.ui.dropdown(options=_scores, value=_ex.get("scoring"), label="Scoring file (PGS Catalog, harmonized GRCh38):", full_width=True),
+            "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="People's VCFs:", full_width=True),
+            "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
+            "panel": mo.ui.dropdown(options=_pan, value=label_of(_pan, _ex.get("panel", "none"), "(none: the score only, no comparison)"),
+                                    label="Frequency panel, to place the score among its groups:", full_width=True),
+            "impute": mo.ui.dropdown(options=_imp, value=label_of(_imp, _ex.get("impute", "pooled"), "pooled frequency of the panel"),
+                                     label="Variants a file cannot call are filled with the frequency of:", full_width=True),
+            "keep_ambiguous": mo.ui.checkbox(value=_ex.get("keep_ambiguous", False), label="Keep A/T and C/G variants (their strand cannot be checked)"),
+        }, "📈 Score")
+    else:
+        _kinds = {"a sites VCF with each group's frequency in INFO (AFR_AF, EUR_AF...)": "freq",
+                  "a multi-sample VCF of genotypes, with a table of each sample's group": "geno"}
+        _tables = {"(not needed for a sites VCF)": "none", **{_f: _f for _f in files_under(_folder, "table") if _f != NO_FILE}}
+        form_anc = make_form({
+            "source": mo.ui.dropdown(options=_vcfs, value=_ex.get("source"), label="Source VCF:", full_width=True),
+            "kind": mo.ui.dropdown(options=_kinds, value=label_of(_kinds, _ex.get("kind", "freq"), "a sites VCF with each group's frequency in INFO (AFR_AF, EUR_AF...)"), label="It is:", full_width=True),
+            "groups": mo.ui.text(value=_ex.get("groups", "AFR, AMR, EAS, EUR, SAS"), label="Groups (for a sites VCF: read from <group>_AF):", full_width=True),
+            "table": mo.ui.dropdown(options=_tables, value="(not needed for a sites VCF)", label="Table of samples and groups (for genotypes):", full_width=True),
+            "columns": mo.ui.text(value=_ex.get("columns", "SampleID, Superpopulation"), label="Its sample and group columns:", full_width=True),
+            "min_maf": mo.ui.number(start=0.0, stop=0.5, step=0.01, value=_ex.get("min_maf", 0.05), label="Keep sites whose minor-allele frequency reaches, in some group:"),
+            "thin_bp": mo.ui.number(start=0, stop=10**7, step=1000, value=_ex.get("thin_bp", 0), label="At most one site per (bases; 0 = all):"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <source>.panel.tsv.gz next to it", label="Panel file:", full_width=True),
+        }, "🧱 Build the panel")
+    mo.vstack([_x for _x in (_about, form_anc) if _x is not None])
+    return (form_anc,)
+
+
+@app.cell
+async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_panel, error_panel, facts, form_anc, get_page, mmg, mo, python_call, split_name, warn, words):
+    mo.stop(get_page() != "anc")
+    mo.stop(form_anc.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_anc.value
+    try:
+        if anc_task.value in ("Ancestry", "Polygenic score"):
+            _vcfs = [_p for _p in _v["vcfs"] if chosen(_p)]
+            mo.stop(not _vcfs, warn("Select the people's VCFs."))
+            _target = _vcfs if len(_vcfs) > 1 else _vcfs[0]
+            _kw = {}
+            if anc_task.value == "Ancestry" and words(_v["samples"]):
+                _kw["samples"] = words(_v["samples"])
+            if _v["use_beds"]:
+                _beds = [bed_next_to(_p) for _p in _vcfs]
+                if any(_beds) and len(_vcfs) > 1:
+                    _kw["callable_beds"] = _beds
+                elif _beds[0] and "samples" not in _kw:
+                    _kw["callable_beds"] = _beds[0]
+        if anc_task.value == "Ancestry":
+            mo.stop(not chosen(_v["panel"]), warn("Select a reference panel (build one with **Build a reference panel**)."))
+            with mo.status.spinner("Estimating the proportions (with a bootstrap for the errors)..."):
+                _r = await asyncio.to_thread(mmg.estimate_ancestry, _v["panel"], _target, **_kw)
+            _groups = _r[0]["groups"] if _r else []
+            _rows = []
+            for _x in _r:
+                _row = {"person": _x["sample"] or _x["vcf"]}
+                for _g, _p, _s in zip(_x["groups"], _x["proportions"], _x["standard_errors"]):
+                    _row[_g] = f"{100 * _p:.1f}%" + (f" ± {100 * _s:.1f}" if _s is not None else "")
+                _row["best single group"] = _x["best_group"]
+                _row["sites"] = _x["sites_used"]
+                _rows.append(_row)
+            _warns = sorted({_w for _x in _r for _w in _x["warnings"]})
+            _items = [mo.callout(mo.md("### 🌍 Ancestry proportions\n" + facts([("People", f"`{len(_r)}`"), ("Panel groups", ", ".join(_groups))])), kind="success"),
+                      mo.ui.table(_rows, selection=None, pagination=True, page_size=15, label="Proportions (± bootstrap standard error)")]
+            for _w in _warns[:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('estimate_ancestry', _v['panel'], _target, **_kw)}", 'for x in r:\n    print(x["text"])'))
+        elif anc_task.value == "Polygenic score":
+            mo.stop(not chosen(_v["scoring"]), warn("Select a scoring file (download one from pgscatalog.org: the harmonized GRCh38 file)."))
+            if _v["panel"] != "none":
+                _kw["panel"] = _v["panel"]
+            if _v["impute"] != "pooled":
+                _kw["impute"] = _v["impute"]
+            if _v["keep_ambiguous"]:
+                _kw["keep_ambiguous"] = True
+            with mo.status.spinner("Scoring..."):
+                _r = await asyncio.to_thread(mmg.polygenic_score, _v["scoring"], _target, **_kw)
+            _first = _r[0] if _r else {}
+            _rows = []
+            for _x in _r:
+                _row = {"person": _x["sample"] or _x["vcf"], "score": round(_x["score"], 4), "coverage": f"{100 * _x['coverage']:.1f}%"}
+                for _g in _x["groups"]:
+                    _row[f"percentile in {_g['group']}"] = f"{_g['percentile']:.0f}" if _g.get("percentile") is not None else ""
+                _rows.append(_row)
+            _facts = [("Score", f"{_first.get('pgs_id') or ''} {_first.get('trait_reported') or ''}".strip() or "—"),
+                      ("Variants", f"`{_first.get('variants', 0):,}` in the file, `{_first.get('usable', 0):,}` usable")]
+            _items = [mo.callout(mo.md("### 📈 Polygenic score\n" + facts(_facts)), kind="success"),
+                      mo.ui.table(_rows, selection=None, pagination=True, page_size=15, label="The score of each person")]
+            _items.append(mo.callout(mo.md(
+                "**Reading a percentile**: the score of a group's average person is at the 50th; the comparison assumes independent "
+                "variants in Hardy-Weinberg equilibrium and is only meaningful against the group of the person's own ancestry. "
+                "**A polygenic score is not a diagnosis** and does not say whether a person will develop a condition."), kind="warn"))
+            for _w in sorted({_w for _x in _r for _w in _x["warnings"]})[:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('polygenic_score', _v['scoring'], _target, **_kw)}", 'for x in r:\n    print(x["text"])'))
+        else:
+            mo.stop(not chosen(_v["source"]), warn("Select the source VCF."))
+            _groups = words(_v["groups"])
+            _out = (_v["output"] or "").strip() or beside(_v["source"], split_name(_v["source"])[0] + ".panel.tsv.gz")
+            _kw = {}
+            if float(_v["min_maf"]) != 0.05:
+                _kw["min_maf"] = float(_v["min_maf"])
+            if int(_v["thin_bp"] or 0):
+                _kw["thin_bp"] = int(_v["thin_bp"])
+            if _v["kind"] == "freq":
+                mo.stop(not _groups, warn("Type the groups."))
+                with mo.status.spinner("Building the panel..."):
+                    _r = await asyncio.to_thread(mmg.panel_from_frequencies, _v["source"], _groups, [_g + "_AF" for _g in _groups], _out, **_kw)
+                _call = python_call("panel_from_frequencies", _v["source"], _groups, [_g + "_AF" for _g in _groups], _out, **_kw)
+            else:
+                _cols = words(_v["columns"])
+                mo.stop(_v["table"] == "none" or len(_cols) != 2, warn("Select the table of samples and type its sample and group columns."))
+                with mo.status.spinner("Counting the alleles of every group..."):
+                    _r = await asyncio.to_thread(mmg.build_panel, _v["source"], _v["table"], _out, _cols[0], _cols[1], **_kw)
+                _call = python_call("build_panel", _v["source"], _v["table"], _out, _cols[0], _cols[1], **_kw)
+            _items = [mo.callout(mo.md("### 🧱 Panel written\n" + facts([
+                ("Groups", ", ".join(_r["groups"])),
+                ("Sites written", f"`{_r['written']:,}` of `{_r['records']:,}` records"),
+                ("Saved to", f"`{_out}`"),
+            ])), kind="success"), code_panel(f"r = {_call}", 'print(r["text"])')]
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def chrom_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "chrom")
+    btn_back_chrom = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_chrom = mo.ui.button(label="🔄 Refresh the file list")
+    chrom_task = mo.ui.radio(options=["Genetic sex", "Runs of homozygosity"], value="Genetic sex", inline=True, label="**What to do:**")
+    chrom_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_chrom,
+        mo.md("<br>\n\n# 🧫 20. Sex Chromosomes & Homozygosity"),
+        human_notice(),
+        mo.callout(mo.md(
+            "Two things a SNP array or a karyotype shows that a VCF can show too. **Genetic sex**: with two X chromosomes, the "
+            "calls on X outside the pseudoautosomal regions are heterozygous about as often as the autosomes' calls; with one X, "
+            "almost never; and only a Y gives calls on Y. Patterns in between can suggest X0 (Turner) or XXY (Klinefelter), which "
+            "only a karyotype confirms. **Runs of homozygosity**: long stretches (almost) without heterozygous calls, inherited "
+            "twice from the same ancestor — many and long when the parents are related; one long run on a single chromosome can "
+            "point to uniparental disomy. Runs are found as `plink --homozyg` finds them (windows of 50 calls that tolerate one "
+            "heterozygous call, so a genotyping error does not split a run), or strictly (any heterozygous call ends a run). "
+            "Genetic sex is not gender identity."), kind="info"),
+        chrom_folder,
+        mo.hstack([chrom_task, btn_refresh_chrom], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_chrom, btn_refresh_chrom, chrom_folder, chrom_task
+
+
+@app.cell
+def chrom_page_example(chrom_task, example_picker, get_page, mo):
+    mo.stop(get_page() != "chrom")
+    chrom_example = example_picker("chrom", chrom_task.value)
+    chrom_example
+    return (chrom_example,)
+
+
+@app.cell
+def chrom_page_form(NO_FILE, btn_refresh_chrom, chrom_example, chrom_folder, chrom_task, example_for, files_under, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "chrom")
+    btn_refresh_chrom  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("chrom", chrom_task.value, chrom_example.value)
+    _vcfs = files_under(chrom_folder.value, "vcf")
+    _beds = {"(none)": "none", **{_b: _b for _b in files_under(chrom_folder.value, "bed_any") if _b != NO_FILE}}
+    _fields = {
+        "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF:", full_width=True),
+        "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the first sample", label="Sample, in a multi-sample VCF:"),
+        "callable": mo.ui.dropdown(options=_beds, value=label_of(_beds, _ex.get("callable", "none"), "(none)"), label="Callable regions (BED):", full_width=True),
+    }
+    if chrom_task.value == "Runs of homozygosity":
+        _fields["min_length"] = mo.ui.number(start=10_000, stop=10**8, step=100_000, value=_ex.get("min_length", 1_000_000), label="Minimum length of a run (bases):")
+        _fields["min_sites"] = mo.ui.number(start=5, stop=10**6, step=5, value=_ex.get("min_sites", 50), label="Minimum SNV calls in a run:")
+        _methods = {"Sliding windows, as plink --homozyg (tolerates genotyping errors)": "window", "Strict: any heterozygous call ends a run": "strict"}
+        _fields["method"] = mo.ui.dropdown(options=_methods, value=label_of(_methods, _ex.get("method", "window"), "Sliding windows, as plink --homozyg (tolerates genotyping errors)"),
+                                           label="Method:", full_width=True)
+        _fields["window_het"] = mo.ui.number(start=0, stop=10, step=1, value=_ex.get("window_het", 1),
+                                             label="Windows: heterozygous calls a window of 50 may hold (plink's default: 1):")
+        _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder="blank: only shown here", label="Save the runs to (BED):", full_width=True)
+        form_chrom = make_form(_fields, "🧫 Find the runs")
+    else:
+        form_chrom = make_form(_fields, "🧫 Infer")
+    mo.vstack([_x for _x in (_about, form_chrom) if _x is not None])
+    return (form_chrom,)
+
+
+@app.cell
+async def chrom_page_backend(asyncio, chosen, chrom_task, code_panel, error_panel, facts, form_chrom, get_page, mmg, mo, python_call, warn):
+    mo.stop(get_page() != "chrom")
+    mo.stop(form_chrom.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_chrom.value
+    mo.stop(not chosen(_v["vcf"]), warn("Select the person's VCF."))
+    _kw = {}
+    if (_v["sample"] or "").strip():
+        _kw["sample"] = _v["sample"].strip()
+    if _v["callable"] != "none":
+        _kw["callable_bed"] = _v["callable"]
+    try:
+        if chrom_task.value == "Genetic sex":
+            with mo.status.spinner("Reading the sex chromosomes..."):
+                _r = await asyncio.to_thread(mmg.genetic_sex, _v["vcf"], **_kw)
+            _head = {"XX": "♀ XX: two X chromosomes", "XY": "♂ XY: one X and a Y", "undetermined": "❔ Undetermined"}.get(_r["verdict"], _r["verdict"])
+            _rows = [
+                ("X outside the pseudoautosomal regions", f"`{_r['x_het']:,}` heterozygous, `{_r['x_hom_alt']:,}` homozygous, `{_r['x_haploid']:,}` haploid calls"
+                 + (f"; heterozygosity `{_r['x_het_ratio']:.2f}` of the autosomes'" if _r.get("x_het_ratio") is not None else "")),
+                ("Y outside the pseudoautosomal regions", f"`{_r['y_calls']:,}` calls (`{_r['y_non_ref']:,}` non-reference)"),
+                ("Assembly", f"{_r['build']} ({_r['build_source']})"),
+            ]
+            _flags = ", ".join(_r["flags"]) if _r["flags"] else "none"
+            _items = [mo.callout(mo.md(f"### {_head}\n{_r['reason']}\n\n" + facts(_rows) + f"\n* **Flags:** {_flags}"),
+                                 kind="success" if _r["verdict"] in ("XX", "XY") else "warn")]
+            _items.append(code_panel(f"r = {python_call('genetic_sex', _v['vcf'], **_kw)}", 'print(r["text"])'))
+        else:
+            if int(_v["min_length"]) != 1_000_000:
+                _kw["min_length"] = int(_v["min_length"])
+            if int(_v["min_sites"]) != 50:
+                _kw["min_sites"] = int(_v["min_sites"])
+            if _v["method"] == "strict":
+                _kw["window_snps"] = 0
+            elif int(_v["window_het"]) != 1:
+                _kw["window_het"] = int(_v["window_het"])
+            if (_v["output"] or "").strip():
+                _kw["output"] = _v["output"].strip()
+            with mo.status.spinner("Looking for runs of homozygosity..."):
+                _r = await asyncio.to_thread(mmg.runs_of_homozygosity, _v["vcf"], **_kw)
+            _rows = [
+                ("Runs", f"`{_r['count']}`, `{_r['total_length'] / 1e6:.2f}` Mb in all, the longest `{_r['longest'] / 1e6:.2f}` Mb"),
+                ("F_ROH", f"`{_r['f_roh']:.4f}` of the autosomes" + (f" (`{_r['f_roh_covered']:.4f}` of the span the file covers)" if _r.get("f_roh_covered") is not None else "")),
+                ("SNV calls", f"`{_r['snv_calls']:,}` (`{_r['het_calls']:,}` heterozygous)"),
+                ("Method", f"sliding windows of {_r['window_snps']} calls with at most {_r['window_het']} heterozygous, as plink --homozyg"
+                 if _r["method"] == "window" else "strict: any heterozygous call ends a run"),
+            ]
+            _items = [mo.callout(mo.md("### 🧫 Runs of homozygosity\n" + facts(_rows)), kind="success")]
+            if _r["runs"]:
+                _runs = []
+                for _x in _r["runs"]:
+                    _c, _s, _e, _n = (_x["chrom"], _x["start0"], _x["end"], _x["sites"]) if isinstance(_x, dict) else _x
+                    _runs.append({"chromosome": _c, "start (1-based)": _s + 1, "end": _e, "length (Mb)": round((_e - _s) / 1e6, 2), "SNV calls": _n})
+                _items.append(mo.ui.table(_runs, selection=None, pagination=True, page_size=15, label="The runs"))
+            _items.append(mo.md("*For orientation: a child of first cousins has F_ROH around 1/16 (0.0625) on average; most people with "
+                                "unrelated parents have little, in short runs. Consanguinity is common in many families and communities; "
+                                "a genetic counselor can say what it means for a family.*"))
+            _items.append(code_panel(f"r = {python_call('runs_of_homozygosity', _v['vcf'], **_kw)}", 'print(r["text"])'))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def findings_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "findings")
+    btn_back_findings = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_findings = mo.ui.button(label="🔄 Refresh the file list")
+    findings_task = mo.ui.radio(options=["ClinVar findings", "Gene panel from an annotation"], value="ClinVar findings",
+                                inline=True, label="**What to do:**")
+    findings_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_findings,
+        mo.md("<br>\n\n# 🧾 18. Disease Findings & Gene Panels"),
+        human_notice(),
+        mo.callout(mo.md("Which of a person's variants does **ClinVar** (NCBI's public archive of variant classifications) list, and how is each one classified: pathogenic, likely pathogenic, uncertain, benign. Each finding comes with its review stars (how well supported the classification is), the conditions and the zygosity. Restrict it to the genes of a **panel**, as the gene panels of clinical laboratories do, or get the coordinates of a panel's genes from an annotation (GFF). The person's VCF and ClinVar must be on the same assembly; download ClinVar from ftp.ncbi.nlm.nih.gov/pub/clinvar/."), kind="info"),
+        findings_folder,
+        mo.hstack([findings_task, btn_refresh_findings], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_findings, btn_refresh_findings, findings_folder, findings_task
+
+
+@app.cell
+def findings_page_example(example_picker, findings_task, get_page, mo):
+    mo.stop(get_page() != "findings")
+    findings_example = example_picker("findings", findings_task.value)
+    findings_example
+    return (findings_example,)
+
+
+@app.cell
+def findings_page_form(GENE_PANELS, NO_FILE, btn_refresh_findings, example_for, files_under, findings_example, findings_folder, findings_task, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "findings")
+    btn_refresh_findings  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("findings", findings_task.value, findings_example.value)
+    _folder = findings_folder.value
+    _panels = {"(no panel: the whole file)": "none", **{_n: _n for _n in GENE_PANELS}}
+    if findings_task.value == "ClinVar findings":
+        _vcfs = files_under(_folder, "vcf")
+        _beds = {"(none: compare every call in the file)": "none"}
+        for _b in files_under(_folder, "bed_any"):
+            if _b != NO_FILE:
+                _beds[_b] = _b
+        _classes = {
+            "pathogenic and likely pathogenic": "plp",
+            "uncertain significance (VUS)": "vus",
+            "conflicting classifications": "conflicting",
+            "benign and likely benign": "blb",
+            "risk factors, protective and other": "risk",
+        }
+        _clinvar = _ex.get("clinvar") or next((_f for _f in _vcfs if "clinvar" in _f.lower()), None)
+        form_findings = make_form({
+            "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF:", full_width=True),
+            "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the first sample", label="Sample, in a multi-sample VCF:"),
+            "callable": mo.ui.dropdown(options=_beds, value=label_of(_beds, _ex.get("callable", "none"), "(none: compare every call in the file)"),
+                                       label="Callable regions (BED): calls outside them are not compared:", full_width=True),
+            "clinvar": mo.ui.dropdown(options=_vcfs, value=_clinvar, label="ClinVar VCF (the same assembly as the person's):", full_width=True),
+            "classes": mo.ui.multiselect(options=_classes, value=[label_of(_classes, _c, None) for _c in _ex.get("classes", ["plp"])],
+                                         label="Classifications to show:", full_width=True),
+            "min_stars": mo.ui.slider(start=0, stop=4, step=1, value=_ex.get("min_stars", 1), show_value=True,
+                                      label="Minimum review stars (0 = no assertion, 4 = practice guideline):"),
+            "panel": mo.ui.dropdown(options=_panels, value=label_of(_panels, _ex.get("panel", "none"), "(no panel: the whole file)"),
+                                    label="Only the genes of an example panel:", full_width=True),
+            "genes": mo.ui.text(value=_ex.get("genes", ""), placeholder="BRCA1, BRCA2", label="... and/or these genes:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save the table (TSV):", full_width=True),
+        }, "🧾 Find")
+    else:
+        _namings = {"as the annotation says": "keep", "chr1, chr2... (UCSC)": "chr", "1, 2... (Ensembl, NCBI)": "no_chr"}
+        form_findings = make_form({
+            "gff": mo.ui.dropdown(options=files_under(_folder, "gff"), value=_ex.get("gff"), label="Annotation (GFF3 / GTF, e.g. the RefSeq GRCh38 GFF):", full_width=True),
+            "panel": mo.ui.dropdown(options=_panels, value=label_of(_panels, _ex.get("panel", "none"), "(no panel: the whole file)"),
+                                    label="An example panel:", full_width=True),
+            "genes": mo.ui.text(value=_ex.get("genes", ""), placeholder="BRCA1, BRCA2", label="... and/or these genes:", full_width=True),
+            "padding": mo.ui.number(start=0, stop=10**7, step=100, value=_ex.get("padding", 0), label="Bases to add on each side:"),
+            "naming": mo.ui.dropdown(options=_namings, value=label_of(_namings, _ex.get("naming", "chr"), "chr1, chr2... (UCSC)"), label="Chromosome names:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: panel.bed next to the annotation", label="Save the regions to (BED):", full_width=True),
+        }, "🧬 Get the regions")
+    mo.vstack([_x for _x in (_about, form_findings) if _x is not None])
+    return (form_findings,)
+
+
+@app.cell
+async def findings_page_backend(GENE_PANELS, asyncio, beside, chosen, code_panel, error_panel, facts, findings_task, form_findings, get_page, mmg, mo, os, python_call, warn, words):
+    mo.stop(get_page() != "findings")
+    mo.stop(form_findings.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_findings.value
+    _genes = list(dict.fromkeys(GENE_PANELS.get(_v["panel"], []) + [_g.upper() for _g in words(_v["genes"])]))
+
+    if findings_task.value == "ClinVar findings":
+        mo.stop(not chosen(_v["vcf"]), warn("Select the person's VCF."))
+        mo.stop(not chosen(_v["clinvar"]), warn("Select the ClinVar VCF (clinvar.vcf.gz, from ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/)."))
+        mo.stop(_v["vcf"] == _v["clinvar"], warn("The person's VCF and ClinVar must be two different files."))
+        mo.stop(not _v["classes"], warn("Select at least one classification."))
+        _kw = {"classes": list(_v["classes"]), "min_stars": int(_v["min_stars"])}
+        if (_v["sample"] or "").strip():
+            _kw["sample"] = _v["sample"].strip()
+        if _v["callable"] != "none":
+            _kw["callable_bed"] = _v["callable"]
+        if _genes:
+            _kw["genes"] = _genes
+        if (_v["output"] or "").strip():
+            _kw["output"] = _v["output"].strip()
+        try:
+            with mo.status.spinner("Comparing the person's variants with ClinVar..."):
+                _r = await asyncio.to_thread(mmg.clinvar_findings, _v["vcf"], _v["clinvar"], **_kw)
+            _cats = ", ".join(f"{_n:,} {_c}" for _c, _n in _r["by_category"] if _n) or "none"
+            _rows = [
+                ("Sample", f"`{_r['sample']}`"),
+                ("Alleles checked", f"`{_r['person_alleles']:,}`" + (f" (inside the callable regions; `{_r['person_outside_callable']:,}` outside were left out)" if _r["callable"] else "")),
+                ("Found in ClinVar", f"`{_r['matched']:,}`: {_cats}"),
+                ("Shown here", f"`{len(_r['findings']):,}` (filters: {_r['filters']})"),
+            ]
+            _plp = _r["plp_heterozygous"] + _r["plp_homozygous"] + _r["plp_hemizygous"] + _r["plp_unknown_zygosity"]
+            if "plp" in _kw["classes"]:
+                _rows.append(("Pathogenic / likely pathogenic", f"`{_r['plp_heterozygous']}` in one copy, `{_r['plp_homozygous']}` in two copies, `{_r['plp_hemizygous']}` hemizygous"))
+            _items = [mo.callout(mo.md("### 🧾 ClinVar findings\n" + facts(_rows)), kind="success")]
+            if _r["findings"]:
+                _items.append(mo.ui.table([{
+                    "gene": ", ".join(_f["genes"]),
+                    "variant": f"{_f['chrom']}:{_f['pos']} {_f['ref']}>{_f['alt']}",
+                    "zygosity": _f["zygosity"],
+                    "classification": _f["significance"].replace("_", " "),
+                    "stars": "★" * _f["stars"] + "☆" * (4 - _f["stars"]),
+                    "conditions": "; ".join(_f["conditions"][:3]) + (" ..." if len(_f["conditions"]) > 3 else ""),
+                    "rsID": _f["rsid"] or "",
+                    "ClinVar": f"https://www.ncbi.nlm.nih.gov/clinvar/variation/{_f['variation_id']}/",
+                } for _f in _r["findings"]], selection=None, pagination=True, page_size=10, label="The findings"))
+            if _plp:
+                _items.append(mo.callout(mo.md(
+                    "**Reading a finding.** ClinVar gathers what laboratories submitted; the stars say how well a classification is "
+                    "supported. One copy of a variant for a *recessive* condition is a carrier state, which most people have for a few "
+                    "conditions; one copy for a *dominant* condition is a different matter. Which applies depends on the condition, "
+                    "which ClinVar's file does not say. **Only an accredited laboratory and a genetic counselor can say what a finding "
+                    "means for a person.**"), kind="warn"))
+            _args = {_k: _x for _k, _x in _kw.items() if not (_k == "classes" and _x == ["plp"]) and not (_k == "min_stars" and _x == 1)}
+            _items.append(code_panel(f"r = {python_call('clinvar_findings', _v['vcf'], _v['clinvar'], **_args)}", 'print(r["text"])'))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    else:
+        mo.stop(not chosen(_v["gff"]), warn("Select an annotation (GFF3 or GTF)."))
+        mo.stop(not _genes, warn("Choose a panel or type the genes."))
+        _out = (_v["output"] or "").strip() or beside(_v["gff"], "panel.bed")
+        _kw = {"output": _out}
+        if int(_v["padding"] or 0):
+            _kw["padding"] = int(_v["padding"])
+        if _v["naming"] != "keep":
+            _kw["naming"] = _v["naming"]
+        try:
+            with mo.status.spinner(f"Reading {_v['gff']}..."):
+                _r = await asyncio.to_thread(mmg.gene_regions, _v["gff"], _genes, **_kw)
+            _rows = [
+                ("Genes found", f"`{len(_r['regions'])}` of `{len(_genes)}`"),
+                ("Not found", ", ".join(f"`{_g}`" for _g in _r["not_found"]) or "none"),
+                ("Saved to", f"`{os.path.abspath(_out)}`"),
+            ]
+            _items = [mo.callout(mo.md("### 🧬 The panel's regions\n" + facts(_rows)), kind="success" if _r["regions"] else "warn")]
+            if _r["synonyms"]:
+                _items.append(mo.md("Other names to try: " + ", ".join(f"`{_s}`" for _s in _r["synonyms"][:20])))
+            _items.append(mo.ui.table([{
+                "gene": _g["gene"], "chrom": _g["chrom"], "start (1-based)": _g["start"] + 1, "end": _g["end"],
+                "length": _g["end"] - _g["start"], "strand": _g["strand"],
+            } for _g in _r["regions"]], selection=None, pagination=True, page_size=15, label="Regions"))
+            _items.append(code_panel(f"r = {python_call('gene_regions', _v['gff'], _genes, **_kw)}",
+                                     "# then, for example: mmg.vcf_filter(vcf, 'panel_variants.vcf', regions=[...])"))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def pgx_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "pgx")
+    import shutil as _shutil
+    btn_back_pgx = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_pgx = mo.ui.button(label="🔄 Refresh the file list")
+    btn_get_pharmcat = mo.ui.button(label="⬇️ Download PharmCAT 3.4.0 (32 MB, from GitHub)", value=0, on_click=lambda v: v + 1)
+    pgx_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _java = _shutil.which("java")
+    _ui = mo.vstack([
+        btn_back_pgx,
+        mo.md("<br>\n\n# 💊 19. Pharmacogenomics (PharmCAT)"),
+        human_notice(),
+        mo.callout(mo.md(
+            "How a person's genes may change the response to medicines: **star alleles** (e.g. CYP2C19 \\*1/\\*2), the **metabolizer "
+            "phenotype** and the matching CPIC and DPWG guideline texts. The calls are made by **PharmCAT**, the open-source tool of "
+            "PharmGKB and CPIC (pharmcat.org, MPL-2.0): MMGEN prepares its input from the person's VCF (the genotype at each of the "
+            "positions PharmCAT reads, 0/0 where the calls are reliable and nothing was found) and shows its results. PharmCAT does "
+            "not call CYP2D6 or HLA genes from a VCF: give them as an outside-call file if a laboratory reported them. "
+            "It runs on Java 17 or newer."), kind="info"),
+        mo.md(f"Java: {'found at `' + _java + '`' if _java else '**not found**: install Java 17 or newer (adoptium.net; on Colab: `!apt-get install -y openjdk-21-jre-headless`)'}"),
+        pgx_folder,
+        mo.hstack([btn_get_pharmcat, btn_refresh_pgx], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_pgx, btn_get_pharmcat, btn_refresh_pgx, pgx_folder
+
+
+@app.cell
+def pgx_page_download(btn_get_pharmcat, error_panel, get_page, mo, os):
+    mo.stop(get_page() != "pgx")
+    # PharmCAT goes to mmgen_tools/pharmcat/, with the positions file of its release.
+    PHARMCAT_DIR = "mmgen_tools/pharmcat"
+    pgx_downloaded = 0
+    if btn_get_pharmcat.value:
+        import urllib.request as _url
+        _base = "https://github.com/PharmGKB/PharmCAT/releases/download/v3.4.0/"
+        try:
+            os.makedirs(PHARMCAT_DIR, exist_ok=True)
+            with mo.status.spinner("Downloading PharmCAT 3.4.0..."):
+                for _f in ("pharmcat-3.4.0-all.jar", "pharmcat_positions_3.4.0.vcf"):
+                    if not os.path.exists(os.path.join(PHARMCAT_DIR, _f)):
+                        _url.urlretrieve(_base + _f, os.path.join(PHARMCAT_DIR, _f) + ".part")
+                        os.replace(os.path.join(PHARMCAT_DIR, _f) + ".part", os.path.join(PHARMCAT_DIR, _f))
+            pgx_downloaded = btn_get_pharmcat.value
+            _out = mo.callout(mo.md(f"✅ PharmCAT 3.4.0 is in `{os.path.abspath(PHARMCAT_DIR)}`."), kind="success")
+        except Exception as _err:
+            _out = error_panel(f"the download failed ({_err}). Download pharmcat-3.4.0-all.jar and pharmcat_positions_3.4.0.vcf "
+                               f"from https://github.com/PharmGKB/PharmCAT/releases into `{PHARMCAT_DIR}/` by hand.")
+    else:
+        _out = None
+    _out
+    return PHARMCAT_DIR, pgx_downloaded
+
+
+@app.cell
+def pgx_page_example(example_picker, get_page, mo):
+    mo.stop(get_page() != "pgx")
+    pgx_example = example_picker("pgx")
+    pgx_example
+    return (pgx_example,)
+
+
+@app.cell
+def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_under, get_page, label_of, make_form, mo, os, pgx_downloaded, pgx_example, pgx_folder):
+    mo.stop(get_page() != "pgx")
+    btn_refresh_pgx, pgx_downloaded  # re-list the folder after a refresh or a download
+    _ex, _about = example_for("pgx", None, pgx_example.value)
+    _folder = pgx_folder.value
+    _vcfs = files_under(_folder, "vcf")
+    _beds = {"(none: a position without a record counts as reference)": "none"}
+    for _b in files_under(_folder, "bed_any"):
+        if _b != NO_FILE:
+            _beds[_b] = _b
+    _jars = [_j for _j in files_under(_folder, "jar") if "pharmcat" in _j.lower()]
+    if os.path.isdir(PHARMCAT_DIR):
+        _jars += [f"{PHARMCAT_DIR}/{_n}" for _n in sorted(os.listdir(PHARMCAT_DIR)) if _n.endswith("-all.jar")]
+    _jars = list(dict.fromkeys(_jars)) or ["(PharmCAT not found: download it above)"]
+    _outside = {"(none)": "none"}
+    for _t in files_under(_folder, "table"):
+        if _t != NO_FILE:
+            _outside[_t] = _t
+    form_pgx = make_form({
+        "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF (GRCh38):", full_width=True),
+        "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the first sample", label="Sample, in a multi-sample VCF:"),
+        "callable": mo.ui.dropdown(options=_beds, value=label_of(_beds, _ex.get("callable", "none"), "(none: a position without a record counts as reference)"),
+                                   label="Callable regions (BED): outside them, a position without a record is 'not read':", full_width=True),
+        "jar": mo.ui.dropdown(options=_jars, value=_jars[-1], label="PharmCAT (pharmcat-<version>-all.jar, with its positions file next to it):", full_width=True),
+        "outside": mo.ui.dropdown(options=_outside, value="(none)", label="Outside calls (TSV), e.g. CYP2D6 or HLA-B from a laboratory:", full_width=True),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <VCF name>_pharmcat/ next to the VCF", label="Output folder:", full_width=True),
+    }, "💊 Run PharmCAT")
+    mo.vstack([_x for _x in (_about, form_pgx) if _x is not None])
+    return (form_pgx,)
+
+
+@app.cell
+async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_pgx, get_page, mmg, mo, os, python_call, split_name, warn):
+    mo.stop(get_page() != "pgx")
+    mo.stop(form_pgx.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_pgx.value
+    mo.stop(not chosen(_v["vcf"]), warn("Select the person's VCF."))
+    mo.stop(not _v["jar"].endswith(".jar"), warn("PharmCAT is needed: click **Download PharmCAT** above, or put pharmcat-<version>-all.jar and its positions file in the data folder."))
+    _out = (_v["output"] or "").strip() or beside(_v["vcf"], split_name(_v["vcf"])[0] + "_pharmcat")
+    _kw = {}
+    if (_v["sample"] or "").strip():
+        _kw["sample"] = _v["sample"].strip()
+    if _v["callable"] != "none":
+        _kw["callable_bed"] = _v["callable"]
+    if _v["outside"] != "none":
+        _kw["outside_calls"] = _v["outside"]
+    try:
+        with mo.status.spinner("Preparing the input and running PharmCAT (about 15 seconds)..."):
+            _r = await asyncio.to_thread(mmg.pharmcat_run, _v["vcf"], _out, _v["jar"], **_kw)
+        _p = _r["prepared"]
+        _read = _p["with_variant"] + _p["reference_record"] + _p["reference_filled"]
+        _missing = _p["missing_outside_callable"] + _p["missing_no_sequence"] + _p["missing_in_record"] + _p["ref_mismatch"]
+        _rows = [
+            ("PharmCAT", f"{_r['pharmcat_version']}, in {_r['seconds_pharmcat']:.0f} s"),
+            ("Sample", f"`{_p['sample']}`"),
+            ("Positions read", f"`{_read:,}` of `{_p['positions']:,}` (`{_p['with_variant']:,}` with a variant)"),
+            ("Positions not read", f"`{_missing:,}`" + (f"; sequences not in the file: {', '.join(_p['absent_sequences'])}" if _p["absent_sequences"] else "")),
+            ("Genes in the report", f"`{len(_r['calls'])}`"),
+            ("Reports", f"`{os.path.abspath(_r['files'].get('report_html', _out))}` (HTML, with the guideline texts) and JSON"),
+        ]
+        _items = [mo.callout(mo.md("### 💊 PharmCAT results\n" + facts(_rows)), kind="success")]
+        _items.append(mo.ui.table([{
+            "gene": _c.get("gene", ""),
+            "diplotype": _c.get("source_diplotype", ""),
+            "phenotype": _c.get("phenotype", ""),
+            "activity score": _c.get("activity_score", ""),
+            "missing positions": _c.get("missing_positions", ""),
+        } for _c in _r["calls"]], selection=None, pagination=True, page_size=25, label="Calls per gene"))
+        if _p["absent_sequences"]:
+            _items.append(warn(f"The file has no {', '.join(_p['absent_sequences'])}: the genes there (e.g. G6PD on chrX) were not called."))
+        _items.append(mo.callout(mo.md(
+            "**Reading the result.** A phenotype such as *poor metabolizer* says how fast an enzyme is expected to work, not what to "
+            "prescribe. The HTML report below lists the guideline texts; **any change to a treatment is a decision for the "
+            "prescriber, with a laboratory-confirmed result.**"), kind="warn"))
+        _html = _r["files"].get("report_html")
+        if _html and os.path.exists(_html):
+            with open(_html, encoding="utf-8") as _fh:
+                _items.append(mo.accordion({"PharmCAT's full report (HTML)": mo.iframe(_fh.read(), height="900px")}))
+        _items.append(code_panel(f"r = {python_call('pharmcat_run', _v['vcf'], _out, _v['jar'], **_kw)}",
+                                 'for c in r["calls"]:\n    print(c["gene"], c["source_diplotype"], c["phenotype"])'))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def lookup_page_ui(get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "lookup")
+    btn_back_lookup = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_lookup = mo.ui.button(label="🔄 Refresh the file list")
+    lookup_task = mo.ui.radio(options=["Look up variants in relatives (cascade testing)", "Allele counts at a position (BAM)"],
+                              value="Look up variants in relatives (cascade testing)", inline=True, label="**What to do:**")
+    lookup_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_lookup,
+        mo.md("<br>\n\n# 🔎 21. Variant Lookup & Allele Counts"),
+        human_notice(),
+        mo.callout(mo.md("Once a variant is known in a family, relatives are tested for that one variant (**cascade testing**), usually by Sanger sequencing or qPCR. Here: the genotype of each person at given variants, from their VCFs; and, from a BAM, **the bases the reads show at one position** (depth and allele fractions) — what one looks at to confirm a variant."), kind="info"),
+        lookup_folder,
+        mo.hstack([lookup_task, btn_refresh_lookup], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_lookup, btn_refresh_lookup, lookup_folder, lookup_task
+
+
+@app.cell
+def lookup_page_example(example_picker, get_page, lookup_task, mo):
+    mo.stop(get_page() != "lookup")
+    lookup_example = example_picker("lookup", lookup_task.value)
+    lookup_example
+    return (lookup_example,)
+
+
+@app.cell
+def lookup_page_form(NO_FILE, btn_refresh_lookup, example_for, files_under, get_page, label_of, lookup_example, lookup_folder, lookup_task, make_form, mo):
+    mo.stop(get_page() != "lookup")
+    btn_refresh_lookup  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("lookup", lookup_task.value, lookup_example.value)
+    _folder = lookup_folder.value
+    if lookup_task.value.startswith("Look up"):
+        _vcfs = files_under(_folder, "vcf")
+        _cv = {"(none: coordinates only)": "none"}
+        for _f in _vcfs:
+            if _f != NO_FILE and "clinvar" in _f.lower():
+                _cv[_f] = _f
+        form_lookup = make_form({
+            "variants": mo.ui.text_area(value=_ex.get("variants", ""), placeholder="chr4:186274193:G:T\nrs121965063",
+                                        label="Variants, one per line (chrom:pos:ref:alt; or an rsID / ClinVar ID with ClinVar below):", full_width=True),
+            "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="The relatives' VCFs:", full_width=True),
+            "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label="Use the callable-regions BED next to each VCF (`x.callable.bed`, or the Genome in a Bottle `*_benchmark*.bed`)"),
+            "clinvar": mo.ui.dropdown(options=_cv, value=label_of(_cv, _ex.get("clinvar", "none"), "(none: coordinates only)"), label="ClinVar VCF, to resolve rsIDs and show the classification:", full_width=True),
+        }, "🔎 Look up")
+    else:
+        form_lookup = make_form({
+            "bam": mo.ui.dropdown(options=files_under(_folder, "sam"), value=_ex.get("bam"), label="Aligned reads (BAM with .bai, or SAM):", full_width=True),
+            "position": mo.ui.text(value=_ex.get("position", ""), placeholder="chr1:25000", label="Position (1-based):"),
+            "alt": mo.ui.text(value=_ex.get("alt", ""), placeholder="blank: the most frequent other allele; or T, C>T, CAG>C", label="Allele to measure:"),
+            "min_mapq": mo.ui.number(start=0, stop=255, step=1, value=_ex.get("min_mapq", 0), label="Minimum mapping quality:"),
+            "min_baseq": mo.ui.number(start=0, stop=93, step=1, value=_ex.get("min_baseq", 13), label="Minimum base quality:"),
+        }, "🧮 Count")
+    mo.vstack([_x for _x in (_about, form_lookup) if _x is not None])
+    return (form_lookup,)
+
+
+@app.cell
+async def lookup_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, form_lookup, get_page, lookup_task, mmg, mo, python_call, warn):
+    mo.stop(get_page() != "lookup")
+    mo.stop(form_lookup.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_lookup.value
+
+    if lookup_task.value.startswith("Look up"):
+        _vars = [_l.strip() for _l in (_v["variants"] or "").splitlines() if _l.strip()]
+        _vcfs = [_p for _p in _v["vcfs"] if chosen(_p)]
+        mo.stop(not _vars, warn("Type at least one variant."))
+        mo.stop(not _vcfs, warn("Select at least one VCF."))
+        _kw = {}
+        if _v["use_beds"]:
+            _beds = [bed_next_to(_p) for _p in _vcfs]
+            if any(_beds):
+                _kw["callable_beds"] = _beds
+        if _v["clinvar"] != "none":
+            _kw["clinvar"] = _v["clinvar"]
+        try:
+            with mo.status.spinner("Looking the variants up..."):
+                _r = await asyncio.to_thread(mmg.variant_lookup, _vars, _vcfs, **_kw)
+            _meaning = {"present": "carries it", "other_allele": "another allele here", "no_call": "no call", "reference": "reference (called)",
+                        "absent_callable": "does not carry it (reliable region)", "not_callable": "not read (outside the reliable region)",
+                        "absent": "not in the file"}
+            _table = []
+            for _c in _r["calls"]:
+                _x = _r["variants"][_c["variant"]]
+                _table.append({
+                    "variant": _x["query"] if _x["query"].count(":") == 3 else f"{_x['query']} ({_x['chrom']}:{_x['pos']} {_x['ref']}>{_x['alt']})",
+                    "person": _r["people"][_c["person"]],
+                    "genotype": _c.get("genotype") or "",
+                    "zygosity": _c.get("zygosity") or "",
+                    "result": _meaning.get(_c["status"], _c["status"]),
+                })
+            _info = []
+            for _x in _r["variants"]:
+                _desc = f"* `{_x['query']}`"
+                if _x.get("in_clinvar"):
+                    _desc += f": {', '.join(_x.get('genes') or [])} — ClinVar {(_x.get('significance') or '').replace('_', ' ')} ({'★' * (_x.get('stars') or 0)})"
+                _info.append(_desc)
+            _items = [mo.callout(mo.md("### 🔎 Lookup\n" + "\n".join(_info) + (("\n\nNot resolved: " + ", ".join(f"`{_u}`" for _u in _r["unresolved"])) if _r["unresolved"] else "")), kind="success")]
+            _items.append(mo.ui.table(_table, selection=None, pagination=True, page_size=20, label="Each person at each variant"))
+            if not _kw.get("callable_beds"):
+                _items.append(mo.md("*Without a callable-regions BED, a variant absent from a VCF may be reference or simply not read.*"))
+            _items.append(code_panel(f"r = {python_call('variant_lookup', _vars, _vcfs, **_kw)}"))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    else:
+        mo.stop(not chosen(_v["bam"]), warn("Select a BAM (or SAM) file."))
+        mo.stop(":" not in (_v["position"] or ""), warn("Type the position as chrom:pos, e.g. chr1:25000."))
+        _kw = {}
+        if (_v["alt"] or "").strip():
+            _kw["alt"] = _v["alt"].strip()
+        if int(_v["min_mapq"] or 0):
+            _kw["min_mapq"] = int(_v["min_mapq"])
+        if int(_v["min_baseq"] or 0) != 13:
+            _kw["min_baseq"] = int(_v["min_baseq"] or 0)
+        try:
+            with mo.status.spinner("Counting the bases..."):
+                _r = await asyncio.to_thread(mmg.pileup, _v["bam"], _v["position"].strip(), **_kw)
+            _rows = [
+                ("Reads over the position", f"`{_r['reads']:,}`; left out: flags `{_r['filtered_flag']}`, mapping quality `{_r['filtered_mapq']}`, base quality `{_r['filtered_baseq']}`"),
+                ("Depth", f"`{_r['depth']:,}`"),
+                ("Bases", f"A `{_r['a']}` · C `{_r['c']}` · G `{_r['g']}` · T `{_r['t']}` · N `{_r['n']}` · deletion `{_r['deletions']}`"),
+                ("Reference allele", f"`{_r['ref_allele']}`: `{_r['ref_count']}` reads ({100 * (_r['ref_fraction'] or 0):.1f}%)" if _r.get("ref_allele") else "unknown"),
+            ]
+            if _r.get("alt"):
+                _rows.append(("Allele measured", f"`{_r['alt']}`: `{_r['alt_count']}` reads ({100 * (_r['alt_fraction'] or 0):.1f}%)"))
+            _items = [mo.callout(mo.md(f"### 🧮 {_v['position']}\n" + facts(_rows)), kind="success" if _r["depth"] else "warn")]
+            if _r["alleles"]:
+                _items.append(mo.ui.table([{
+                    "allele": _a.get("allele", ""), "reads": _a.get("count", 0), "forward": _a.get("forward", 0),
+                    "reverse": _a.get("reverse", 0), "fraction": f"{100 * _a.get('fraction', 0):.1f}%",
+                } for _a in _r["alleles"]], selection=None, label="Alleles"))
+            _items.append(mo.md("*About 50% of the reads with an allele is what a heterozygous variant looks like, about 100% a homozygous one; a few percent is usually noise — or, in a tumor, a low-fraction somatic variant.*"))
+            _items.append(code_panel(f"r = {python_call('pileup', _v['bam'], _v['position'].strip(), **_kw)}"))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def rnaseq_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "rnaseq")
+    btn_back_rnaseq = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_rnaseq = mo.ui.button(label="🔄 Refresh the file list")
+    rnaseq_task = mo.ui.radio(options=["Count reads per gene", "Differential expression"], value="Count reads per gene", inline=True, label="**What to do:**")
+    rnaseq_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_rnaseq,
+        mo.md("<br>\n\n# 📊 22. RNA-seq: Gene Counts & Differential Expression"),
+        mo.callout(mo.md(
+            "Which genes a treatment switches on or off. **Counting**: each RNA-seq read aligned to the genome (BAM) is assigned "
+            "to the gene whose exons it falls in, as featureCounts and htseq-count do. **Differential expression**: the counts of "
+            "two conditions are compared gene by gene in the manner of **DESeq2**: samples normalized by their sequencing depth, "
+            "the gene's variability estimated and shrunk toward the trend of genes like it, a negative-binomial model and a Wald "
+            "test, with the false-discovery rate (padj) for thousands of genes tested at once. Add a blocking factor (for "
+            "example the donor) to compare the conditions within each one. Experimental, for teaching and research."), kind="info"),
+        rnaseq_folder,
+        mo.hstack([rnaseq_task, btn_refresh_rnaseq], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_rnaseq, btn_refresh_rnaseq, rnaseq_folder, rnaseq_task
+
+
+@app.cell
+def rnaseq_page_example(example_picker, get_page, mo, rnaseq_task):
+    mo.stop(get_page() != "rnaseq")
+    rnaseq_example = example_picker("rnaseq", rnaseq_task.value)
+    rnaseq_example
+    return (rnaseq_example,)
+
+
+@app.cell
+def rnaseq_page_form(NO_FILE, btn_refresh_rnaseq, example_for, files_under, get_page, label_of, make_form, mo, rnaseq_example, rnaseq_folder, rnaseq_task):
+    mo.stop(get_page() != "rnaseq")
+    btn_refresh_rnaseq  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("rnaseq", rnaseq_task.value, rnaseq_example.value)
+    _folder = rnaseq_folder.value
+    if rnaseq_task.value == "Count reads per gene":
+        _attrs = {"default: gene_id, else the parent gene": "default", "gene_id": "gene_id", "gene": "gene", "Name": "Name",
+                  "GeneID (RefSeq Dbxref)": "GeneID"}
+        _strands = {"unstranded": "unstranded", "forward (read 1 on the gene's strand)": "forward", "reverse (dUTP, most kits)": "reverse"}
+        form_rnaseq = make_form({
+            "bams": mo.ui.multiselect(options=files_under(_folder, "sam"), value=_ex.get("bams", []), label="Aligned reads (BAM):", full_width=True),
+            "annotation": mo.ui.dropdown(options=files_under(_folder, "gff"), value=_ex.get("annotation"), label="Annotation (GFF3 / GTF):", full_width=True),
+            "feature": mo.ui.text(value=_ex.get("feature", "exon"), label="Feature counted:"),
+            "attribute": mo.ui.dropdown(options=_attrs, value=label_of(_attrs, _ex.get("attribute", "default"), "default: gene_id, else the parent gene"), label="Genes from the attribute:", full_width=True),
+            "strandedness": mo.ui.dropdown(options=_strands, value=label_of(_strands, _ex.get("strandedness", "unstranded"), "unstranded"), label="Library strandedness:", full_width=True),
+            "min_mapq": mo.ui.number(start=0, stop=255, step=1, value=_ex.get("min_mapq", 10), label="Minimum mapping quality:"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: counts.tsv next to the first BAM", label="Count table:", full_width=True),
+        }, "📊 Count")
+    else:
+        _tables = [_f for _f in files_under(_folder, "table") if _f != NO_FILE] or [NO_FILE]
+        _names = {"(none: gene IDs only)": "none", **{_f: _f for _f in _tables if _f != NO_FILE}}
+        form_rnaseq = make_form({
+            "counts": mo.ui.dropdown(options=_tables, value=_ex.get("counts"), label="Count table (gene + one column per sample):", full_width=True),
+            "samples": mo.ui.dropdown(options=_tables, value=_ex.get("samples"), label="Sample table (sample + one column per factor):", full_width=True),
+            "condition": mo.ui.text(value=_ex.get("condition", "condition"), label="Condition column:"),
+            "reference": mo.ui.text(value=_ex.get("reference", ""), placeholder="control", label="Reference level (the baseline):"),
+            "treated": mo.ui.text(value=_ex.get("treated", ""), placeholder="blank: the other level", label="Level compared with it:"),
+            "factors": mo.ui.text(value=_ex.get("factors", ""), placeholder="cell_line", label="Blocking factors (columns), if any:", full_width=True),
+            "alpha": mo.ui.number(start=0.001, stop=0.5, step=0.01, value=_ex.get("alpha", 0.1), label="False-discovery rate (padj) threshold:"),
+            "names": mo.ui.dropdown(options=_names, value=label_of(_names, _ex.get("names", "none"), "(none: gene IDs only)"), label="Gene names (gene_info or a two-column table):", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <counts>.de.tsv next to it", label="Result table:", full_width=True),
+        }, "📊 Compare")
+    mo.vstack([_x for _x in (_about, form_rnaseq) if _x is not None])
+    return (form_rnaseq,)
+
+
+@app.cell
+async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_rnaseq, get_page, mmg, mo, python_call, rnaseq_task, scatter_chart, split_name, warn, words):
+    mo.stop(get_page() != "rnaseq")
+    mo.stop(form_rnaseq.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_rnaseq.value
+    try:
+        if rnaseq_task.value == "Count reads per gene":
+            _bams = [_p for _p in _v["bams"] if chosen(_p)]
+            mo.stop(not _bams, warn("Select the BAM files, one per sample."))
+            mo.stop(not chosen(_v["annotation"]), warn("Select the annotation (GFF3 or GTF) of the same assembly."))
+            _out = (_v["output"] or "").strip() or beside(_bams[0], "counts.tsv")
+            _kw = {}
+            if (_v["feature"] or "exon").strip() != "exon":
+                _kw["feature_type"] = _v["feature"].strip()
+            if _v["attribute"] != "default":
+                _kw["attribute"] = _v["attribute"]
+            if _v["strandedness"] != "unstranded":
+                _kw["strandedness"] = _v["strandedness"]
+            if int(_v["min_mapq"]) != 10:
+                _kw["min_mapq"] = int(_v["min_mapq"])
+            with mo.status.spinner(f"Counting the reads of {len(_bams)} sample(s)..."):
+                _r = await asyncio.to_thread(mmg.count_reads, _bams, _v["annotation"], _out, **_kw)
+            _items = [mo.callout(mo.md("### 📊 Reads counted\n" + facts([
+                ("Genes", f"`{len(_r['genes']):,}` from `{_r['features']:,}` {_r['feature_type']} features"),
+                ("Count table", f"`{_out}`"),
+            ])), kind="success")]
+            _items.append(mo.ui.table([{
+                "sample": _s["sample"], "fragments": _s["fragments"], "assigned": _s["assigned"],
+                "assigned %": f"{100 * _s['assigned'] / _s['fragments']:.1f}%" if _s["fragments"] else "",
+                "no feature": _s["no_feature"], "ambiguous": _s["ambiguous"], "multimapping": _s["multimapping"], "low quality": _s["low_mapq"],
+            } for _s in _r["samples"]], selection=None, label="Assignment per sample"))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('count_reads', _bams, _v['annotation'], _out, **_kw)}", 'print(r["text"])'))
+        else:
+            mo.stop(not chosen(_v["counts"]) or not chosen(_v["samples"]), warn("Select the count table and the sample table."))
+            mo.stop(not (_v["reference"] or "").strip(), warn("Type the reference level of the condition (e.g. control, untrt)."))
+            _out = (_v["output"] or "").strip() or beside(_v["counts"], split_name(_v["counts"])[0] + ".de.tsv")
+            _kw = {"output": _out}
+            if (_v["treated"] or "").strip():
+                _kw["treated"] = _v["treated"].strip()
+            if words(_v["factors"]):
+                _kw["factors"] = words(_v["factors"])
+            if float(_v["alpha"]) != 0.1:
+                _kw["alpha"] = float(_v["alpha"])
+            if _v["names"] != "none":
+                _kw["gene_names"] = _v["names"]
+            _cond, _ref = _v["condition"].strip(), _v["reference"].strip()
+            with mo.status.spinner("Fitting the model for every gene..."):
+                _r = await asyncio.to_thread(mmg.differential_expression, _v["counts"], _v["samples"], _cond, _ref, **_kw)
+            _p = _r["plot"]
+            _alpha = _r["alpha"]
+            _n = len(_p["gene"])
+            _label = lambda i: (_p["name"][i] if _p.get("name") and _p["name"][i] else _p["gene"][i])
+            _kind = lambda i: ("ns" if _p["padj"][i] is None or _p["padj"][i] >= _alpha else ("up" if _p["log2_fold_change"][i] > 0 else "down"))
+            _sig = sorted([_i for _i in range(_n) if _p["padj"][_i] is not None and _p["padj"][_i] < _alpha], key=lambda _i: _p["padj"][_i])
+            import math as _m
+            _vol = [(_p["log2_fold_change"][_i], -_m.log10(max(_p["padj"][_i], 1e-300)), _kind(_i),
+                     f"{_label(_i)}: log2FC {_p['log2_fold_change'][_i]:.2f}, padj {_p['padj'][_i]:.2g}")
+                    for _i in range(_n) if _p["padj"][_i] is not None and _p["log2_fold_change"][_i] is not None]
+            _ma = [(_m.log10(_p["base_mean"][_i]), _p["log2_fold_change"][_i], _kind(_i), f"{_label(_i)}: mean {_p['base_mean'][_i]:.0f}")
+                   for _i in range(_n) if _p["base_mean"][_i] and _p["log2_fold_change"][_i] is not None]
+            _top = [(_p["log2_fold_change"][_i], -_m.log10(max(_p["padj"][_i], 1e-300)), _label(_i)) for _i in _sig[:10]]
+            _items = [mo.callout(mo.md("### 📊 Differential expression\n" + facts([
+                ("Comparison", f"`{_r['treated']}` against `{_r['reference']}` in `{_r['condition']}`; design `{_r['design']}`"),
+                ("Genes tested", f"`{_r['tested']:,}`"),
+                (f"Changed at padj < {_alpha:g}", f"`{_r['up']:,}` up, `{_r['down']:,}` down"),
+                ("Result table", f"`{_out}`"),
+            ])), kind="success")]
+            _items.append(mo.ui.table([{
+                "gene": _label(_i), "base mean": round(_p["base_mean"][_i], 1), "log2 fold change": round(_p["log2_fold_change"][_i], 3),
+                "padj": f"{_p['padj'][_i]:.3g}",
+            } for _i in _sig[:500]], selection=None, pagination=True, page_size=10, label=f"The changed genes, most significant first ({len(_sig):,})"))
+            _charts = [_c for _c in (
+                scatter_chart(_vol, "log2 fold change", "−log10 padj", "Volcano plot", labels=_top, hlines=[-_m.log10(_alpha)], vlines=[0]),
+                scatter_chart(_ma, "log10 mean of normalized counts", "log2 fold change", "MA plot", hlines=[0]),
+            ) if _c is not None]
+            if _charts:
+                _items.append(mo.hstack(_charts, widths="equal", wrap=True))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _args = {_k: _x for _k, _x in _kw.items() if _k != "output"}
+            _items.append(code_panel(f"r = {python_call('differential_expression', _v['counts'], _v['samples'], _cond, _ref, output=_out, **_args)}",
+                                     'print(r["text"])'))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def crispr_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "crispr")
+    btn_back_crispr = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_crispr = mo.ui.button(label="🔄 Refresh the file list")
+    crispr_task = mo.ui.radio(options=["Count guides in reads", "Rank genes (MAGeCK RRA)"], value="Count guides in reads", inline=True, label="**What to do:**")
+    crispr_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_crispr,
+        mo.md("<br>\n\n# ✂️ 23. CRISPR Screens (MAGeCK)"),
+        mo.callout(mo.md(
+            "In a pooled CRISPR knockout screen, each cell gets one guide RNA that switches one gene off; the cells then grow, "
+            "with or without a drug. Sequencing the guides before and after tells which knockouts were lost (**negative "
+            "selection**: genes the cells need, or that protect them from the drug) and which were enriched (**positive "
+            "selection**: genes whose loss gives resistance). **Counting** finds each read's guide in the library, as `mageck "
+            "count` does; **ranking** normalizes the counts, scores every guide and combines the guides of each gene by robust "
+            "rank aggregation (RRA), as `mageck test` does — here with the same results, line by line. Experimental, for "
+            "teaching and research."), kind="info"),
+        crispr_folder,
+        mo.hstack([crispr_task, btn_refresh_crispr], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_crispr, btn_refresh_crispr, crispr_folder, crispr_task
+
+
+@app.cell
+def crispr_page_example(crispr_task, example_picker, get_page, mo):
+    mo.stop(get_page() != "crispr")
+    crispr_example = example_picker("crispr", crispr_task.value)
+    crispr_example
+    return (crispr_example,)
+
+
+@app.cell
+def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_task, example_for, files_under, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "crispr")
+    btn_refresh_crispr  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("crispr", crispr_task.value, crispr_example.value)
+    _folder = crispr_folder.value
+    _tables = files_under(_folder, "table")
+    if crispr_task.value == "Count guides in reads":
+        _mm = {"exact only (as MAGeCK)": 0, "also one mismatch, when only one guide is that close": 1}
+        form_crispr = make_form({
+            "library": mo.ui.dropdown(options=_tables, value=_ex.get("library"), label="Guide library (id, sequence, gene):", full_width=True),
+            "fastqs": mo.ui.multiselect(options=files_under(_folder, "fastq"), value=_ex.get("fastqs", []), label="Reads, one FASTQ per sample:", full_width=True),
+            "labels": mo.ui.text(value=_ex.get("labels", ""), placeholder="blank: sample1, sample2...", label="Sample names, in the same order:", full_width=True),
+            "mismatches": mo.ui.dropdown(options=_mm, value=label_of(_mm, _ex.get("mismatches", 0), "exact only (as MAGeCK)"), label="Matching:", full_width=True),
+            "reverse": mo.ui.checkbox(value=_ex.get("reverse", False), label="The reads carry the guide's reverse complement"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: guide_counts.txt next to the library", label="Count table:", full_width=True),
+        }, "✂️ Count")
+    else:
+        _norms = {"median ratio (MAGeCK's default)": "median", "total counts": "total", "none": "none"}
+        form_crispr = make_form({
+            "counts": mo.ui.dropdown(options=_tables, value=_ex.get("counts"), label="Count table (sgRNA, Gene, one column per sample):", full_width=True),
+            "treatment": mo.ui.text(value=_ex.get("treatment", ""), placeholder="HL60.final, KBM7.final", label="Treatment samples (after the screen):", full_width=True),
+            "control": mo.ui.text(value=_ex.get("control", ""), placeholder="blank: every other sample", label="Control samples (before):", full_width=True),
+            "norm": mo.ui.dropdown(options=_norms, value=label_of(_norms, _ex.get("norm", "median"), "median ratio (MAGeCK's default)"), label="Normalization:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: show here only", label="Also write MAGeCK's tables, with this prefix:", full_width=True),
+        }, "✂️ Rank the genes")
+    mo.vstack([_x for _x in (_about, form_crispr) if _x is not None])
+    return (form_crispr,)
+
+
+@app.cell
+async def crispr_page_backend(asyncio, beside, chosen, code_panel, crispr_task, error_panel, facts, form_crispr, get_page, mmg, mo, python_call, scatter_chart, warn, words):
+    mo.stop(get_page() != "crispr")
+    mo.stop(form_crispr.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_crispr.value
+    try:
+        if crispr_task.value == "Count guides in reads":
+            _fq = [_p for _p in _v["fastqs"] if chosen(_p)]
+            mo.stop(not chosen(_v["library"]), warn("Select the guide library."))
+            mo.stop(not _fq, warn("Select the FASTQ files, one per sample."))
+            _out = (_v["output"] or "").strip() or beside(_v["library"], "guide_counts.txt")
+            _kw = {"output": _out}
+            if words(_v["labels"]):
+                _kw["labels"] = words(_v["labels"])
+            if int(_v["mismatches"]):
+                _kw["mismatches"] = 1
+            if _v["reverse"]:
+                _kw["reverse_complement"] = True
+            with mo.status.spinner("Counting the guides..."):
+                _r = await asyncio.to_thread(mmg.crispr_count, _v["library"], _fq, **_kw)
+            _items = [mo.callout(mo.md("### ✂️ Guides counted\n" + facts([
+                ("Guides in the library", f"`{len(_r['sgrna']):,}`"), ("Count table", f"`{_out}`")])), kind="success"),
+                mo.ui.table([{
+                    "sample": _s["label"], "reads": _s["reads"], "mapped": _s["mapped"], "mapped %": f"{_s['mapped_pct']:.1f}%",
+                    "guides with no read": _s["zero_guides"], "Gini index": round(_s["gini"], 3),
+                    "guide offset": ", ".join(str(_o) for _f in _s["files"] for _o in _f["offsets"]),
+                } for _s in _r["samples"]], selection=None, label="Per sample"),
+                mo.md("*A Gini index near 0 means even guide counts; a high one, a few guides taking most reads (after strong selection, or a poor library).*")]
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('crispr_count', _v['library'], _fq, **_kw)}"))
+        else:
+            mo.stop(not chosen(_v["counts"]), warn("Select the count table."))
+            mo.stop(not words(_v["treatment"]), warn("Type the treatment samples (column names of the count table)."))
+            _kw = {}
+            if words(_v["control"]):
+                _kw["control"] = words(_v["control"])
+            if _v["norm"] != "median":
+                _kw["norm_method"] = _v["norm"]
+            if (_v["output"] or "").strip():
+                _kw["output_prefix"] = _v["output"].strip()
+            with mo.status.spinner("Scoring the guides and ranking the genes (with permutations)..."):
+                _r = await asyncio.to_thread(mmg.crispr_test, _v["counts"], words(_v["treatment"]), **_kw)
+            _items = [mo.callout(mo.md("### ✂️ Genes ranked\n" + facts([
+                ("Treatment against control", f"{', '.join(_r['treatment'])} against {', '.join(_r['control'])}"),
+                ("Guides / genes", f"`{_r['guides_used']:,}` of `{_r['guides_total']:,}` guides, `{_r['genes_total']:,}` genes"),
+                ("Size factors", ", ".join(f"{_n} {_f:.3f}" for _n, _f in _r["size_factors"])),
+                ("Normalization", _r["norm_used"]),
+            ])), kind="success")]
+            for _side, _title, _kind in (("neg", "Negative selection (depleted: genes the cells need)", "down"),
+                                         ("pos", "Positive selection (enriched)", "up")):
+                _rp = _r["rank_plot"][_side]
+                _rows = [{"rank": _rp["rank"][_i], "gene": _rp["gene"][_i], "score": f"{_rp['score'][_i]:.3g}",
+                          "FDR": f"{_rp['fdr'][_i]:.3g}", "LFC": round(_rp["lfc"][_i], 3)} for _i in range(min(200, len(_rp["gene"])))]
+                _items.append(mo.ui.table(_rows, selection=None, pagination=True, page_size=10, label=_title))
+                _pts = [(_rp["rank"][_i], _rp["minus_log10_score"][_i], _kind if _rp["fdr"][_i] < 0.25 else "ns",
+                         f"{_rp['gene'][_i]}: FDR {_rp['fdr'][_i]:.3g}") for _i in range(len(_rp["gene"]))]
+                _lab = [(_rp["rank"][_i], _rp["minus_log10_score"][_i], _rp["gene"][_i]) for _i in range(min(5, len(_rp["gene"])))]
+                _chart = scatter_chart(_pts, "gene rank", "−log10 RRA score", f"{_title.split(' (')[0]}: genes by rank (coloured: FDR < 0.25)", labels=_lab)
+                if _chart is not None:
+                    _items.append(_chart)
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('crispr_test', _v['counts'], words(_v['treatment']), **_kw)}",
+                                     'print(r["top_negative"][:10])'))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def meta_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "meta")
+    btn_back_meta = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_meta = mo.ui.button(label="🔄 Refresh the file list")
+    meta_task = mo.ui.radio(options=["Which species, and how much", "Classify the reads", "Sketch reference genomes"],
+                            value="Which species, and how much", inline=True, label="**What to do:**")
+    meta_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_meta,
+        mo.md("<br>\n\n# 🦠 24. Metagenomics: Species & Abundance"),
+        mo.callout(mo.md(
+            "Which organisms are in a sample sequenced as a whole (shotgun metagenomics: stool, soil, a culture, a clinical "
+            "sample), and in what proportions. Each reference genome is reduced to a **sketch** — a fixed fraction of its "
+            "k-mers, chosen by their hash, as sourmash does (with the same hashes) — and the sample's sketch is covered by the "
+            "references, the best match first (`gather`); or each read is assigned to the reference it shares most k-mers "
+            "with (as Kraken does). Human (host) reads are counted apart. Only the organisms of the references can be found: "
+            "a species missing from them shows as unassigned. Experimental, for teaching and research: not a clinical "
+            "diagnostic."), kind="info"),
+        meta_folder,
+        mo.hstack([meta_task, btn_refresh_meta], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_meta, btn_refresh_meta, meta_folder, meta_task
+
+
+@app.cell
+def meta_page_example(example_picker, get_page, meta_task, mo):
+    mo.stop(get_page() != "meta")
+    meta_example = example_picker("meta", meta_task.value)
+    meta_example
+    return (meta_example,)
+
+
+@app.cell
+def meta_page_form(NO_FILE, btn_refresh_meta, example_for, files_under, get_page, label_of, make_form, meta_example, meta_folder, meta_task, mo):
+    mo.stop(get_page() != "meta")
+    btn_refresh_meta  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("meta", meta_task.value, meta_example.value)
+    _folder = meta_folder.value
+    _seqs = files_under(_folder, "fastq", "fasta")
+    _sigs = files_under(_folder, "sig")
+    if meta_task.value == "Which species, and how much":
+        form_meta = make_form({
+            "samples": mo.ui.multiselect(options=_seqs, value=_ex.get("samples", []), label="Sample (both files of a pair):", full_width=True),
+            "databases": mo.ui.multiselect(options=_sigs, value=_ex.get("databases", []), label="Reference sketches (.sig):", full_width=True),
+            "threshold": mo.ui.number(start=0, stop=10**8, step=10_000, value=_ex.get("threshold", 50_000), label="Report a match only above this many bases of overlap:"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save the table (TSV):", full_width=True),
+        }, "🦠 Identify")
+    elif meta_task.value == "Classify the reads":
+        _mates = {"(none: single-end)": "none", **{_f: _f for _f in _seqs if _f != NO_FILE}}
+        form_meta = make_form({
+            "input": mo.ui.dropdown(options=_seqs, value=_ex.get("input"), label="Reads (R1):", full_width=True),
+            "input2": mo.ui.dropdown(options=_mates, value=label_of(_mates, _ex.get("input2", "none"), "(none: single-end)"), label="Mate reads (R2):", full_width=True),
+            "databases": mo.ui.multiselect(options=_sigs, value=_ex.get("databases", []), label="Reference sketches (a dense one, e.g. scaled 10-20):", full_width=True),
+            "min_hits": mo.ui.number(start=1, stop=1000, step=1, value=_ex.get("min_hits", 2), label="Minimum shared sketch k-mers to classify a read:"),
+            "host_free": mo.ui.text(value=_ex.get("host_free", ""), placeholder="blank: do not write them", label="Write the reads that are not host to (R1):", full_width=True),
+        }, "🦠 Classify")
+    else:
+        form_meta = make_form({
+            "genomes": mo.ui.multiselect(options=files_under(_folder, "fasta"), value=_ex.get("genomes", []), label="Genomes (one FASTA each):", full_width=True),
+            "host": mo.ui.checkbox(value=_ex.get("host", False), label="They are host genomes (e.g. human): their reads are counted apart"),
+            "scaled": mo.ui.number(start=1, stop=100_000, step=10, value=_ex.get("scaled", 1000), label="Scaled (keep one k-mer hash in this many):"),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="references.sig", label="Sketch database:", full_width=True),
+        }, "🦠 Sketch")
+    mo.vstack([_x for _x in (_about, form_meta) if _x is not None])
+    return (form_meta,)
+
+
+@app.cell
+async def meta_page_backend(asyncio, chosen, code_panel, error_panel, facts, form_meta, get_page, meta_task, mmg, mo, os, python_call, warn):
+    mo.stop(get_page() != "meta")
+    mo.stop(form_meta.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_meta.value
+
+    def _bars(rows):
+        """Rows of (label, percent, grey?) as horizontal bars in HTML."""
+        _top = max([_p for _, _p, _ in rows] + [1e-9])
+        _html = []
+        for _lab, _p, _grey in rows:
+            _w = max(0.5, 100 * _p / _top)
+            _c = "#898781" if _grey else "#2a78d6"
+            _html.append(f'<div style="display:grid; grid-template-columns: minmax(120px, 34%) 1fr 64px; gap: 8px; align-items: center; '
+                         f'font: 13px system-ui, sans-serif; margin: 3px 0;"><span>{_lab}</span>'
+                         f'<span style="background:{_c}; height: 12px; width: {_w:.1f}%; border-radius: 0 4px 4px 0;"></span>'
+                         f'<span style="text-align: right;">{_p:.2f}%</span></div>')
+        return mo.Html("".join(_html))
+
+    try:
+        if meta_task.value == "Which species, and how much":
+            _s = [_p for _p in _v["samples"] if chosen(_p)]
+            _d = [_p for _p in _v["databases"] if chosen(_p)]
+            mo.stop(not _s or not _d, warn("Select the sample and at least one sketch database (make one with **Sketch reference genomes**)."))
+            _kw = {}
+            if int(_v["threshold"]) != 50_000:
+                _kw["threshold_bp"] = int(_v["threshold"])
+            if (_v["output"] or "").strip():
+                _kw["output"] = _v["output"].strip()
+            with mo.status.spinner("Sketching the sample and matching it..."):
+                _r = await asyncio.to_thread(mmg.gather, _s, _d, **_kw)
+            _m = _r["matches"]
+            _rows = [(_x["name"] + (" (host)" if _x["host"] else ""), 100 * (_x["relative_abundance"] or _x["f_unique_weighted"] or 0), _x["host"]) for _x in _m]
+            _items = [mo.callout(mo.md("### 🦠 Species found\n" + facts([
+                ("Sample", f"`{_r['sequences']:,}` {'reads' if _r['reads'] else 'sequences'}, `{_r['bases']:,}` bases, `{_r['sample_hashes']:,}` sketch k-mers"),
+                ("Matches", f"`{len(_m)}` of `{_r['references']}` references"),
+                ("Unassigned", f"{100 * (_r['unassigned_weighted'] or 0):.1f}% of the sample's k-mers (weighted by abundance)"),
+            ])), kind="success")]
+            if _m:
+                _items.append(mo.md("**Relative abundance** (host reads apart):"))
+                _items.append(_bars(_rows))
+                _items.append(mo.ui.table([{
+                    "rank": _x["rank"], "reference": _x["name"], "relative abundance": f"{100 * _x['relative_abundance']:.2f}%" if _x["relative_abundance"] is not None else "host",
+                    "containment": f"{_x['containment']:.3f}", "ANI": f"{_x['ani']:.4f}", "overlap (bp)": _x["unique_intersect_bp"],
+                } for _x in _m], selection=None, label="Matches"))
+            _items.append(code_panel(f"r = {python_call('gather', _s, _d, **_kw)}"))
+        elif meta_task.value == "Classify the reads":
+            mo.stop(not chosen(_v["input"]), warn("Select the reads."))
+            _d = [_p for _p in _v["databases"] if chosen(_p)]
+            mo.stop(not _d, warn("Select at least one sketch database."))
+            _kw = {}
+            if _v["input2"] != "none":
+                _kw["input2"] = _v["input2"]
+            if int(_v["min_hits"]) != 2:
+                _kw["min_hits"] = int(_v["min_hits"])
+            if (_v["host_free"] or "").strip():
+                _kw["host_free"] = _v["host_free"].strip()
+            with mo.status.spinner("Classifying the reads..."):
+                _r = await asyncio.to_thread(mmg.classify_reads, _v["input"], _d, **_kw)
+            _items = [mo.callout(mo.md("### 🦠 Reads classified\n" + facts([
+                (("Pairs" if _r["paired"] else "Reads"), f"`{_r['reads']:,}`: `{_r['classified']:,}` classified, `{_r['host']:,}` host, `{_r['unclassified']:,}` unclassified"),
+            ])), kind="success")]
+            _rows = [(_x["name"] + (" (host)" if _x["host"] else ""), 100 * (_x["fraction_of_classified"] or 0), _x["host"]) for _x in _r["rows"] if _x["reads"]]
+            if _rows:
+                _items.append(mo.md("**Share of the classified reads:**"))
+                _items.append(_bars(sorted(_rows, key=lambda _t: -_t[1])))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('classify_reads', _v['input'], _d, **_kw)}"))
+        else:
+            _g = [_p for _p in _v["genomes"] if chosen(_p)]
+            mo.stop(not _g, warn("Select the genomes."))
+            _out = (_v["output"] or "").strip() or "references.sig"
+            _kw = {}
+            if _v["host"]:
+                _kw["host"] = [True] * len(_g)
+            if int(_v["scaled"]) != 1000:
+                _kw["scaled"] = int(_v["scaled"])
+            with mo.status.spinner("Sketching..."):
+                _r = await asyncio.to_thread(mmg.sketch_references, _g, _out, **_kw)
+            _items = [mo.callout(mo.md("### 🦠 Sketches written\n" + facts([("Database", f"`{os.path.abspath(_out)}`"), ("k / scaled", f"{_r['k']} / {_r['scaled']}")])), kind="success"),
+                      mo.ui.table([{"genome": _x["name"], "bases": _x["bases"], "sketch k-mers": _x["hashes"], "host": "yes" if _x["host"] else ""}
+                                   for _x in _r["genomes"]], selection=None, label="Genomes"),
+                      code_panel(f"r = {python_call('sketch_references', _g, _out, **_kw)}")]
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def amr_page_ui(example_picker, get_page, mo, set_page):
+    mo.stop(get_page() != "amr")
+    btn_back_amr = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_amr = mo.ui.button(label="🔄 Refresh the file list")
+    amr_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    amr_example = example_picker("amr")
+    _ui = mo.vstack([
+        btn_back_amr,
+        mo.md("<br>\n\n# 💉 25. Antimicrobial Resistance Genes"),
+        mo.callout(mo.md(
+            "Which known resistance genes a bacterial isolate carries — carbapenemases such as KPC and NDM, mecA of MRSA, "
+            "ESBLs, aminoglycoside and other genes — as hospital surveillance looks for them. The isolate's assembly (contigs) "
+            "or reads are searched for every gene of the **NCBI AMRFinderPlus** catalog (public domain; download it from "
+            "ftp.ncbi.nlm.nih.gov/pathogen/Antimicrobial_resistance/AMRFinderPlus/database/latest/), with the best allele per "
+            "locus, its identity and its coverage. A gene's presence does not always mean resistance, and resistance can come "
+            "from mutations this search does not check: **it does not replace susceptibility testing.** Experimental, for "
+            "teaching and research."), kind="info"),
+        amr_folder,
+        mo.hstack([amr_example, btn_refresh_amr], justify="space-between", align="center"),
+    ])
+    _ui
+    return amr_example, amr_folder, btn_back_amr, btn_refresh_amr
+
+
+@app.cell
+def amr_page_form(NO_FILE, amr_example, amr_folder, btn_refresh_amr, example_for, files_under, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "amr")
+    btn_refresh_amr  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("amr", None, amr_example.value)
+    _folder = amr_folder.value
+    _seqs = files_under(_folder, "fasta", "fastq")
+    _catalogs = [_f for _f in files_under(_folder, "fasta") if "amr" in _f.lower()] or [NO_FILE]
+    _tables = {"(none: no drug class)": "none", **{_f: _f for _f in files_under(_folder, "table") if "catalog" in _f.lower()}}
+    _modes = {"automatic: FASTA = assembly, FASTQ = reads": "auto", "assembly (contigs)": "assembly", "reads": "reads"}
+    form_amr = make_form({
+        "inputs": mo.ui.multiselect(options=_seqs, value=_ex.get("inputs", []), label="Isolate (assembly, or both files of reads):", full_width=True),
+        "catalog": mo.ui.dropdown(options=_catalogs, value=_ex.get("catalog", _catalogs[0] if _catalogs[0] != NO_FILE else None), label="Catalog (AMR_CDS.fa):", full_width=True),
+        "table": mo.ui.dropdown(options=_tables, value=label_of(_tables, _ex.get("table", next((_v for _v in _tables.values() if _v != "none"), "none")), "(none: no drug class)"),
+                                label="Catalog table (ReferenceGeneCatalog.txt), for the drug class:", full_width=True),
+        "min_identity": mo.ui.number(start=0.5, stop=1.0, step=0.01, value=_ex.get("min_identity", 0.9), label="Minimum identity:"),
+        "min_coverage": mo.ui.number(start=0.1, stop=1.0, step=0.05, value=_ex.get("min_coverage", 0.9), label="Minimum coverage of the gene:"),
+        "plus": mo.ui.checkbox(value=_ex.get("plus", True), label="Also the 'plus' genes (virulence, stress, biocides)"),
+        "mode": mo.ui.dropdown(options=_modes, value=label_of(_modes, _ex.get("mode", "auto"), "automatic: FASTA = assembly, FASTQ = reads"), label="Input:", full_width=True),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save the table (TSV):", full_width=True),
+    }, "💉 Search")
+    mo.vstack([_x for _x in (_about, form_amr) if _x is not None])
+    return (form_amr,)
+
+
+@app.cell
+async def amr_page_backend(asyncio, chosen, code_panel, error_panel, facts, form_amr, get_page, mmg, mo, python_call, warn):
+    mo.stop(get_page() != "amr")
+    mo.stop(form_amr.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_amr.value
+    _in = [_p for _p in _v["inputs"] if chosen(_p)]
+    mo.stop(not _in, warn("Select the isolate's assembly or reads."))
+    mo.stop(not chosen(_v["catalog"]), warn("Select the catalog (AMR_CDS.fa of AMRFinderPlus)."))
+    _kw = {}
+    if _v["table"] != "none":
+        _kw["catalog_table"] = _v["table"]
+    if float(_v["min_identity"]) != 0.9:
+        _kw["min_identity"] = float(_v["min_identity"])
+    if float(_v["min_coverage"]) != 0.9:
+        _kw["min_coverage"] = float(_v["min_coverage"])
+    if not _v["plus"]:
+        _kw["include_plus"] = False
+    if _v["mode"] != "auto":
+        _kw["mode"] = _v["mode"]
+    if (_v["output"] or "").strip():
+        _kw["output"] = _v["output"].strip()
+    try:
+        with mo.status.spinner("Searching the catalog's genes..."):
+            _r = await asyncio.to_thread(mmg.find_resistance_genes, _in, _v["catalog"], **_kw)
+        _hits = _r["hits"]
+        _core = [_h for _h in _hits if _h["scope"] == "core"]
+        _classes = {}
+        for _h in _core:
+            _classes.setdefault(_h["class"] or "other", []).append(_h["gene"])
+        _items = [mo.callout(mo.md("### 💉 Resistance genes\n" + facts([
+            ("Searched", f"`{_r['sequences']:,}` sequence(s), `{_r['bases']:,}` bases, against `{_r['catalog_genes']:,}` catalog genes ({_r['mode']})"),
+            ("Found", f"`{len(_core)}` core resistance gene(s)" + (f", and `{len(_hits) - len(_core)}` 'plus' gene(s)" if len(_hits) > len(_core) else "")),
+        ]) + ("\n\n**By drug class:** " + "; ".join(f"**{_c}**: {', '.join(sorted(set(_g)))}" for _c, _g in sorted(_classes.items())) if _classes else "")),
+                             kind="success" if _hits else "warn")]
+        if _hits:
+            _items.append(mo.ui.table([{
+                "gene": _h["gene"], "product": _h["product"], "class": _h["class"], "subclass": _h["subclass"], "scope": _h["scope"],
+                "identity": f"{100 * _h['identity']:.2f}%", "coverage": f"{100 * _h['coverage']:.1f}%",
+                "where": f"{_h['contig']}:{_h['start']}-{_h['end']} ({_h['strand']})", "status": _h["status"],
+            } for _h in sorted(_hits, key=lambda _h: (_h["scope"] != "core", _h["class"] or "", _h["gene"]))],
+                selection=None, pagination=True, page_size=15, label="Genes found"))
+        _items.append(code_panel(f"r = {python_call('find_resistance_genes', _in, _v['catalog'], **_kw)}"))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def outbreak_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "outbreak")
+    btn_back_outbreak = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_outbreak = mo.ui.button(label="🔄 Refresh the file list")
+    outbreak_task = mo.ui.radio(options=["Distances and a tree", "Mutations of viral genomes", "In-silico PCR"],
+                                value="Distances and a tree", inline=True, label="**What to do:**")
+    outbreak_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_outbreak,
+        mo.md("<br>\n\n# 🌳 26. Outbreaks: Trees, Viral Mutations & PCR"),
+        mo.callout(mo.md(
+            "Tools of genomic epidemiology. **Distances and a tree**: how close isolates are — each genome reduced to a "
+            "k-mer sketch, as Mash and sourmash do (the same hashes as sourmash), compared pair by pair (Jaccard, Mash "
+            "distance, ANI) — and the tree they make (neighbor joining or UPGMA): isolates of one outbreak cluster tightly. "
+            "**Mutations of viral genomes**: each genome aligned to its reference, its changes named as Nextclade names "
+            "them, with the amino-acid changes per gene (`S:D614G`...). **In-silico PCR**: where the primers of an assay "
+            "bind in genomes or reads, with their mismatches — what a PCR panel would detect, and which variants could "
+            "escape it. A k-mer tree is a quick look, not a SNP phylogeny: transmission chains need a core-genome SNP "
+            "analysis. Experimental, for teaching and research: not a clinical or public-health report."), kind="info"),
+        outbreak_folder,
+        mo.hstack([outbreak_task, btn_refresh_outbreak], justify="space-between", align="center"),
+    ])
+    _ui
+    return btn_back_outbreak, btn_refresh_outbreak, outbreak_folder, outbreak_task
+
+
+@app.cell
+def outbreak_page_example(example_picker, get_page, mo, outbreak_task):
+    mo.stop(get_page() != "outbreak")
+    outbreak_example = example_picker("outbreak", outbreak_task.value)
+    outbreak_example
+    return (outbreak_example,)
+
+
+@app.cell
+def outbreak_page_form(NO_FILE, btn_refresh_outbreak, example_for, files_under, get_page, label_of, make_form, mo,
+                       outbreak_example, outbreak_folder, outbreak_task):
+    mo.stop(get_page() != "outbreak")
+    btn_refresh_outbreak  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("outbreak", outbreak_task.value, outbreak_example.value)
+    _folder = outbreak_folder.value
+    if outbreak_task.value == "Distances and a tree":
+        _methods = {"neighbor joining (assumes no molecular clock)": "nj", "UPGMA (assumes every lineage evolves at the same rate)": "upgma"}
+        form_outbreak = make_form({
+            "genomes": mo.ui.multiselect(options=files_under(_folder, "fasta", "sig"), value=_ex.get("genomes", []),
+                                         label="Genomes (FASTA, one per file) or sketch databases (.sig):", full_width=True),
+            "records": mo.ui.checkbox(value=_ex.get("records", False), label="Each FASTA record is a genome (a multi-FASTA of viral genomes)"),
+            "method": mo.ui.dropdown(options=_methods, value=label_of(_methods, _ex.get("method", "nj"), "neighbor joining (assumes no molecular clock)"),
+                                     label="Tree:", full_width=True),
+            "outgroup": mo.ui.text(value=_ex.get("outgroup", ""), placeholder="blank: root at the midpoint",
+                                   label="Root on this genome (an outgroup, e.g. the oldest lineage):", full_width=True),
+            "scaled": mo.ui.number(start=0, stop=100_000, step=10, value=_ex.get("scaled", 0),
+                                   label="Scaled (keep one k-mer in this many; 0 = chosen from the genome sizes):"),
+            "tree_output": mo.ui.text(value=_ex.get("tree_output", ""), placeholder="blank: shown here only", label="Also save the tree (Newick, .nwk):", full_width=True),
+            "matrix_output": mo.ui.text(value=_ex.get("matrix_output", ""), placeholder="blank: shown here only",
+                                        label="Also save the distance matrix (.tsv, or .phy for PHYLIP):", full_width=True),
+        }, "🌳 Build the tree")
+    elif outbreak_task.value == "Mutations of viral genomes":
+        _fastas = files_under(_folder, "fasta")
+        _gffs = {"(none: nucleotide changes only)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}}
+        form_outbreak = make_form({
+            "reference": mo.ui.dropdown(options=_fastas, value=_ex.get("reference"), label="Reference genome (FASTA):", full_width=True),
+            "annotation": mo.ui.dropdown(options=_gffs, value=label_of(_gffs, _ex.get("annotation", "none"), "(none: nucleotide changes only)"),
+                                         label="Its annotation (GFF3), for the amino-acid changes:", full_width=True),
+            "genomes": mo.ui.multiselect(options=_fastas, value=_ex.get("genomes", []), label="Genomes (FASTA; every record is a genome):", full_width=True),
+            "split": mo.ui.checkbox(value=_ex.get("split", True), label="Report ORF1ab as ORF1a and ORF1b (Nextclade's names)"),
+            "summary": mo.ui.text(value=_ex.get("summary", ""), placeholder="blank: shown here only", label="Also save one line per genome (TSV):", full_width=True),
+            "output_dir": mo.ui.text(value=_ex.get("output_dir", ""), placeholder="blank: not saved",
+                                     label="Also save every change of every genome (one TSV each) in this folder:", full_width=True),
+        }, "🧬 Find the mutations")
+    else:
+        form_outbreak = make_form({
+            "panel": mo.ui.dropdown(options=files_under(_folder, "table"), value=_ex.get("panel"),
+                                    label="Primer panel (TSV: target, forward, reverse, probe, size, source):", full_width=True),
+            "inputs": mo.ui.multiselect(options=files_under(_folder, "fasta", "fastq"), value=_ex.get("inputs", []),
+                                        label="Genomes (FASTA) or reads (FASTQ):", full_width=True),
+            "records": mo.ui.checkbox(value=_ex.get("records", False), label="Each FASTA record is a genome (a multi-FASTA of viral genomes)"),
+            "max_mm": mo.ui.number(start=0, stop=8, step=1, value=_ex.get("max_mm", 3), label="Mismatches allowed in a primer:"),
+            "three": mo.ui.number(start=0, stop=10, step=1, value=_ex.get("three", 3), label="Bases at the 3' end of a primer that must match:"),
+            "amplicons_output": mo.ui.text(value=_ex.get("amplicons_output", ""), placeholder="blank: shown here only",
+                                           label="Also save the products (TSV):", full_width=True),
+        }, "🧪 Run the PCR")
+    mo.vstack([_x for _x in (_about, form_outbreak) if _x is not None])
+    return (form_outbreak,)
+
+
+@app.cell
+async def outbreak_page_backend(asyncio, chosen, code_panel, error_panel, facts, form_outbreak, get_page, mmg, mo,
+                                outbreak_task, python_call, tree_chart, warn):
+    mo.stop(get_page() != "outbreak")
+    mo.stop(form_outbreak.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_outbreak.value
+    try:
+        if outbreak_task.value == "Distances and a tree":
+            _g = [_p for _p in _v["genomes"] if chosen(_p)]
+            mo.stop(not _g, warn("Select the genomes (FASTA) or a sketch database (.sig)."))
+            _sig = [_p for _p in _g if _p.lower().endswith(".sig")]
+            mo.stop(bool(_sig) and len(_sig) != len(_g), warn("Give either genomes (FASTA) or sketch databases (.sig), not both."))
+            _kw = {}
+            if _v["method"] != "nj":
+                _kw["method"] = _v["method"]
+            if (_v["outgroup"] or "").strip():
+                _kw["outgroup"] = _v["outgroup"].strip()
+            if int(_v["scaled"] or 0):
+                _kw["scaled"] = int(_v["scaled"])
+            for _k in ("tree_output", "matrix_output"):
+                if (_v[_k] or "").strip():
+                    _kw[_k] = _v[_k].strip()
+            if _sig:
+                _fn = "sketch_distances"
+                with mo.status.spinner("Comparing every pair of sketches..."):
+                    _r = await asyncio.to_thread(mmg.sketch_distances, _g, **_kw)
+            else:
+                _fn = "genome_distances"
+                if _v["records"]:
+                    _kw["records_as_genomes"] = True
+                with mo.status.spinner("Sketching the genomes and comparing every pair..."):
+                    _r = await asyncio.to_thread(mmg.genome_distances, _g, **_kw)
+            _names, _d, _ani = _r["names"], _r["distance"], _r["ani"]
+            _n = len(_names)
+            _pairs = [(_i, _j) for _i in range(_n) for _j in range(_i + 1, _n)]
+            _close = min(_pairs, key=lambda _t: _d[_t[0]][_t[1]]) if _pairs else None
+            _method = "UPGMA" if _r["tree"]["method"] == "upgma" else "Neighbor-joining"
+            _root = (f"rooted on `{_kw['outgroup']}`" if "outgroup" in _kw else
+                     "rooted at the midpoint" if _method != "UPGMA" else "rooted by the method")
+            _items = [mo.callout(mo.md("### 🌳 Tree built\n" + facts([
+                ("Genomes", f"`{_n}`"),
+                ("Sketches", f"k = {_r['k']}, scaled = {_r['scaled']}" + (" (every k-mer)" if _r["scaled"] == 1 else "")),
+                ("Tree", f"{_method}, {_root}"),
+                ("Closest pair", f"`{_names[_close[0]]}` and `{_names[_close[1]]}`: ANI {100 * _ani[_close[0]][_close[1]]:.2f}%"
+                 if _close else "—"),
+            ])), kind="success")]
+            _chart = tree_chart(_r["tree"], f"{_method} tree of {_n} genomes")
+            if _chart is not None:
+                _items.append(_chart)
+            _rows = []
+            for _i in range(_n):
+                _j = min((_j for _j in range(_n) if _j != _i), key=lambda _j: _d[_i][_j], default=None)
+                if _j is not None:
+                    _rows.append({"genome": _names[_i], "nearest": _names[_j], "ANI": f"{100 * _ani[_i][_j]:.2f}%",
+                                  "Mash distance": round(_d[_i][_j], 5), "Jaccard": round(_r["jaccard"][_i][_j], 4)})
+            _items.append(mo.ui.table(_rows, selection=None, pagination=True, page_size=25, label="The nearest genome of each"))
+            if _n <= 12:
+                _items.append(mo.ui.table([{"genome": _names[_i], **{_names[_j]: f"{100 * _ani[_i][_j]:.2f}" for _j in range(_n)}} for _i in range(_n)],
+                                          selection=None, label="ANI (%) of every pair"))
+            _items.append(mo.accordion({"The tree in Newick format": mo.plain_text(_r["tree"]["newick"])}))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call(_fn, _g, **_kw)}"))
+        elif outbreak_task.value == "Mutations of viral genomes":
+            mo.stop(not chosen(_v["reference"]), warn("Select the reference genome."))
+            _gs = [_p for _p in _v["genomes"] if chosen(_p)]
+            mo.stop(not _gs, warn("Select the genomes."))
+            mo.stop(_v["reference"] in _gs, warn("The reference cannot be one of the genomes."))
+            _kw = {}
+            if _v["annotation"] != "none":
+                _kw["annotation"] = _v["annotation"]
+            if not _v["split"]:
+                _kw["split_orf1ab"] = False
+            if (_v["summary"] or "").strip():
+                _kw["summary_output"] = _v["summary"].strip()
+            if (_v["output_dir"] or "").strip():
+                _kw["output_dir"] = _v["output_dir"].strip()
+            with mo.status.spinner("Aligning each genome to the reference..."):
+                _r = await asyncio.to_thread(mmg.viral_mutations, _v["reference"], _gs, **_kw)
+            _G = _r["genomes"]
+            _ok = [_x for _x in _G if _x["aligned"]]
+            _items = [mo.callout(mo.md("### 🧬 Mutations found\n" + facts([
+                ("Genomes", f"`{len(_ok)}` of `{len(_G)}` aligned to `{_r['reference_sequences'][0]['id'] if _r['reference_sequences'] else _v['reference']}`"),
+                ("Genes", f"`{len(_r['genes'])}` coding sequences in the annotation" if _r["genes"] else "no annotation: nucleotide changes only"),
+            ])), kind="success" if _ok else "warn")]
+
+            def _aa(_x):
+                return [_c["label"] for _c in _x["aa_substitutions"] + _x["aa_deletions"]] + [_c["label"] for _c in _x["aa_insertions"]]
+
+            _items.append(mo.ui.table([{
+                "genome": _x["name"],
+                "coverage": f"{100 * _x['coverage']:.1f}%" if _x["aligned"] else "not aligned",
+                "substitutions": len(_x["substitutions"]), "deletions": len(_x["deletions"]), "insertions": len(_x["insertions"]),
+                "missing (N) bases": sum(_b - _a + 1 for _a, _b in _x["missing"]),
+                "amino-acid changes": len(_aa(_x)),
+                "changes": ", ".join(_aa(_x)[:14]) + (" …" if len(_aa(_x)) > 14 else ""),
+            } for _x in _G], selection=None, pagination=True, page_size=25, label="Each genome"))
+            if _r["genes"] and len(_ok) > 1:
+                _count = {}
+                for _x in _ok:
+                    for _c in set(_aa(_x)):
+                        _count[_c] = _count.get(_c, 0) + 1
+                _shared = sorted(((_c, _k) for _c, _k in _count.items() if _k > 1), key=lambda _t: (-_t[1], _t[0]))
+                if _shared:
+                    _items.append(mo.md("**Amino-acid changes shared by several genomes** — changes that define a lineage are "
+                                        "carried by all its descendants:"))
+                    _items.append(mo.ui.table([{"change": _c, "genomes": _k, "share": f"{100 * _k / len(_ok):.0f}%",
+                                                "in": ", ".join(_x["name"] for _x in _ok if _c in _aa(_x))[:160]}
+                                               for _c, _k in _shared], selection=None, pagination=True, page_size=20,
+                                              label="Shared changes"))
+            _bad = [_x for _x in _G if _x["problem"]]
+            for _x in _bad[:5]:
+                _items.append(warn(f"`{_x['name']}`: {_x['problem']}"))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('viral_mutations', _v['reference'], _gs, **_kw)}"))
+        else:
+            mo.stop(not chosen(_v["panel"]), warn("Select the primer panel."))
+            _ins = [_p for _p in _v["inputs"] if chosen(_p)]
+            mo.stop(not _ins, warn("Select the genomes or reads."))
+            _kw = {}
+            if _v["records"]:
+                _kw["records_as_genomes"] = True
+            if int(_v["max_mm"]) != 3:
+                _kw["max_mismatches"] = int(_v["max_mm"])
+            if int(_v["three"]) != 3:
+                _kw["three_prime_exact"] = int(_v["three"])
+            if (_v["amplicons_output"] or "").strip():
+                _kw["amplicons_output"] = _v["amplicons_output"].strip()
+            with mo.status.spinner("Looking for the primer sites..."):
+                _r = await asyncio.to_thread(mmg.in_silico_pcr, _v["panel"], _ins, **_kw)
+            _t = _r["targets"]
+            _pos = sum(1 for _row in _r["rows"] for _p in _row["present"] if _p)
+            _items = [mo.callout(mo.md("### 🧪 PCR done\n" + facts([
+                ("Assays", ", ".join(f"`{_x}`" for _x in _t)),
+                ("Inputs", f"`{len(_r['rows'])}` genome(s) or sample(s)"),
+                ("Positive", f"`{_pos}` of `{len(_r['rows']) * len(_t)}` (input, assay) pairs"),
+                ("Rules", f"up to {_r['max_mismatches']} mismatches per primer, none in the last {_r['three_prime_exact']} bases at 3'"),
+            ])), kind="success")]
+            _items.append(mo.ui.table([{"genome or sample": _row["name"],
+                                        **{_x: (f"✓ {_c}" if _p else "—") for _x, _p, _c in zip(_t, _row["present"], _row["counts"])}}
+                                       for _row in _r["rows"]], selection=None, pagination=True, page_size=25,
+                                      label="Detected (✓ with the number of products, or of reads with a site)"))
+            if _r["amplicons"]:
+                _items.append(mo.ui.table([{
+                    "genome": _a["genome"], "assay": _a["target"], "where": f"{_a['sequence_id']}:{_a['start']:,}-{_a['end']:,} ({_a['strand']})",
+                    "size": _a["size"], "mismatches F / R": f"{_a['forward_mismatches']} / {_a['reverse_mismatches']}",
+                    "probe mismatches": "—" if _a["probe_mismatches"] is None else _a["probe_mismatches"],
+                    "detected": "yes" if _a["detected"] else ("size out of range" if not _a["in_range"] else "probe does not bind"),
+                } for _a in _r["amplicons"]], selection=None, pagination=True, page_size=15, label="Products"))
+            if _r["read_counts"]:
+                _items.append(mo.ui.table([{"sample": _c["sample"], "assay": _c["target"], "reads": _c["reads"], "with a site": _c["with_site"],
+                                            "whole product": _c["amplicon"], "present": "yes" if _c["present"] else ""}
+                                           for _c in _r["read_counts"]], selection=None, label="Reads"))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('in_silico_pcr', _v['panel'], _ins, **_kw)}"))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def amplicon_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "amplicon")
+    btn_back_amplicon = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_amplicon = mo.ui.button(label="🔄 Refresh the file list")
+    amplicon_task = mo.ui.radio(options=["Amplicon variants (ASVs)", "Taxonomy", "Diversity", "Train a classifier"],
+                                value="Amplicon variants (ASVs)", inline=True, label="**What to do:**")
+    amplicon_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    _ui = mo.vstack([
+        btn_back_amplicon,
+        mo.md("<br>\n\n# 🌿 27. 16S Amplicons: Taxonomy & Diversity"),
+        mo.callout(mo.md(
+            "Who is in a microbial community, from the reads of one gene (16S rRNA) amplified from every bacterium in the "
+            "sample. **Amplicon variants**: each read pair merged, reads with errors dropped, the rest denoised into exact "
+            "sequence variants (ASVs, as UNOISE3 / vsearch) and chimeras removed. **Taxonomy**: each ASV named by the "
+            "naive Bayesian classifier of the RDP (as DADA2 and QIIME 2 use it). **Diversity**: within each sample "
+            "(alpha: richness, Shannon, Simpson...) and between samples (beta: Bray-Curtis or Jaccard, principal "
+            "coordinates, PERMANOVA between groups). 16S tells genera, rarely species, and counts copies of a gene, not "
+            "cells. Experimental, for teaching and research."), kind="info"),
+        amplicon_folder,
+        mo.hstack([amplicon_task, btn_refresh_amplicon], justify="space-between", align="center"),
+    ])
+    _ui
+    return amplicon_folder, amplicon_task, btn_back_amplicon, btn_refresh_amplicon
+
+
+@app.cell
+def amplicon_page_example(amplicon_task, example_picker, get_page, mo):
+    mo.stop(get_page() != "amplicon")
+    amplicon_example = example_picker("amplicon", amplicon_task.value)
+    amplicon_example
+    return (amplicon_example,)
+
+
+@app.cell
+def amplicon_page_form(NO_FILE, amplicon_example, amplicon_folder, amplicon_task, btn_refresh_amplicon, example_for, files_under,
+                       get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "amplicon")
+    btn_refresh_amplicon  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("amplicon", amplicon_task.value, amplicon_example.value)
+    _folder = amplicon_folder.value
+    _tables = [_f for _f in files_under(_folder, "table") if _f != NO_FILE]
+    if amplicon_task.value == "Amplicon variants (ASVs)":
+        _sheets = {"(none: the FASTQ files below)": "none", **{_f: _f for _f in files_under(_folder, "sheet") if _f != NO_FILE}}
+        form_amplicon = make_form({
+            "sheet": mo.ui.dropdown(options=_sheets, value=label_of(_sheets, _ex.get("sheet", "none"), "(none: the FASTQ files below)"),
+                                    label="Sample sheet (name, R1, R2 per line; mothur's stability.files works):", full_width=True),
+            "fastqs": mo.ui.multiselect(options=files_under(_folder, "fastq"), value=_ex.get("fastqs", []),
+                                        label="Or the FASTQ files, paired by their _R1 / _R2 names:", full_width=True),
+            "primer_f": mo.ui.text(value=_ex.get("primer_f", ""), placeholder="blank: the reads hold no primer (as in the mothur SOP)",
+                                   label="Forward primer to remove (5' to 3', IUPAC codes allowed):", full_width=True),
+            "primer_r": mo.ui.text(value=_ex.get("primer_r", ""), placeholder="blank: none", label="Reverse primer to remove:", full_width=True),
+            "max_ee": mo.ui.number(start=0.1, stop=10, step=0.1, value=_ex.get("max_ee", 1.0), label="Most expected errors in a merged read:"),
+            "min_size": mo.ui.number(start=1, stop=1000, step=1, value=_ex.get("min_size", 8),
+                                     label="Fewest copies for a sequence to become an ASV (UNOISE3's minsize):"),
+            "chimeras": mo.ui.checkbox(value=_ex.get("chimeras", True), label="Remove chimeras (as vsearch --uchime3_denovo)"),
+            "out": mo.ui.text(value=_ex.get("out", ""), placeholder="blank: next to the sample sheet (or the first FASTQ)",
+                              label="Folder for asvs.fasta, asv_table.tsv and asv_tracking.tsv:", full_width=True),
+        }, "🌿 Find the ASVs")
+    elif amplicon_task.value == "Taxonomy":
+        _models = [_f for _f in files_under(_folder, "model", "fasta") if _f != NO_FILE] or [NO_FILE]
+        _tab = {"(none: no composition chart)": "none", **{_f: _f for _f in _tables}}
+        _conf = {"0.8 (the RDP's default)": 0.8, "0.5 (DADA2's minBoot 50, for short reads)": 0.5}
+        _ranks = ["Phylum", "Class", "Order", "Family", "Genus"]
+        form_amplicon = make_form({
+            "fasta": mo.ui.dropdown(options=files_under(_folder, "fasta"), value=_ex.get("fasta"), label="ASVs (FASTA):", full_width=True),
+            "model": mo.ui.dropdown(options=_models, value=_ex.get("model"),
+                                    label="Classifier (a .model from 'Train a classifier', or a reference FASTA):", full_width=True),
+            "table": mo.ui.dropdown(options=_tab, value=label_of(_tab, _ex.get("table", "none"), "(none: no composition chart)"),
+                                    label="Feature table (ASV x sample), for the composition of each sample:", full_width=True),
+            "confidence": mo.ui.dropdown(options=_conf, value=label_of(_conf, _ex.get("confidence", 0.8), "0.8 (the RDP's default)"),
+                                         label="Confidence needed at each rank:", full_width=True),
+            "rank": mo.ui.dropdown(options=_ranks, value=_ex.get("rank", "Family"), label="Rank of the composition chart:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: taxonomy.tsv next to the ASVs", label="Taxonomy table:", full_width=True),
+        }, "🌿 Classify")
+    elif amplicon_task.value == "Diversity":
+        _meta = {"(none: no groups)": "none", **{_f: _f for _f in _tables}}
+        _metrics = {"Bray-Curtis (abundances)": "braycurtis", "Jaccard (presence / absence)": "jaccard"}
+        form_amplicon = make_form({
+            "table": mo.ui.dropdown(options=_tables or [NO_FILE], value=_ex.get("table"), label="Feature table (ASV x sample):", full_width=True),
+            "metadata": mo.ui.dropdown(options=_meta, value=label_of(_meta, _ex.get("metadata", "none"), "(none: no groups)"),
+                                       label="Sample groups (a table: sample, then columns such as time):", full_width=True),
+            "column": mo.ui.text(value=_ex.get("column", ""), placeholder="blank: the second column", label="Group column:", full_width=True),
+            "metric": mo.ui.dropdown(options=_metrics, value=label_of(_metrics, _ex.get("metric", "braycurtis"), "Bray-Curtis (abundances)"),
+                                     label="Distance between samples:", full_width=True),
+            "rarefy": mo.ui.number(start=0, stop=10**7, step=100, value=_ex.get("rarefy", 0),
+                                   label="Rarefy every sample to this many reads first (0 = no):"),
+        }, "🌿 Measure")
+    else:
+        form_amplicon = make_form({
+            "reference": mo.ui.dropdown(options=files_under(_folder, "fasta"), value=_ex.get("reference"),
+                                        label="Reference (FASTA with the lineage in each header, as the DADA2 files of RDP and GTDB):", full_width=True),
+            "primer_f": mo.ui.text(value=_ex.get("primer_f", ""), placeholder="blank: whole sequences",
+                                   label="Train on the amplified region only: forward primer:", full_width=True),
+            "primer_r": mo.ui.text(value=_ex.get("primer_r", ""), placeholder="blank: whole sequences", label="Reverse primer:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: classifier.model next to the reference", label="Model file:", full_width=True),
+        }, "🌿 Train")
+    mo.vstack([_x for _x in (_about, form_amplicon) if _x is not None])
+    return (form_amplicon,)
+
+
+@app.cell
+async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_panel, error_panel, facts, form_amplicon, get_page,
+                                mmg, mo, os, python_call, warn):
+    mo.stop(get_page() != "amplicon")
+    mo.stop(form_amplicon.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_amplicon.value
+    # The categorical colours of the charts (validated: the FASTQ report and dataviz palette), grey for "Other".
+    _PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+    _GREY = "#898781"
+
+    def _legend(names, colours):
+        return ('<div style="display:flex; flex-wrap:wrap; gap: 6px 16px; font: 12px system-ui, sans-serif; margin: 6px 0;">'
+                + "".join(f'<span><span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:{_c}; '
+                          f'margin-right:5px; vertical-align:-1px"></span>{_n}</span>' for _n, _c in zip(names, colours)) + "</div>")
+
+    def _stacked(samples, taxa, fractions):
+        """One 100% bar per sample, a segment per taxon, 2 px gaps; legend above."""
+        _cols = [(_GREY if _t in ("Other", "Unassigned") or _i >= len(_PAL) else _PAL[_i]) for _i, _t in enumerate(taxa)]
+        _rows = []
+        for _j, _s in enumerate(samples):
+            _seg = []
+            for _i, _t in enumerate(taxa):
+                _f = fractions[_i][_j]
+                if _f > 0:
+                    _seg.append(f'<span title="{_t}: {100 * _f:.1f}%" style="flex: {_f} 0 0; background:{_cols[_i]}; height: 14px;'
+                                f' margin-right: 2px; border-radius: 2px;"></span>')
+            _rows.append(f'<div style="display:grid; grid-template-columns: minmax(70px, 18%) 1fr; gap: 8px; align-items:center; '
+                         f'font: 12px system-ui, sans-serif; margin: 3px 0;"><span>{_s}</span><span style="display:flex;">{"".join(_seg)}</span></div>')
+        return mo.Html(_legend(taxa, _cols) + "".join(_rows))
+
+    def _scatter(points, xl, yl, title):
+        """PCoA: (x, y, group, label) points, one colour per group, labels on hover."""
+        import math
+        if not points:
+            return None
+        _groups = list(dict.fromkeys(_p[2] for _p in points))
+        _col = {_g: (_PAL[_i] if _i < len(_PAL) else _GREY) for _i, _g in enumerate(_groups)}
+        _xs, _ys = [_p[0] for _p in points], [_p[1] for _p in points]
+        _x0, _x1, _y0, _y1 = min(_xs), max(_xs), min(_ys), max(_ys)
+        _dx, _dy = (_x1 - _x0) or 1, (_y1 - _y0) or 1
+        _x0, _x1, _y0, _y1 = _x0 - 0.08 * _dx, _x1 + 0.08 * _dx, _y0 - 0.08 * _dy, _y1 + 0.08 * _dy
+        W, H, L, R, T, B = 560, 420, 50, 16, 16, 40
+        X = lambda v: L + (v - _x0) / (_x1 - _x0) * (W - L - R)
+        Y = lambda v: T + (H - T - B) - (v - _y0) / (_y1 - _y0) * (H - T - B)
+        _parts = [f'<line x1="{L}" x2="{W - R}" y1="{Y(0):.1f}" y2="{Y(0):.1f}" stroke="currentColor" stroke-opacity="0.15"/>',
+                  f'<line y1="{T}" y2="{H - B}" x1="{X(0):.1f}" x2="{X(0):.1f}" stroke="currentColor" stroke-opacity="0.15"/>']
+        for _x, _y, _g, _lab in points:
+            _parts.append(f'<circle cx="{X(_x):.1f}" cy="{Y(_y):.1f}" r="6" fill="{_col[_g]}" stroke="var(--background, #fff)" stroke-width="2">'
+                          f'<title>{_lab} ({_g})</title></circle>')
+        _parts.append(f'<text x="{L + (W - L - R) / 2:.1f}" y="{H - 8}" text-anchor="middle" fill="currentColor" fill-opacity="0.8">{xl}</text>')
+        _parts.append(f'<text transform="translate(14,{T + (H - T - B) / 2:.1f}) rotate(-90)" text-anchor="middle" fill="currentColor" fill-opacity="0.8">{yl}</text>')
+        _svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:{W}px; font: 12px system-ui, sans-serif;" role="img" aria-label="{title}">'
+                + "".join(_parts) + "</svg>")
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(_legend(_groups, [_col[_g] for _g in _groups]) + _svg)])
+
+    def _curves(curves, group_of, title):
+        """Rarefaction curves: observed ASVs against reads drawn, one line per sample, coloured by group."""
+        if not curves:
+            return None
+        _groups = list(dict.fromkeys(group_of.get(_c["sample"], "—") for _c in curves))
+        _col = {_g: (_PAL[_i] if _i < len(_PAL) and _g != "—" else _GREY) for _i, _g in enumerate(_groups)}
+        _xm = max(max(_c["depths"] or [1]) for _c in curves) or 1
+        _ym = max(max(_c["observed"] or [1]) for _c in curves) or 1
+        W, H, L, R, T, B = 640, 320, 54, 16, 14, 40
+        X = lambda v: L + v / _xm * (W - L - R)
+        Y = lambda v: T + (H - T - B) - v / _ym * (H - T - B)
+        _parts = []
+        for _f in (0.25, 0.5, 0.75, 1.0):
+            _parts.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(_f * _ym):.1f}" y2="{Y(_f * _ym):.1f}" stroke="currentColor" stroke-opacity="0.12"/>'
+                          f'<text x="{L - 6}" y="{Y(_f * _ym) + 4:.1f}" text-anchor="end" fill="currentColor" fill-opacity="0.7">{_f * _ym:.0f}</text>')
+        for _c in curves:
+            _pts = " ".join(f"{X(_d):.1f},{Y(_o):.1f}" for _d, _o in zip(_c["depths"], _c["observed"]))
+            _g = group_of.get(_c["sample"], "—")
+            _parts.append(f'<polyline points="{_pts}" fill="none" stroke="{_col[_g]}" stroke-width="2" stroke-opacity="0.85">'
+                          f'<title>{_c["sample"]} ({_g})</title></polyline>')
+        _parts.append(f'<text x="{L + (W - L - R) / 2:.1f}" y="{H - 8}" text-anchor="middle" fill="currentColor" fill-opacity="0.8">reads drawn (max {_xm:,})</text>')
+        _parts.append(f'<text transform="translate(14,{T + (H - T - B) / 2:.1f}) rotate(-90)" text-anchor="middle" fill="currentColor" fill-opacity="0.8">ASVs seen</text>')
+        _svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:{W}px; font: 12px system-ui, sans-serif;" role="img" aria-label="{title}">'
+                + "".join(_parts) + "</svg>")
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(_legend(_groups, [_col[_g] for _g in _groups]) + _svg)])
+
+    try:
+        if amplicon_task.value == "Amplicon variants (ASVs)":
+            _fq = [_p for _p in _v["fastqs"] if chosen(_p)]
+            mo.stop(_v["sheet"] == "none" and not _fq, warn("Select a sample sheet or the FASTQ files."))
+            _samples = _v["sheet"] if _v["sheet"] != "none" else _fq
+            _first = _v["sheet"] if _v["sheet"] != "none" else _fq[0]
+            _dir = (_v["out"] or "").strip() or os.path.dirname(beside(_first, "x")) or "."
+            os.makedirs(_dir, exist_ok=True)
+            _fa, _tab, _trk = (os.path.join(_dir, _n) for _n in ("asvs.fasta", "asv_table.tsv", "asv_tracking.tsv"))
+            _kw = {"tracking": _trk}
+            for _k, _name in (("primer_f", "primer_forward"), ("primer_r", "primer_reverse")):
+                if (_v[_k] or "").strip():
+                    _kw[_name] = _v[_k].strip()
+            if float(_v["max_ee"]) != 1.0:
+                _kw["max_ee"] = float(_v["max_ee"])
+            if int(_v["min_size"]) != 8:
+                _kw["min_size"] = int(_v["min_size"])
+            if not _v["chimeras"]:
+                _kw["remove_chimeras"] = False
+            with mo.status.spinner("Merging, filtering, denoising and removing chimeras..."):
+                _r = await asyncio.to_thread(mmg.amplicon_asvs, _samples, _fa, _tab, **_kw)
+            _S = _r["samples"]
+            _in = sum(_x["input"] for _x in _S)
+            _kept = sum(_x["nonchimeric"] for _x in _S)
+            _items = [mo.callout(mo.md("### 🌿 ASVs found\n" + facts([
+                ("Samples", f"`{len(_S)}`, `{_in:,}` read pairs"),
+                ("ASVs", f"`{len(_r['asvs']):,}` (from `{_r['uniques']:,}` distinct reads; `{len(_r['chimeras'])}` chimeras removed)"),
+                ("Reads kept", f"`{_kept:,}` ({100 * _kept / max(_in, 1):.1f}%)"),
+                ("Written", f"`{_fa}`, `{_tab}`, `{_trk}`"),
+            ])), kind="success")]
+            _items.append(mo.ui.table([{"sample": _x["sample"], "pairs": _x["input"], "merged": _x["merged"], "filtered": _x["filtered"],
+                                        "denoised": _x["denoised"], "non-chimeric": _x["nonchimeric"],
+                                        "kept": f"{100 * _x['nonchimeric'] / max(_x['input'], 1):.1f}%"} for _x in _S],
+                                      selection=None, pagination=True, page_size=25, label="Reads kept at each step"))
+            _items.append(mo.ui.table([{"ASV": _a["name"], "length": len(_a["sequence"]), "reads": _a["reads"], "sequence": _a["sequence"][:60] + "…"}
+                                       for _a in _r["asvs"][:200]], selection=None, pagination=True, page_size=10, label="ASVs, the most abundant first"))
+            for _w in _r["warnings"][:5]:
+                _items.append(warn(_w))
+            _items.append(code_panel(f"r = {python_call('amplicon_asvs', _samples, _fa, _tab, **_kw)}"))
+        elif amplicon_task.value == "Taxonomy":
+            mo.stop(not chosen(_v["fasta"]) or not chosen(_v["model"]), warn("Select the ASVs and the classifier."))
+            _out = (_v["output"] or "").strip() or beside(_v["fasta"], "taxonomy.tsv")
+            _kw = {}
+            if float(_v["confidence"]) != 0.8:
+                _kw["min_confidence"] = float(_v["confidence"])
+            with mo.status.spinner("Classifying each ASV (100 bootstrap trials)..."):
+                _r = await asyncio.to_thread(mmg.classify_asvs, _v["fasta"], _v["model"], _out, **_kw)
+            _A = _r["assignments"]
+            _ranks = _r["ranks"]
+            _items = [mo.callout(mo.md("### 🌿 ASVs classified\n" + facts([
+                ("ASVs", f"`{len(_A):,}`, confidence ≥ {_r['min_confidence']}"),
+                ("Named down to", ", ".join(f"{_k}: {_n}" for _k, _n in zip(_ranks, _r["assigned_per_rank"]))),
+                ("Taxonomy table", f"`{_out}`"),
+            ])), kind="success")]
+            _items.append(mo.ui.table([{"ASV": _a["id"], **{_k: (_a["lineage"][_i] if _i < len(_a["lineage"]) else "") for _i, _k in enumerate(_ranks)},
+                                        "confidence (last rank)": f"{_a['confidence'][len(_a['lineage']) - 1]:.2f}" if _a["lineage"] else ""}
+                                       for _a in _A], selection=None, pagination=True, page_size=15, label="Taxonomy"))
+            _code = [f"r = {python_call('classify_asvs', _v['fasta'], _v['model'], _out, **_kw)}"]
+            if _v["table"] != "none":
+                _c = await asyncio.to_thread(mmg.taxa_composition, _v["table"], _out, rank=_v["rank"], top=8)
+                _items.append(mo.md(f"**Composition of each sample, by {_c['rank'].lower()}** (the 8 most abundant; the rest as Other):"))
+                _items.append(_stacked(_c["samples"], _c["taxa"], _c["fractions"]))
+                _code.append(f"c = {python_call('taxa_composition', _v['table'], _out, rank=_v['rank'], top=8)}")
+            _items.append(code_panel(*_code))
+        elif amplicon_task.value == "Diversity":
+            mo.stop(not chosen(_v["table"]), warn("Select the feature table."))
+            _kw_a, _kw_b = {}, {}
+            if int(_v["rarefy"] or 0):
+                _kw_a["rarefy_depth"] = _kw_b["rarefy_depth"] = int(_v["rarefy"])
+            if _v["metric"] != "braycurtis":
+                _kw_b["metric"] = _v["metric"]
+            if _v["metadata"] != "none":
+                _kw_b["metadata"] = _v["metadata"]
+                if (_v["column"] or "").strip():
+                    _kw_b["group_column"] = _v["column"].strip()
+            with mo.status.spinner("Alpha and beta diversity, principal coordinates, PERMANOVA..."):
+                _a = await asyncio.to_thread(mmg.alpha_diversity, _v["table"], **_kw_a)
+                _b = await asyncio.to_thread(mmg.beta_diversity, _v["table"], **_kw_b)
+            _group = {}
+            if _v["metadata"] != "none":
+                with open(_v["metadata"], encoding="utf-8") as _fh:
+                    _rows = [_l.rstrip("\n").split("\t") for _l in _fh if _l.strip()]
+                _ci = _rows[0].index(_kw_b["group_column"]) if _kw_b.get("group_column") in _rows[0] else 1
+                _group = {_r0[0]: _r0[_ci] for _r0 in _rows[1:] if len(_r0) > _ci}
+            _pm = _b["permanova"]
+            _facts = [("Samples", f"`{len(_b['samples'])}`" + (f" (rarefied to {_b['rarefied_to']:,} reads)" if _b["rarefied_to"] else "")),
+                      ("Distance", {"braycurtis": "Bray-Curtis", "jaccard": "Jaccard"}.get(_b["metric"], _b["metric"]))]
+            if _pm:
+                _facts.append(("PERMANOVA", f"{_pm['column']}: " + ", ".join(f"{_g} ({_n})" for _g, _n in zip(_pm["groups"], _pm["sizes"]))
+                               + f" — pseudo-F = {_pm['f']:.2f}, R² = {_pm['r2']:.2f}, p = {_pm['p_value']:.3g} ({_pm['permutations']} permutations)"))
+            _items = [mo.callout(mo.md("### 🌿 Diversity measured\n" + facts(_facts)), kind="success")]
+            _items.append(mo.ui.table([{"sample": _x["sample"], "group": _group.get(_x["sample"], ""), "reads": _x["depth"], "observed": _x["observed"],
+                                        "Chao1": round(_x["chao1"], 1), "Shannon": round(_x["shannon"], 3), "Simpson": round(_x["simpson"], 3),
+                                        "Pielou": round(_x["pielou"], 3), "Good's coverage": f"{100 * _x['goods_coverage']:.1f}%"}
+                                       for _x in _a["rows"]], selection=None, pagination=True, page_size=25, label="Alpha diversity"))
+            _ch = _curves(_a["curves"], _group, "Rarefaction curves: a curve that levels off has been sequenced deeply enough")
+            if _ch is not None:
+                _items.append(_ch)
+            _pc = _b["pcoa"]
+            if _pc["coordinates"] and len(_pc["coordinates"][0]) >= 2:
+                _pe = _pc["proportion_explained"]
+                _items.append(_scatter([(_c[0], _c[1], _group.get(_s, "—"), _s) for _s, _c in zip(_b["samples"], _pc["coordinates"])],
+                                       f"PCo1 ({100 * _pe[0]:.1f}%)", f"PCo2 ({100 * _pe[1]:.1f}%)",
+                                       "Principal coordinates: samples close together have similar communities"))
+            _items.append(code_panel(f"a = {python_call('alpha_diversity', _v['table'], **_kw_a)}",
+                                     f"b = {python_call('beta_diversity', _v['table'], **_kw_b)}"))
+        else:
+            mo.stop(not chosen(_v["reference"]), warn("Select the reference FASTA."))
+            _out = (_v["output"] or "").strip() or beside(_v["reference"], "classifier.model")
+            _kw = {}
+            for _k, _name in (("primer_f", "primer_forward"), ("primer_r", "primer_reverse")):
+                if (_v[_k] or "").strip():
+                    _kw[_name] = _v[_k].strip()
+            mo.stop(len(_kw) == 1, warn("Give both primers, or neither."))
+            with mo.status.spinner("Training (8-mer word probabilities per genus)..."):
+                _r = await asyncio.to_thread(mmg.train_classifier, _v["reference"], _out, **_kw)
+            _items = [mo.callout(mo.md("### 🌿 Classifier trained\n" + facts([
+                ("Reference", f"`{_r['sequences']:,}` sequences" + (f", `{_r['without_region']:,}` without the primers' region (left out)" if _r.get("without_region") else "")),
+                ("Ranks", ", ".join(_r["ranks"])),
+                ("Genera (classes)", f"`{_r['classes']:,}`"),
+                ("Model", f"`{_out}` ({_r['model_bytes'] / 1e6:.1f} MB), in {_r['seconds']:.1f} s"),
+            ])), kind="success"),
+                code_panel(f"r = {python_call('train_classifier', _v['reference'], _out, **_kw)}")]
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def tmb_page_ui(example_picker, get_page, human_notice, mo, set_page):
+    mo.stop(get_page() != "tmb")
+    btn_back_tmb = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_tmb = mo.ui.button(label="🔄 Refresh the file list")
+    tmb_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
+    tmb_example = example_picker("tmb", None)
+    _ui = mo.vstack([
+        btn_back_tmb,
+        mo.md("<br>\n\n# 🎯 28. Tumor Mutational Burden (TMB)"),
+        human_notice(),
+        mo.callout(mo.md(
+            "How many somatic mutations a tumor carries per megabase of the DNA that was sequenced — one of the markers "
+            "looked at before an immunotherapy. Give the tumor's somatic VCF (from a tumor/normal caller) and the BED of the "
+            "region the test covers (a panel, an exome or the callable genome). Numbers from different panels, exomes and "
+            "genomes are not directly comparable: each test calibrates its own cut-off (the FDA approval of "
+            "pembrolizumab for TMB-high tumors used 10 mutations/Mb on one panel)."), kind="info"),
+        tmb_folder,
+        mo.hstack([tmb_example, btn_refresh_tmb], justify="space-between", align="end"),
+    ])
+    _ui
+    return btn_back_tmb, btn_refresh_tmb, tmb_example, tmb_folder
+
+
+@app.cell
+def tmb_page_form(NO_FILE, btn_refresh_tmb, example_for, files_under, get_page, label_of, make_form, mo, tmb_example, tmb_folder):
+    mo.stop(get_page() != "tmb")
+    btn_refresh_tmb  # a click re-runs this cell, which lists the folder again
+    _ex, _about = example_for("tmb", None, tmb_example.value)
+    _folder = tmb_folder.value
+    _gffs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}}
+    _refs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}}
+    form_tmb = make_form({
+        "vcf": mo.ui.dropdown(options=files_under(_folder, "vcf"), value=_ex.get("vcf"), label="Somatic variants of the tumor (VCF):", full_width=True),
+        "bed": mo.ui.dropdown(options=files_under(_folder, "bed_any"), value=_ex.get("bed"), label="Region the test covers (BED):", full_width=True),
+        "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the tumor sample, or the only one", label="Tumor sample (a column of the VCF):", full_width=True),
+        "pass_only": mo.ui.checkbox(value=_ex.get("pass_only", True), label="Only variants that passed the caller's filters (FILTER = PASS)"),
+        "min_depth": mo.ui.number(start=0, stop=10_000, step=1, value=_ex.get("min_depth", 10), label="Least read depth:"),
+        "min_vaf": mo.ui.number(start=0, stop=1, step=0.01, value=_ex.get("min_vaf", 0.05), label="Least variant allele fraction:"),
+        "annotation": mo.ui.dropdown(options=_gffs, value=label_of(_gffs, _ex.get("annotation", "none"), "(none)"),
+                                     label="Gene annotation (GFF3), to count coding variants only:", full_width=True),
+        "coding": mo.ui.checkbox(value=_ex.get("coding", False), label="Count only variants in coding sequences (needs the annotation)"),
+        "reference": mo.ui.dropdown(options=_refs, value=label_of(_refs, _ex.get("reference", "none"), "(none)"),
+                                    label="Genome (FASTA), to count non-synonymous variants only:", full_width=True),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save every variant and whether it counted (TSV):", full_width=True),
+    }, "🎯 Measure the TMB")
+    mo.vstack([_x for _x in (_about, form_tmb) if _x is not None])
+    return (form_tmb,)
+
+
+@app.cell
+async def tmb_page_backend(asyncio, chosen, code_panel, error_panel, facts, form_tmb, get_page, mmg, mo, python_call, warn):
+    mo.stop(get_page() != "tmb")
+    mo.stop(form_tmb.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_tmb.value
+    try:
+        mo.stop(not chosen(_v["vcf"]) or not chosen(_v["bed"]), warn("Select the tumor's VCF and the BED of the region."))
+        mo.stop(_v["coding"] and _v["annotation"] == "none", warn("Counting coding variants only needs the gene annotation (GFF3)."))
+        _kw = {}
+        if (_v["sample"] or "").strip():
+            _kw["tumor_sample"] = _v["sample"].strip()
+        if not _v["pass_only"]:
+            _kw["pass_only"] = False
+        if int(_v["min_depth"]) != 10:
+            _kw["min_depth"] = int(_v["min_depth"])
+        if float(_v["min_vaf"]) != 0.05:
+            _kw["min_vaf"] = float(_v["min_vaf"])
+        if _v["annotation"] != "none":
+            _kw["annotation"] = _v["annotation"]
+            if _v["coding"]:
+                _kw["coding_only"] = True
+        if _v["reference"] != "none":
+            mo.stop(_v["annotation"] == "none", warn("Counting non-synonymous variants needs the gene annotation (GFF3) too."))
+            _kw["reference"] = _v["reference"]
+            _kw["nonsynonymous_only"] = True
+            _kw["coding_only"] = True
+        if (_v["output"] or "").strip():
+            _kw["output"] = _v["output"].strip()
+        with mo.status.spinner("Counting the somatic variants in the region..."):
+            _r = await asyncio.to_thread(mmg.tumor_mutational_burden, _v["vcf"], _v["bed"], **_kw)
+        _what = ("non-synonymous coding" if _kw.get("nonsynonymous_only") else "coding" if _kw.get("coding_only") else "somatic")
+        _tile = (f'<div style="font: 15px system-ui, sans-serif; margin: 8px 0;"><div style="font-size: 2.6em; font-weight: 700; line-height: 1.1;">'
+                 f'{_r["tmb"]:.1f}</div><div>{_what} mutations per megabase'
+                 f' ({_r["counted"]:,} over {_r["megabases"]:.2f} Mb)</div></div>')
+        _items = [mo.Html(_tile), mo.callout(mo.md("### 🎯 TMB measured\n" + facts([
+            ("Substitutions", f"`{_r['counted_snv'] + _r['counted_mnv']:,}` ({_r['tmb_snv']:.2f} per Mb)"),
+            ("Insertions and deletions", f"`{_r['counted_indel']:,}` ({_r['tmb_indel']:.2f} per Mb)"),
+            ("Region", f"{_r['bed_bp'] / 1e6:.2f} Mb in the BED" + (f"; {_r['coding_bp'] / 1e6:.2f} Mb of it coding" if _r["coding_bp"] else "")),
+            ("Sample", f"`{_r['sample']}`" if _r["sample"] else "—"),
+        ])), kind="success")]
+        _why = [("not PASS", _r["excluded_filter"]), ("depth below the minimum", _r["excluded_depth"]),
+                ("allele fraction below the minimum", _r["excluded_vaf"]), ("outside the region", _r["outside_region"]),
+                ("not in a coding sequence", _r["not_coding"]), ("synonymous", _r["synonymous"]), ("symbolic allele", _r["symbolic"])]
+        _items.append(mo.ui.table([{"not counted because": _w, "alleles": _n} for _w, _n in _why if _n]
+                                  or [{"not counted because": "(every allele was counted)", "alleles": 0}], selection=None, label="Left out"))
+        for _w in _r["warnings"][:5]:
+            _items.append(warn(_w))
+        _items.append(code_panel(f"r = {python_call('tumor_mutational_burden', _v['vcf'], _v['bed'], **_kw)}"))
+        _panel = mo.vstack(_items)
+    except Exception as _err:
+        _panel = error_panel(_err)
     _panel
     return
 

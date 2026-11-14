@@ -65,3 +65,8 @@ _backup_antes_do_porte/
 
 # Working notes of the author's sessions: local only
 CLAUDE.md
+
+# Written by the web interface: the example files (made again on demand) and
+# the FASTQ report pages
+mmgen_examples/
+*.report.html

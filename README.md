@@ -107,6 +107,32 @@ Every module has a screen in the web interface, and every function is also avail
 * **Every tool reads and writes every container**, chosen by the extension: plain text, `.gz` (read as gzip or BGZF, written as BGZF), `.lz4`, `.bam` (for SAM) and `.parquet` (for VCF, BED, GFF and SAM). **`convert_file`** changes only the container: `convert_file("x.sam", "x.bam")`, `convert_file("x.vcf.gz", "x.vcf.parquet")`.
 * **Parquet** keeps one typed column per field (positions as integers, QUAL as a number with `.` as null, one column per sample) and the whole header in the file metadata, so it converts back to the same text. QUAL (and the GFF score) can instead be kept as the text it was, for a byte-for-byte round trip: `parquet_options(numbers="text")`. Parquet tables written by pandas, polars or pyarrow are read by their column names (`chrom`, `start`, `end`...).
 
+### 🧬 15–21. Human Genetics *(experimental, for teaching and research)*
+
+> ⚠️ **Experimental software, for teaching and research only.** These results are not a medical diagnosis, not a paternity test with legal value and not advice on any treatment or medicine. The authors and contributors take no responsibility for decisions made on the basis of them. A finding must be confirmed by an accredited laboratory and interpreted by a qualified professional (a physician or a genetic counselor). Analyze only the genomes of people who have agreed to it: genetic data are sensitive personal data, about the person and about their relatives.
+
+* **15. Which test sees what**: a guide to the common genetic tests (karyotype, microarray, MLPA, panels, exome, short- and long-read genomes, trio sequencing, tumor profiling, Sanger, pharmacogenomic panels, metagenomics, 16S, pathogen genomes, RNA-seq, CRISPR screens), with what each sees, its blind spots, its files, and what MMGEN does with them.
+* **16. Relatedness, trios and paternity** — `relatedness` (the KING kinship of every pair, as `plink2 --make-king-table`, and the inferred relationship), `trio_analysis` (Mendelian consistency, de novo candidates, exclusions and the combined paternity index from population frequencies).
+* **17. Ancestry and polygenic scores** — `build_panel` / `panel_from_frequencies` (population frequency panels, e.g. from the 1000 Genomes Project), `estimate_ancestry` (admixture proportions with bootstrap errors, as ADMIXTURE's supervised mode), `polygenic_score` (PGS Catalog scoring files, with coverage and the place of the score among the panel's groups).
+* **18. Disease findings and gene panels** — `clinvar_findings` (a person's variants that ClinVar lists, with classification, review stars, conditions and zygosity), `gene_regions` (a panel's genes from a GFF annotation).
+* **19. Pharmacogenomics** — `pharmcat_run` prepares a person's VCF for **PharmCAT** (the open-source tool of PharmGKB and CPIC, which calls the star alleles, phenotypes and guideline texts) and runs it. MMGEN calls no allele itself. Needs Java 17+ and PharmCAT (the screen downloads it).
+* **20. Sex chromosomes and homozygosity** — `genetic_sex` (XX / XY from chrX heterozygosity and chrY calls, with flags for X0 and XXY patterns), `runs_of_homozygosity` (as a SNP array shows them, by the sliding-window method of `plink --homozyg`, which tolerates a genotyping error; on HG002 the same runs as plink, coordinate for coordinate; or strictly, where any heterozygous call ends a run).
+* **21. Variant lookup and allele counts** — `variant_lookup` (a known variant tested in relatives: cascade testing), `pileup` (the bases the reads show at one position of a BAM).
+
+They read any VCF, sorted in natural chromosome order; with a **callable-regions BED** (as Genome in a Bottle publishes), a site absent from the VCF counts as homozygous reference only inside it. Checked against `plink2` (kinship within 3·10⁻⁴ on the Genome in a Bottle trios) and the 1000 Genomes populations (the ancestry of people held out of the panel). The screens' examples use a 49 MB demo pack of public data (Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes, PGS Catalog), built by `trials/python/make_human_demo.py`.
+
+### 🦠 22–28. Research, Microbiology and Oncology *(experimental, for teaching and research)*
+
+* **22. RNA-seq** — `count_reads` (reads per gene from BAM files and a GFF/GTF annotation, as `htseq-count` in union mode), `differential_expression` (the DESeq2 method: median-of-ratios size factors, shrunken dispersions, negative binomial GLM, Wald test, Benjamini-Hochberg, independent filtering and Cook's distance), with volcano and MA plots on the screen. On the airway experiment (8 samples, `~ cell_line + dex`), the genes called agree with `pydeseq2` at Jaccard 0.92 and the fold changes at r = 0.9998.
+* **23. CRISPR screens** — `crispr_count` (guide counts from FASTQ against a library, with the offset found automatically) and `crispr_test` (median normalization, mean-variance model and gene ranking by robust rank aggregation, the MAGeCK method): the same guide and gene tables as MAGeCK 0.5.9.5 on its demo data.
+* **24. Metagenomics** — `sketch_references` (FracMinHash sketches of reference genomes, the same hashes as sourmash), `gather` (the species of a sample and their abundance, as `sourmash gather`, with host reads reported apart) and `classify_reads` (each read assigned to a species by its k-mers, as Kraken does, with the host reads written apart).
+* **25. Resistance genes** — `find_resistance_genes` (assemblies or reads searched for the genes of the NCBI AMRFinderPlus catalog, with identity, coverage, gene class and the drug it acts on).
+* **26. Outbreaks** — `genome_distances` / `sketch_distances` (Jaccard, Mash distance and ANI between genomes, from sketches with sourmash's hashes, and the neighbor-joining or UPGMA tree, drawn on the screen and written as Newick), `tree_from_matrix`, `viral_mutations` (each genome aligned to its reference, the substitutions, deletions, insertions and missing stretches named as Nextclade names them, and the amino-acid changes per gene, ORF1ab's frameshift included) and `in_silico_pcr` (primer pairs and probes, IUPAC codes, mismatches and the 3' rule, against genomes on both strands or against reads). On 20 SARS-CoV-2 lineages the mutations are the same as Nextclade 3.29's, genome by genome; the Jaccard matrices are the same as `sourmash compare`.
+* **27. 16S amplicons** — `amplicon_asvs` (pairs merged, filtered by expected errors, denoised into ASVs as UNOISE3, chimeras removed as `--uchime3_denovo`), `train_classifier` / `classify_asvs` (the naive Bayesian classifier of the RDP, with saved models), `alpha_diversity`, `beta_diversity` (Bray-Curtis or Jaccard, principal coordinates, PERMANOVA) and `taxa_composition`. On the mothur MiSeq SOP data the Mock community's 20 strains come out exact, denoising gives vsearch's centroids, and the diversity numbers match scikit-bio.
+* **28. Tumor mutational burden** — `tumor_mutational_burden` (somatic variants per megabase of the panel's or exome's region, with depth, allele-fraction and PASS filters, optionally coding or non-synonymous only).
+
+The examples use a 64 MB demo pack (`trials/python/make_research_demo.py`): the airway counts, the MAGeCK demos, sketches of 43 reference genomes, reads of the ZymoBIOMICS mock communities, the AMRFinderPlus catalog, four bacterial isolates, 20 SARS-CoV-2 lineages, sketches of 13 *K. pneumoniae* and 4 *S. aureus*, a PCR panel with its sources, the mothur MiSeq SOP reads with an RDP classifier, and the SEQC2 somatic calls of a breast-cancer cell line (chromosome 17).
+
 
 ---
 
@@ -194,7 +220,9 @@ pip install marimo polars numpy scikit-learn pyarrow
 marimo run ui_main.py
 ```
 
-The interface lists the files of the folder it is started from, and writes its results there. The menu has two groups: the k-mer modules (1–7) and the file tools (8–14). On screens 9–14 you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
+The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has four groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21) and research, microbiology and oncology (22–28). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
+
+**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 110 of them, at least one for every task: a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, the mothur MiSeq SOP, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` and `mmgen_demo_research_v3.zip`, unpacked into `mmgen_examples/` the first time, from the folder the interface runs in.
 
 ![Variant detection screen](assets/variant_calling.png)
 
@@ -262,6 +290,30 @@ output.serve_kernel_port_as_iframe(2718, height=900)
 | `translate_proteins(dna_sequences)` | One protein per DNA sequence |
 | `build_scaffolds(sequences, overlap)` | `(scaffolds, circular)` |
 | `decode_kmers_128(kmer_bytes, k)` | K-mers back to DNA strings |
+| `relatedness(vcfs, samples=None, callable_beds=None, ...)` | KING kinship, IBS0 and the inferred relationship of every pair *(experimental)* |
+| `trio_analysis(child, father, mother=None, ..., allele_frequencies=None, af_field="AF")` | Mendelian errors, de novo candidates, exclusions, combined paternity index *(experimental; no legal value)* |
+| `runs_of_homozygosity(vcf, output=None, ..., window_snps=50, window_het=1)` / `genetic_sex(vcf, ...)` | Runs of homozygosity and F_ROH (`window_snps=0`: strict) / XX, XY or undetermined *(experimental)* |
+| `build_panel(...)` / `panel_from_frequencies(...)` | Population frequency panels, from genotypes or from a sites VCF |
+| `estimate_ancestry(panel, vcfs, ...)` | Admixture proportions against the panel's groups, with bootstrap errors *(experimental)* |
+| `polygenic_score(scoring_file, vcfs, panel=None, ...)` | A PGS Catalog score, its coverage and its percentile in each panel group *(experimental; not a diagnosis)* |
+| `clinvar_findings(vcf, clinvar, classes="plp", min_stars=1, genes=None, ...)` | The person's variants that ClinVar lists *(experimental; not a diagnosis)* |
+| `gene_regions(gff, genes, output=None, padding=0)` | The coordinates of named genes (a panel) from a GFF |
+| `variant_lookup(variants, vcfs, ...)` / `pileup(bam, position, alt=None)` | A variant in each relative's VCF / the allele counts at a position of a BAM |
+| `pharmcat_prepare(vcf, output, positions, ...)` / `pharmcat_run(vcf, output_dir, jar, ...)` | PharmCAT's input from a VCF / PharmCAT run on it, with its calls per gene *(experimental; not medical advice)* |
+| `count_reads(bams, annotation, output=None, feature_type="exon", attribute=None, strandedness="unstranded", ...)` | Reads per gene from BAM files and a GFF/GTF |
+| `differential_expression(counts, samples, condition, reference, output=None, treated=None, factors=None, alpha=0.1, ...)` | Differential expression by the DESeq2 method: log2 fold change, Wald p-value, adjusted p-value |
+| `crispr_count(library, fastqs, output=None, labels=None, ...)` / `crispr_test(count_table, treatment, control=None, ...)` | Guide counts from reads / guide and gene ranking of a screen, as MAGeCK |
+| `sketch_references(genomes, output, names=None, host=None, k=31, scaled=1000)` | FracMinHash sketches of reference genomes, saved as a database |
+| `gather(samples, databases, output=None, ...)` / `classify_reads(input, databases, input2=None, ...)` | The species of a metagenome and their abundance / a species for each read, host reads apart |
+| `find_resistance_genes(inputs, catalog, catalog_table=None, output=None, min_identity=0.9, min_coverage=0.9, ...)` | The resistance genes of the AMRFinderPlus catalog in assemblies or reads |
+| `genome_distances(genomes, names=None, tree_output=None, matrix_output=None, ...)` / `sketch_distances(databases, ...)` | Jaccard, Mash distance and ANI of every pair of genomes, and their tree (neighbor joining or UPGMA, Newick) |
+| `tree_from_matrix(path, method="nj", similarity=False, outgroup=None, output=None)` | A tree from a distance or similarity matrix (TSV, CSV, PHYLIP) |
+| `viral_mutations(reference, genomes, annotation=None, output_dir=None, summary_output=None, split_orf1ab=True)` | The mutations of viral genomes against their reference, with the amino-acid changes per gene, named as Nextclade names them |
+| `in_silico_pcr(panel, inputs, amplicons_output=None, matrix_output=None, ..., max_mismatches=3, three_prime_exact=3)` | The products of a panel's primer pairs in genomes, and the reads that carry their sites |
+| `amplicon_asvs(samples, asv_fasta, feature_table, tracking=None, primer_forward=None, primer_reverse=None, max_ee=1.0, ...)` | 16S amplicon sequence variants and the feature table |
+| `train_classifier(reference, output=None, ...)` / `classify_asvs(sequences, model, output, min_confidence=0.8, ...)` | The RDP naive Bayesian classifier: train, save, classify |
+| `alpha_diversity(table, ...)` / `beta_diversity(table, metric="braycurtis", metadata=None, group_column=None, ...)` / `taxa_composition(table, taxonomy, rank="Phylum", top=0)` | Diversity within and between samples, principal coordinates, PERMANOVA; composition per sample |
+| `tumor_mutational_burden(vcf, bed, output=None, tumor_sample=None, min_depth=10, min_vaf=0.05, annotation=None, coding_only=False, ...)` | Somatic variants per megabase of the sequenced region *(experimental; not a clinical report)* |
 
 * `by`: `"position"` (every format), `"quality"` (VCF, descending) or `"name"` (SAM, QNAME in natural order).
 * `chrom_order`: `"lexical"`, `"natural"`, `"header"`, or the path of a `.fai` file. Default: the header for VCF and SAM, lexical for BED and GFF.
@@ -314,6 +366,15 @@ cargo run --release --bin bed_ops     # 308 tests: subtract, complement, closest
 cargo run --release --bin vcf_tools   # 188 tests: VCF statistics, filter expressions, normalization, left-alignment
 cargo run --release --bin fastq_qc    # 592 tests: FASTQ statistics and trimming
 cargo run --release --bin kmer_count  # 312 tests: k-mer counting, in memory and on disk
+cargo run --release --bin parentesco  # 955 tests: kinship, trios and paternity, runs of homozygosity, genetic sex
+cargo run --release --bin ancestralidade  # 601 tests: frequency panels, ancestry, polygenic scores
+cargo run --release --bin clinico     # 5,789 tests: ClinVar findings, gene panels, variant lookup, pileup
+cargo run --release --bin pharmcat    # 31 tests: PharmCAT's input (with PHARMCAT_JAR, also a real PharmCAT run)
+cargo run --release --bin expressao   # 202 tests: read counting per gene, differential expression
+cargo run --release --bin crispr      # 237 tests: guide counting, MAGeCK's gene ranking (give MAGeCK's data folder for more)
+cargo run --release --bin microbio    # 192 tests: sketches, species abundance, read classification, resistance genes
+cargo run --release --bin surto       # 184 tests: genome distances and trees, viral mutations, in-silico PCR
+cargo run --release --bin amplicon    # 178 tests: 16S ASVs, RDP classifier, diversity, tumor mutational burden
 # with CUTADAPT=<path of cutadapt> the FASTQ tests also compare every read with cutadapt
 
 # Python, with the extension installed
@@ -325,7 +386,7 @@ python trials/python/test_browser.py ui_main.py    # the interface in a real bro
 python trials/python/gpu_test.py 1 10              # GPU against CPU against numpy; sizes in millions
 ```
 
-Every Rust test compares the complete output with an independent reference written in the test itself, on random inputs from a fixed seed, and runs again with a tiny memory budget so that the on-disk path is exercised too.
+Every Rust test compares the output with an independent reference written in the test itself (brute force, hand-worked cases, or the numbers of the published tool), on inputs made from a fixed seed; the file tools run again with a tiny memory budget so that the on-disk path is exercised too.
 
 ## 🚧 Status and known limitations
 

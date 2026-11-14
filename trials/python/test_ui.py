@@ -1,9 +1,9 @@
 # Test of the marimo interface without a browser: runs the cells of each screen
 # as functions, with stand-in forms -- screen 8 (VCF) in detail, the k-mer flow
-# of screens 1, 3, 4, 5, 6 and 7, and every task of the file tools (screens
-# 9-14), whose outputs are compared with the direct call to the API. Screen 2
-# (clustering) and the navigation are covered by test_browser.py, which drives a
-# real browser.
+# of screens 1, 3, 4, 5, 6 and 7, every task of the file tools (screens 9-14),
+# whose outputs are compared with the direct call to the API, and every example
+# of every screen (picked, the form filled in, run). Screen 2 (clustering) and
+# the navigation are covered by test_browser.py, which drives a real browser.
 # Usage: python trials/python/test_ui.py ui_main.py
 # Needs marimo, polars, numpy and the extension installed.
 import asyncio
@@ -96,21 +96,74 @@ class Form:
         self.value = value
 
 
+class Choice:
+    """Stands in for a radio, a dropdown or a button: only `.value` is read."""
+    def __init__(self, value=None):
+        self.value = value
+
+
 print("== the whole notebook runs (home page)")
 r = run(ui.app)
 check("app.run() without error", not isinstance(r, BaseException), repr(r)[:300])
 
+import builtins
+import gzip
+
+helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os)
+check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
+examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
+check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl)
+
+
+def cell_run(cell, **given):
+    """Runs a cell with what it refers to: the helpers, the modules and `given`.
+    The examples lists default to "none picked", the refresh buttons to None,
+    the data folders to "."."""
+    pool = dict(POOL, **given)
+    for k in cell.refs:
+        if k.endswith("_example") and k not in pool:
+            pool[k] = Choice("")
+        if k.startswith("btn_refresh") and k not in pool:
+            pool[k] = None
+        if k.endswith("_folder") and k not in pool:
+            pool[k] = Choice(".")
+    pool.setdefault("PHARMCAT_DIR", "mmgen_tools/pharmcat")
+    pool.setdefault("pgx_downloaded", 0)
+    return run(cell, **{k: pool[k] for k in cell.refs if not hasattr(builtins, k)})
+
+
+def raw(r):
+    """The HTML the cell put on the page (a mo.stop comes back as the output too)."""
+    if isinstance(r, BaseException):
+        return repr(r)
+    return text_of(r[0])
+
+
+def shown(r):
+    """The text of the page, without the tags (the code panel is highlighted
+    token by token, so a call only reads as one string once they are gone)."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", raw(r)))
+
+
+def stopped(r, message):
+    """The cell stopped with this warning (and so wrote nothing)."""
+    return not isinstance(r, BaseException) and message in shown(r) and "ERROR" not in shown(r)
+
+
 print("== screen 8: form")
-r = run(ui.vcf_page_ui, get_page=lambda: "vcf", glob=glob, mo=mo, set_page=lambda _: None)
+r = cell_run(ui.vcf_page_form, get_page=lambda: "vcf")
 check("the form cell runs", not isinstance(r, BaseException), repr(r)[:300])
 if not isinstance(r, BaseException):
     html = text_of(r[0])
     check("lists the .vcf files of the folder", all(n in html for n in ("sample_a.vcf", "sample_b.vcf", "sample_c.vcf")), html[:200])
     check("no longer offers .parquet", "table.parquet" not in html)
+    # mo.ui.dictionary draws its fields inside a JSON tree (marimo-json-output).
+    check("a clean form, not a JSON tree", "marimo-json-output" not in raw(r) and "marimo-multiselect" in raw(r), html[:300])
 
 
 def backend(**value):
-    return run(ui.vcf_page_backend, asyncio=asyncio, form_vcf=Form(**value), get_page=lambda: "vcf", mmg=mmg, mo=mo, os=os)
+    return cell_run(ui.vcf_page_backend, get_page=lambda: "vcf", form_vcf=Form(**value))
 
 
 print("== screen 8: three files at once (the old defect kept only the last one)")
@@ -172,8 +225,7 @@ def number(html, label):
 
 print("== screen 1: QC / ingestion (FASTA -> k-mers -> .arrow)")
 for name in ("reference", "patient"):
-    r = run(ui.qc_page_backend, asyncio=asyncio, get_page=lambda: "qc", mmg=mmg, mo=mo, pl=pl,
-            form_qc=Form(files=[f"{name}.fasta"], kmer_size=K, min_quality=20))
+    r = cell_run(ui.qc_page_backend, get_page=lambda: "qc", form_qc=Form(files=[f"{name}.fasta"], kmer_size=K, min_quality=20))
     ok = not isinstance(r, BaseException) and "successfully" in text_of(r[0]) and os.path.exists(f"{name}_K{K}.arrow")
     check(f"{name}.fasta -> {name}_K{K}.arrow", ok, repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:300])
     if ok:
@@ -181,8 +233,7 @@ for name in ("reference", "patient"):
         check(f"  {n} k-mers (expected {30000 - K + 1})", n == 30000 - K + 1, str(n))
 
 print("== screen 3: assembly (De Bruijn)")
-r = run(ui.assembly_page_backend, asyncio=asyncio, get_page=lambda: "assembly", mmg=mmg, mo=mo, os=os, pl=pl,
-        form_assembly=Form(kmer_file=f"reference_K{K}.arrow"))
+r = cell_run(ui.assembly_page_backend, get_page=lambda: "assembly", form_assembly=Form(kmer_file=f"reference_K{K}.arrow"))
 ok = not isinstance(r, BaseException) and "successfully" in text_of(r[0]) and os.path.exists(f"MMGEN_Contigs_K{K}.fasta")
 check("assembles and writes the contigs", ok, repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:300])
 if ok:
@@ -194,27 +245,25 @@ if ok:
     check("  and it rebuilds the whole genome (a sequence with no repeats)", len(longest) == len(genome), f"{len(longest)} of {len(genome)}; {len(contigs)} contigs")
 
 print("== screen 4: variant calling (Bloom)")
-r = run(ui.variant_page_backend, asyncio=asyncio, get_page=lambda: "variant", mmg=mmg, mo=mo, pl=pl,
-        form_variant=Form(reference=f"reference_K{K}.arrow", patient=f"patient_K{K}.arrow", filter_mb=16, num_hashes=5))
+r = cell_run(ui.variant_page_backend, get_page=lambda: "variant",
+             form_variant=Form(reference=f"reference_K{K}.arrow", patient=f"patient_K{K}.arrow", filter_mb=16, num_hashes=5))
 ok = not isinstance(r, BaseException) and "scan complete" in text_of(r[0])
 check("the scan runs", ok, repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:300])
 if ok:
     n = number(text_of(r[0]), "patient):")
     check(f"  {n} mutated k-mers (3 SNPs x {K} = {3 * K})", n == 3 * K, str(n))
-r = run(ui.variant_page_backend, asyncio=asyncio, get_page=lambda: "variant", mmg=mmg, mo=mo, pl=pl,
-        form_variant=Form(reference=f"reference_K{K}.arrow", patient=f"reference_K{K}.arrow", filter_mb=16, num_hashes=5))
+r = cell_run(ui.variant_page_backend, get_page=lambda: "variant",
+             form_variant=Form(reference=f"reference_K{K}.arrow", patient=f"reference_K{K}.arrow", filter_mb=16, num_hashes=5))
 check("  reference == patient: stops with a warning (this is where kind=\"warning\" used to break)",
       not isinstance(r, BaseException) or type(r).__name__ == "MarimoStopError", repr(r)[:200])
 
 print("== screen 5: annotation (translation)")
-r = run(ui.annotation_page_backend, asyncio=asyncio, get_page=lambda: "annotation", mmg=mmg, mo=mo,
-        form_annotation=Form(dna="ATGGCCAAATAG"))
+r = cell_run(ui.annotation_page_backend, get_page=lambda: "annotation", form_annotation=Form(dna="ATGGCCAAATAG"))
 check("ATGGCCAAATAG -> MAK*", not isinstance(r, BaseException) and "MAK" in text_of(r[0]) and "4 amino acids" in text_of(r[0]),
       repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:400])
 
 print("== screen 6: Bloom filter")
-r = run(ui.bloom_page_backend, asyncio=asyncio, get_page=lambda: "bloom", mmg=mmg, mo=mo, np=np, pl=pl,
-        form_bloom=Form(kmer_file=f"reference_K{K}.arrow", filter_mb=16, num_hashes=5))
+r = cell_run(ui.bloom_page_backend, get_page=lambda: "bloom", form_bloom=Form(kmer_file=f"reference_K{K}.arrow", filter_mb=16, num_hashes=5))
 ok = not isinstance(r, BaseException) and "successfully" in text_of(r[0])
 check("builds the filter", ok, repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:300])
 if ok:
@@ -223,8 +272,7 @@ if ok:
     check(f"  {bits} bits set (5 per k-mer: close to {expected})", bits is not None and 0.99 * expected <= bits <= expected, str(bits))
 
 print("== screen 7: scaffolding")
-r = run(ui.scaffold_page_backend, asyncio=asyncio, get_page=lambda: "scaffold", mmg=mmg, mo=mo,
-        form_scaffold=Form(contigs_fasta=f"MMGEN_Contigs_K{K}.fasta", overlap=K - 1))
+r = cell_run(ui.scaffold_page_backend, get_page=lambda: "scaffold", form_scaffold=Form(contigs_fasta=f"MMGEN_Contigs_K{K}.fasta", overlap=K - 1))
 check("stitches the contigs", not isinstance(r, BaseException) and "Scaffolding complete" in text_of(r[0]),
       repr(r)[:300] if isinstance(r, BaseException) else text_of(r[0])[:300])
 
@@ -233,43 +281,6 @@ check("stitches the contigs", not isinstance(r, BaseException) and "Scaffolding 
 # call a script would make: the test makes that call itself and compares the
 # two files, so a wrong argument between the form and the engine shows up.
 # ---------------------------------------------------------------------------
-import builtins
-import gzip
-
-helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os)
-check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
-POOL = dict(helpers[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl)
-
-
-class Choice:
-    """Stands in for a radio, a dropdown or a button: only `.value` is read."""
-    def __init__(self, value=None):
-        self.value = value
-
-
-def cell_run(cell, **given):
-    pool = dict(POOL, **given)
-    return run(cell, **{k: pool[k] for k in cell.refs if not hasattr(builtins, k)})
-
-
-def raw(r):
-    """The HTML the cell put on the page (a mo.stop comes back as the output too)."""
-    if isinstance(r, BaseException):
-        return repr(r)
-    return text_of(r[0])
-
-
-def shown(r):
-    """The text of the page, without the tags (the code panel is highlighted
-    token by token, so a call only reads as one string once they are gone)."""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", raw(r)))
-
-
-def stopped(r, message):
-    """The cell stopped with this warning (and so wrote nothing)."""
-    return not isinstance(r, BaseException) and message in shown(r) and "ERROR" not in shown(r)
-
-
 def body(path):
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt", newline="\n") as f:
@@ -495,6 +506,181 @@ r = convert_backend(file="reads.sam", target=".bam", numbers="number", output=""
 check("  SAM -> reads.bam, 20 records", os.path.exists("reads.bam") and "22 (20 records)" in shown(r), shown(r)[:300])
 r = convert_backend(file="quals.vcf", target="text", numbers="number", output="")
 check("  already in that container: stops with a warning", stopped(r, "already in that container"), shown(r)[:200])
+
+print("== screen 15: the guide to the tests")
+r = cell_run(ui.guide_page_ui, get_page=lambda: "guide", set_page=lambda _: None)
+check("  the guide shows the table of tests, their blind spots and the notice",
+      not isinstance(r, BaseException) and "Does not see" in shown(r) and "Optical genome mapping" in shown(r)
+      and "for teaching and research only" in shown(r), shown(r)[:300])
+
+# ---------------------------------------------------------------------------
+# The examples: for every screen and task, each example fills in the form,
+# and the form, submitted as it is, runs without a warning or an error.
+# ---------------------------------------------------------------------------
+print("== the examples of every screen: picked, filled in, run")
+SCREENS = {
+    "qc": (ui.qc_page_form, ui.qc_page_backend, "form_qc", None),
+    "cluster": (ui.cluster_page_form, ui.cluster_page_backend, "form_samples", None),
+    "assembly": (ui.assembly_page_form, ui.assembly_page_backend, "form_assembly", None),
+    "variant": (ui.variant_page_form, ui.variant_page_backend, "form_variant", None),
+    "annotation": (ui.annotation_page_form, ui.annotation_page_backend, "form_annotation", None),
+    "bloom": (ui.bloom_page_form, ui.bloom_page_backend, "form_bloom", None),
+    "scaffold": (ui.scaffold_page_form, ui.scaffold_page_backend, "form_scaffold", None),
+    "vcf": (ui.vcf_page_form, ui.vcf_page_backend, "form_vcf", None),
+    "sort": (ui.sort_page_form, ui.sort_page_backend, "form_sort", "sort_task"),
+    "validate": (ui.validate_page_form, ui.validate_page_backend, "form_validate", "validate_task"),
+    "vcftools": (ui.vcftools_page_form, ui.vcftools_page_backend, "form_vcftools", "vcftools_task"),
+    "fastq": (ui.fastq_page_form, ui.fastq_page_backend, "form_fastq", "fastq_task"),
+    "kmercount": (ui.kmercount_page_form, ui.kmercount_page_backend, "form_kmercount", None),
+    "convert": (ui.convert_page_form, ui.convert_page_backend, "form_convert", None),
+    "findings": (ui.findings_page_form, ui.findings_page_backend, "form_findings", "findings_task"),
+    "pgx": (ui.pgx_page_form, ui.pgx_page_backend, "form_pgx", None),
+    "lookup": (ui.lookup_page_form, ui.lookup_page_backend, "form_lookup", "lookup_task"),
+    "kin": (ui.kin_page_form, ui.kin_page_backend, "form_kin", "kin_task"),
+    "chrom": (ui.chrom_page_form, ui.chrom_page_backend, "form_chrom", "chrom_task"),
+    "anc": (ui.anc_page_form, ui.anc_page_backend, "form_anc", "anc_task"),
+    "rnaseq": (ui.rnaseq_page_form, ui.rnaseq_page_backend, "form_rnaseq", "rnaseq_task"),
+    "crispr": (ui.crispr_page_form, ui.crispr_page_backend, "form_crispr", "crispr_task"),
+    "meta": (ui.meta_page_form, ui.meta_page_backend, "form_meta", "meta_task"),
+    "amr": (ui.amr_page_form, ui.amr_page_backend, "form_amr", None),
+    "outbreak": (ui.outbreak_page_form, ui.outbreak_page_backend, "form_outbreak", "outbreak_task"),
+    "amplicon": (ui.amplicon_page_form, ui.amplicon_page_backend, "form_amplicon", "amplicon_task"),
+    "tmb": (ui.tmb_page_form, ui.tmb_page_backend, "form_tmb", None),
+}
+import shutil
+RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
+if RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO):
+    shutil.copy(RESEARCH_DEMO, os.path.basename(RESEARCH_DEMO))
+# The human-genome examples need the demo data (MMG_HUMAN_DEMO = the path of
+# mmgen_demo_human_v1.zip) and, for screen 19, PharmCAT (PHARMCAT_JAR = the
+# pharmcat-<version>-all.jar, with its positions file next to it).
+import shutil
+HUMAN_DEMO = os.environ.get("MMG_HUMAN_DEMO")
+if HUMAN_DEMO and os.path.exists(HUMAN_DEMO):
+    shutil.copy(HUMAN_DEMO, os.path.basename(HUMAN_DEMO))
+JAR = os.environ.get("PHARMCAT_JAR")
+if JAR and os.path.exists(JAR):
+    os.makedirs("mmgen_tools/pharmcat", exist_ok=True)
+    for f in os.listdir(os.path.dirname(JAR)):
+        if f.endswith("-all.jar") or (f.startswith("pharmcat_positions_") and f.endswith(".vcf")):
+            shutil.copy(os.path.join(os.path.dirname(JAR), f), os.path.join("mmgen_tools/pharmcat", f))
+OPS = ("merge", "intersect", "subtract", "complement", "closest", "coverage", "slop")
+# What the result of some examples must say (in the page text, without tags).
+EXPECT = {
+    ("qc", None, 0): ["Distinct k-mers extracted: 29,970"],
+    ("cluster", None, 0): ["4,000"],
+    ("assembly", None, 0): ["Longest contig: 30,000 bp"],
+    ("variant", None, 0): ["only in the patient): 93"],
+    ("annotation", None, 0): ["MSTHEGENEISREAD"],
+    ("annotation", None, 1): ["MSTHEGENEIS"],
+    ("annotation", None, 2): ["MSTMKVKMKFLEKLI"],
+    ("scaffold", None, 0): ["Longest continuous sequence: 20,000 bases", "Circular genomes detected: 1"],
+    ("scaffold", None, 1): ["Longest continuous sequence: 24,000 bases", "Circular genomes detected: 0"],
+    ("vcf", None, 0): ["Variants written: 600"],
+    ("vcf", None, 1): ["Variants written: 600"],
+    ("sort", "Sort & merge", 0): ["Records written: 450", ".tbi"],
+    ("sort", "Sort & merge", 3): ["Records written: 600", ".bai"],
+    ("sort", "Index & query a region", 0): ["record(s) in chr1:10000-20000"],
+    ("sort", "merge", 0): ["Intervals read"],
+    ("validate", "Validate a file", 0): ["4 error(s)", "line"],
+    ("validate", "Validate a file", 1): ["needs at least 8"],
+    ("validate", "Validate a file", 2): ["No problem found"],
+    ("validate", "Rename chromosomes (chr1 ↔ 1)", 0): ["MT → chrM"],
+    ("validate", "Compare reference genomes", 0): ["DIFFERENT reference genomes", "GRCh37"],
+    ("validate", "Compare reference genomes", 1): ["Same reference"],
+    ("vcftools", "Statistics", 0): ["500 in 3 sequence(s), with 3 sample(s)"],
+    ("vcftools", "Statistics", 1): ["Nothing was read", "needs at least 8"],
+    ("vcftools", "Filter", 2): ["Samples: 3 → 1"],
+    ("vcftools", "Normalize", 1): ["Indels left-aligned: 3"],
+    ("fastq", "Quality report", 0): ["Illumina Universal"],
+    ("fastq", "Trim reads", 1): ["Pairs in / kept"],
+    ("kmercount", None, 0): ["peak:"],
+    ("convert", None, 1): ['parquet_options(numbers="text")'],
+    ("findings", "ClinVar findings", 0): ["F11", "Pathogenic", "1 in one copy"],
+    ("findings", "Gene panel from an annotation", 0): ["BRCA1", "Genes found: 13 of 13"],
+    ("pgx", None, 0): ["CYP2C19", "Positions read", "PharmCAT 3."],
+    ("lookup", "Look up variants in relatives (cascade testing)", 0): ["carries it", "does not carry it"],
+    ("lookup", "Allele counts at a position (BAM)", 0): ["Depth"],
+    ("kin", "Relatedness of several people", 0): ["parent and child", "HG002"],
+    ("kin", "Trio and paternity test", 0): ["is not excluded", "Combined paternity index"],
+    ("kin", "Trio and paternity test", 1): ["is excluded"],
+    ("kin", "Trio and paternity test", 2): ["is not excluded"],
+    ("chrom", "Genetic sex", 0): ["XX"],
+    ("chrom", "Genetic sex", 1): ["XY"],
+    ("chrom", "Genetic sex", 2): ["Undetermined"],
+    ("chrom", "Runs of homozygosity", 0): ["Runs: 2", "as plink --homozyg"],
+    ("chrom", "Runs of homozygosity", 2): ["Runs: 2", "strict: any heterozygous call ends a run"],
+    ("anc", "Ancestry", 0): ["HG005", "EAS", "best single group"],
+    ("anc", "Polygenic score", 0): ["percentile in EUR", "PGS000004"],
+    ("anc", "Build a reference panel", 0): ["Panel written", "AFR, AMR, EAS, EUR, SAS"],
+    ("rnaseq", "Count reads per gene", 0): ["Reads counted", "ctrl_1", "treat_2"],
+    ("rnaseq", "Differential expression", 0): ["gene03", "gene10", "Volcano plot", "MA plot"],
+    ("rnaseq", "Differential expression", 1): ["3,013 up, 2,539 down", "CACNB2", "Volcano plot"],
+    ("crispr", "Count guides in reads", 0): ["Guides counted", "58.1%"],
+    ("crispr", "Rank genes (MAGeCK RRA)", 0): ["ACTR8", "Negative selection"],
+    ("crispr", "Rank genes (MAGeCK RRA)", 1): ["RPL3", "7,115 genes"],
+    ("meta", "Which species, and how much", 0): ["Pseudomonas aeruginosa", "Staphylococcus aureus", "Saccharomyces cerevisiae"],
+    ("meta", "Which species, and how much", 1): ["Listeria monocytogenes"],
+    ("meta", "Classify the reads", 0): ["Reads classified", "Escherichia coli"],
+    ("meta", "Sketch reference genomes", 0): ["Sketches written", "USA300"],
+    ("amr", None, 0): ["blaKPC-3", "CARBAPENEM"],
+    ("amr", None, 1): ["blaNDM-1"],
+    ("amr", None, 2): ["mecA"],
+    ("outbreak", "Distances and a tree", 0): ["Tree built", "rooted on", "B.1.617.2_Delta", "Newick"],
+    ("outbreak", "Distances and a tree", 1): ["KPNIH1 (ST258)", "30684/NJST258_2 (ST258)", "Closest pair"],
+    ("outbreak", "Distances and a tree", 2): ["saureus_USA300_MRSA", "ANI (%) of every pair"],
+    ("outbreak", "Mutations of viral genomes", 0): ["Mutations found", "20 of 20 aligned", "S:D614G", "ORF1b:P314L", "S:N501Y"],
+    ("outbreak", "In-silico PCR", 0): ["PCR done", "CDC_N1", "CDC_N2", "40 of 100", "A_MN985325.1"],
+    ("outbreak", "In-silico PCR", 1): ["mecA", "16S_V4", "533"],
+    ("amplicon", "Amplicon variants (ASVs)", 0): ["ASVs found", "Mock", "F3D150", "ASV_1"],
+    ("amplicon", "Taxonomy", 0): ["ASVs classified", "Muribaculaceae", "Composition of each sample"],
+    ("amplicon", "Diversity", 0): ["Diversity measured", "PERMANOVA", "Early", "Late", "Principal coordinates", "Rarefaction curves"],
+    ("amplicon", "Diversity", 1): ["PERMANOVA", "Jaccard"],
+    ("amplicon", "Train a classifier", 0): ["Classifier trained", "my_v4_classifier.model"],
+    ("tmb", None, 0): ["TMB measured", "mutations per megabase", "HCC1395"],
+    ("tmb", None, 1): ["coding mutations per megabase", "not in a coding sequence"],
+}
+# The warnings a form stops with; an example must not hit any of them.
+STOPS = ("Select ", "cannot be", "must be", "Type the", "Type an", "is needed")
+before = set(os.listdir("."))
+EXAMPLES = examples[1]["EXAMPLES"]
+check("every screen has examples", {p for p, _ in EXAMPLES} == set(SCREENS), sorted({p for p, _ in EXAMPLES} ^ set(SCREENS)))
+for (page, task), items in EXAMPLES.items():
+    form_cell, backend_cell, form_name, task_var = SCREENS[page]
+    picker = next(k for k in form_cell.refs if k.endswith("_example"))
+    for i, (label, _about, _values) in enumerate(items):
+        flat = [x for v in _values.values() for x in (v if isinstance(v, list) else [v])]
+        human = any(isinstance(x, str) and x.startswith("mmgen_examples/human") for x in flat)
+        if human and not (HUMAN_DEMO and os.path.exists(HUMAN_DEMO)):
+            print(f"  skip  {page}: {label} (set MMG_HUMAN_DEMO to the demo data zip)")
+            continue
+        research = any(isinstance(x, str) and x.startswith("mmgen_examples/research") for x in flat)
+        if research and not (RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO)):
+            print(f"  skip  {page}: {label} (set MMG_RESEARCH_DEMO to the research demo zip)")
+            continue
+        if page == "pgx" and not (JAR and os.path.exists(JAR)):
+            print(f"  skip  {page}: {label} (set PHARMCAT_JAR)")
+            continue
+        given = {"get_page": lambda p=page: p, picker: Choice(str(i)), "interval_op": Choice(task if task in OPS else "merge")}
+        if task_var:
+            given[task_var] = Choice("Interval operations (BED)" if task in OPS else task)
+        name = f"{page}{' / ' + task if task else ''}: {label}"
+        r = cell_run(form_cell, **given)
+        if isinstance(r, BaseException) or form_name not in r[1]:
+            check(name + " (the form)", False, repr(r)[:300])
+            continue
+        about_shown = label in shown(r)
+        given[form_name] = Form(**r[1][form_name].element.value)
+        rb = cell_run(backend_cell, **{k: v for k, v in given.items() if k in backend_cell.refs})
+        page_text = shown(rb)
+        missing = [e for e in EXPECT.get((page, task, i), []) if e not in page_text]
+        # PharmCAT's own HTML report is embedded at the end: its texts are not the screen's warnings.
+        hit = [s for s in STOPS if s in page_text.split("PharmCAT's full report")[0]]
+        check(name, about_shown and not isinstance(rb, BaseException) and "ERROR" not in page_text and not hit and not missing,
+              f"about shown: {about_shown}; stops: {hit}; missing: {missing}; {page_text[:400]}")
+check("the examples write only inside mmgen_examples/", set(os.listdir(".")) - before <= {"mmgen_examples"},
+      sorted(set(os.listdir(".")) - before))
+check("the example files are written once, not on every pick", examples[1]["make_examples"]() is False)
 
 print()
 print(f"{done - len(failures)} of {done} checks passed")

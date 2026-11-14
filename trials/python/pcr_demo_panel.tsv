@@ -1,0 +1,29 @@
+# MMGEN in-silico PCR demo panel. Sequences 5'->3'; IUPAC codes allowed.
+#
+# CDC_N1, CDC_N2: US CDC 2019-nCoV real-time RT-PCR panel, Table 1 of
+#   Lu X, Wang L, Sakthivel SK, et al. US CDC real-time reverse transcription
+#   PCR panel for detection of severe acute respiratory syndrome coronavirus 2.
+#   Emerg Infect Dis 2020;26(8):1654-1665. doi:10.3201/eid2608.201246
+#   (sequences read from https://wwwnc.cdc.gov/eid/article/26/8/20-1246-t1 on
+#   2026-11-14; the same as the CDC "Research Use Only 2019-nCoV Real-time
+#   RT-PCR Primers and Probes" page). On NC_045512.2 the products are
+#   28287-28358 (N1) and 29164-29230 (N2): checked by this tool, 0 mismatches.
+# 16S_V4: 515F-Y (Parada AE, Needham DM, Fuhrman JA. Environ Microbiol
+#   2016;18:1403-1414) and 806RB (Apprill A, McNally S, Parsons R, Weber L.
+#   Aquat Microb Ecol 2015;75:129-137), the Earth Microbiome Project pair; the
+#   original 515F/806R are Caporaso JG et al. PNAS 2011;108 Suppl 1:4516-4522.
+# 16S_full: 27F and 1492R (Lane DJ. 16S/23S rRNA sequencing. In: Stackebrandt
+#   E, Goodfellow M, eds. Nucleic Acid Techniques in Bacterial Systematics.
+#   Wiley, 1991:115-175), in their usual degenerate forms.
+# mecA: MR1/MR2 of Murakami K, Minamide W, Wada K, Nakamura E, Teraoka H,
+#   Watanabe S. Identification of methicillin-resistant strains of
+#   staphylococci by polymerase chain reaction. J Clin Microbiol
+#   1991;29(10):2240-2244 (533-bp product); sequences as reproduced by later
+#   users of the assay, and checked here: 533 bp, 0 mismatches, in the mecA
+#   of S. aureus N315.
+target	forward	reverse	probe	size	source
+CDC_N1	GACCCCAAAATCAGCGAAAT	TCTGGTTACTGCCAGTTGAATCTG	ACCCCGCATTACGTTTGGTGGACC	60-90	Lu et al. 2020 Emerg Infect Dis 26:1654, Table 1
+CDC_N2	TTACAAACATTGGCCGCAAA	GCGCGACATTCCGAAGAA	ACAATTTGCCCCCAGCGCTTCAG	55-85	Lu et al. 2020 Emerg Infect Dis 26:1654, Table 1
+16S_V4	GTGYCAGCMGCCGCGGTAA	GGACTACNVGGGTWTCTAAT		250-350	515F-Y Parada 2016; 806RB Apprill 2015
+16S_full	AGAGTTTGATCMTGGCTCAG	TACGGYTACCTTGTTACGACTT		1400-1600	27F/1492R Lane 1991
+mecA	AAAATCGATGGTAAAGGTTGGC	AGTTCTGCAGTACCGGATTTGC		500-560	MR1/MR2 Murakami et al. 1991 J Clin Microbiol 29:2240

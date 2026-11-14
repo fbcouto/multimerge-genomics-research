@@ -137,6 +137,8 @@ for _mate in (1, 2):
             _insert = "".join(random.choice("ACGT") for _ in range(random.randrange(40, 100)))
             _seq = (_insert + ADAPTER)[:100]
             f.write(f"@p{_i}\n{_seq}\n+\n{''.join(chr(33 + random.randrange(5, 41)) for _ in _seq)}\n")
+with open("five_columns.vcf", "w", newline="\n") as f:  # not a VCF: no REF, ALT, FILTER, INFO
+    f.write("##fileformat=VCFv4.0\n#CHROM\tPOS\tID\tQUAL\tGT\n1\t100\trs1\t10.5\t0/0\n1\t200\trs2\t50.2\t0/1\n")
 with open("quals.vcf", "w", newline="\n") as f:
     f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
     f.write("chr1\t10\ta\tA\tG\t12.50\tPASS\t.\nchr1\t20\tb\tC\tT\t30.0\tPASS\t.\n")
@@ -574,9 +576,15 @@ try:
             t = wait_for(pg, "DIFFERENT reference genomes|ERROR", 60)
             check("compare: GRCh38 against GRCh37 is DIFFERENT", t is not None and "GRCh38" in t and "GRCh37" in t, (t or "")[-300:])
 
-        print("== screen 11: VCF filter and normalization")
+        print("== screen 11: VCF statistics, filter and normalization")
         with page(browser) as pg:
             enter(pg, 11)
+            choose(pg, 0, "five_columns.vcf")
+            submit(pg, "Count")
+            t = wait_for(pg, "Nothing was read|ERROR", 60)
+            shot(pg, "screen11_wrong_format")
+            check("statistics of a file in the wrong format: says why nothing was read",
+                  t is not None and "Nothing was read" in t and "needs at least 8" in t, (t or text_of(pg))[-400:])
             radio(pg, "Filter")
             choose(pg, 0, "sample_a.vcf")
             placeholder(pg, 'QUAL >= 30 && FILTER == "PASS"').fill("QUAL >= 50")

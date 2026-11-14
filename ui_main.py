@@ -32,7 +32,7 @@ def global_state(mo):
 
 
 @app.cell
-def file_helpers(mo, os):
+def file_helpers(mmg, mo, os):
     # Shared by screens 9-14: the files of the folder each screen offers, the
     # default output names, a look at the first records of a result, and the
     # Python call that does the same thing (shown under every result, so each
@@ -108,6 +108,29 @@ def file_helpers(mo, os):
 
     def error_panel(err):
         return mo.callout(mo.md(f"**🔥 ERROR:** {err}"), kind="danger")
+
+    def skipped_panel(paths, skipped, kept):
+        """Why the engine skipped lines: the validator's first errors. Without it
+        a file in the wrong format just gave a green panel full of zeros."""
+        if not skipped:
+            return None
+        found = []
+        for path in [paths] if isinstance(paths, str) else paths:
+            try:
+                report = mmg.validate_file(path, max_lines=100_000)
+            except Exception:
+                continue
+            for p in report["problems"]:
+                if p["severity"] == "error" and len(found) < 3:
+                    found.append(f"* `{os.path.basename(path)}`, line {p['line']:,}: {p['message']}"
+                                 + (f"  \n  ↳ fix: {p['fix']}" if p["fix"] else ""))
+        if kept:
+            head = f"**{skipped:,} line(s) were skipped**: they are not valid records."
+        else:
+            head = f"**Nothing was read: all {skipped:,} line(s) were skipped**, because none is a valid record."
+        why = "\n\nWhat the validator says:\n\n" + "\n".join(found) if found else ""
+        return mo.callout(mo.md(head + why + "\n\nScreen **10** (Validate a file) gives the full report."),
+                          kind="warn" if kept else "danger")
 
     def make_form(widgets, submit):
         """A form with one field per line and plain labels (no JSON tree)."""
@@ -234,6 +257,7 @@ def file_helpers(mo, os):
         python_call,
         real_files,
         size_of,
+        skipped_panel,
         spectrum_chart,
         split_name,
         warn,
@@ -1141,7 +1165,7 @@ def sort_page_form(btn_refresh_sort, files_with, get_page, interval_op, make_for
 
 
 @app.cell
-async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_sort, get_page, interval_op, mmg, mo, os, output_name, preview_panel, python_call, size_of, sort_task, split_name, warn):
+async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_sort, get_page, interval_op, mmg, mo, os, output_name, preview_panel, python_call, size_of, skipped_panel, sort_task, split_name, warn):
     mo.stop(get_page() != "sort")
     mo.stop(form_sort.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_sort.value
@@ -1177,11 +1201,13 @@ async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, f
             ]
             if _v["index"]:
                 _rows.append(("Index", f"`{_out}{'.bai' if _out.lower().endswith('.bam') else '.tbi'}`"))
-            _panel = mo.vstack([
-                mo.callout(mo.md("### ✅ Sorted\n" + facts(_rows)), kind="success"),
+            _panel = mo.vstack([_x for _x in (
+                mo.callout(mo.md(("### ✅ Sorted\n" if _records else "### ⚠️ Nothing to sort\n") + facts(_rows)),
+                           kind="success" if _records else "warn"),
+                skipped_panel(_paths, _skipped, _records),
                 preview_panel(_out),
                 code_panel(f"records, runs, skipped = {python_call('sort_genomic', _paths, _out, **_kw)}"),
-            ])
+            ) if _x is not None])
         except Exception as _err:
             _panel = error_panel(_err)
 
@@ -1205,6 +1231,8 @@ async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, f
                     ("Records", f"`{_ix['records']:,}`"),
                     ("Lines skipped", f"`{_ix['skipped']:,}`"),
                 ])), kind="success"))
+                if _ix["skipped"]:
+                    _items.append(skipped_panel(_path, _ix["skipped"], _ix["records"]))
                 _calls.append(python_call("index_file", _path))
             else:
                 _items.append(mo.md(f"Using the index `{_index}`, which is newer than the file."))
@@ -1517,7 +1545,7 @@ def vcftools_page_form(btn_refresh_vcftools, files_with, get_page, make_form, mo
 
 
 @app.cell
-async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_vcftools, get_page, mmg, mo, os, output_name, preview_panel, python_call, size_of, vcftools_task, warn):
+async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_vcftools, get_page, mmg, mo, os, output_name, preview_panel, python_call, size_of, skipped_panel, vcftools_task, warn):
     mo.stop(get_page() != "vcftools")
     mo.stop(form_vcftools.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_vcftools.value
@@ -1540,13 +1568,14 @@ async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_pane
                 ("QUAL", f"{_qual}, `{_r['qual_missing']:,}` missing"),
                 ("Lines skipped (not valid records)", f"`{_r['skipped']:,}`"),
             ]
-            _per_sequence = mo.ui.table([{"sequence": _s, "records": _n} for _s, _n in _r["sequences"]],
-                                        selection=None, pagination=True, page_size=10, label="Records per sequence")
-            _panel = mo.vstack([
-                mo.callout(mo.md(f"### 📊 {_path}\n" + facts(_rows)), kind="success"),
-                _per_sequence,
-                code_panel(f'print({python_call("vcf_stats", _path)}["text"])'),
-            ])
+            _items = [mo.callout(mo.md(f"### 📊 {_path}\n" + facts(_rows)), kind="success" if _r["records"] else "warn")]
+            if _r["skipped"]:
+                _items.append(skipped_panel(_path, _r["skipped"], _r["records"]))
+            if _r["sequences"]:
+                _items.append(mo.ui.table([{"sequence": _s, "records": _n} for _s, _n in _r["sequences"]],
+                                          selection=None, pagination=True, page_size=10, label="Records per sequence"))
+            _items.append(code_panel(f'print({python_call("vcf_stats", _path)}["text"])'))
+            _panel = mo.vstack(_items)
         except Exception as _err:
             _panel = error_panel(_err)
 
@@ -1575,11 +1604,12 @@ async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_pane
                 ("Lines skipped (not valid records)", f"`{_r['skipped']:,}`"),
                 ("Saved to", f"`{os.path.abspath(_out)}` ({size_of(_out)})"),
             ]
-            _panel = mo.vstack([
-                mo.callout(mo.md("### ✅ Filtered\n" + facts(_rows)), kind="success"),
+            _panel = mo.vstack([_x for _x in (
+                mo.callout(mo.md("### ✅ Filtered\n" + facts(_rows)), kind="success" if _r["read"] else "warn"),
+                skipped_panel(_path, _r["skipped"], _r["read"]),
                 preview_panel(_out),
                 code_panel(python_call("vcf_filter", _path, _out, **_kw)),
-            ])
+            ) if _x is not None])
         except Exception as _err:
             _panel = error_panel(_err)
 
@@ -1612,7 +1642,9 @@ async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_pane
                 ("Lines skipped (not valid records)", f"`{_r['skipped']:,}`"),
                 ("Saved to", f"`{os.path.abspath(_out)}` ({size_of(_out)})"),
             ]
-            _items = [mo.callout(mo.md("### ✅ Normalized\n" + facts(_rows)), kind="success")]
+            _items = [mo.callout(mo.md("### ✅ Normalized\n" + facts(_rows)), kind="success" if _r["read"] else "warn")]
+            if _r["skipped"]:
+                _items.append(skipped_panel(_path, _r["skipped"], _r["read"]))
             if _ref and (_r["ref_mismatch"] or _r["not_in_reference"]):
                 _items.append(warn("Some records do not match the genome. Are the VCF and the FASTA on the same reference? "
                                    "Screen **10** compares the two (Compare reference genomes)."))

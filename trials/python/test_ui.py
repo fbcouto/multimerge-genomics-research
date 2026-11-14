@@ -236,7 +236,7 @@ check("stitches the contigs", not isinstance(r, BaseException) and "Scaffolding 
 import builtins
 import gzip
 
-helpers = run(ui.file_helpers, mo=mo, os=os)
+helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 POOL = dict(helpers[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl)
 
@@ -411,6 +411,19 @@ mmg.vcf_filter("sample_a.vcf", "api_filtered.vcf", expression="QUAL >= 50", regi
 same_output("  filter: sample_a.filtered.vcf is what vcf_filter writes", "sample_a.filtered.vcf", "api_filtered.vcf")
 r = vcftools_backend("Filter", file="sample_a.vcf", expression="QUAL >= ", regions="", samples="", output="bad.vcf")
 check("  a broken expression: the error is shown on the page", not isinstance(r, BaseException) and "ERROR" in shown(r), shown(r)[:300])
+# A file in the wrong format (5 columns: no REF, ALT, FILTER, INFO) used to give
+# a green panel full of zeros and "Lines skipped: 5", with no reason.
+with open("five_columns.vcf", "w", newline="\n") as f:
+    f.write("##fileformat=VCFv4.0\n#CHROM\tPOS\tID\tQUAL\tGT\n1\t100\trs1\t10.5\t0/0\n1\t200\trs2\t50.2\t0/1\n")
+for task, extra in (("Statistics", {}), ("Filter", dict(expression="QUAL > 1", regions="", samples="", output=""))):
+    r = vcftools_backend(task, file="five_columns.vcf", **extra)
+    check(f"  {task.lower()} of a 5-column file: says nothing was read, and the validator's reason",
+          "Nothing was read" in shown(r) and "needs at least 8" in shown(r), shown(r)[:500])
+r = sort_backend("Sort & merge", files=["five_columns.vcf"], by="position", order="default", memory=0, index=False, output="")
+check("  sort of a 5-column file: the same explanation", "Nothing to sort" in shown(r) and "needs at least 8" in shown(r), shown(r)[:500])
+r = vcftools_backend("Statistics", file="sample_a.vcf")
+check("  a valid file: no such panel", "skipped" not in shown(r).replace("Lines skipped (not valid records): 0", ""), shown(r)[:500])
+
 random.seed(5)
 left = "".join(random.choice("ACG") for _ in range(100))
 genome_seq = left + "C" + "TTTTT" + "G" + "".join(random.choice("ACGT") for _ in range(400))

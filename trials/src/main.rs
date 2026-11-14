@@ -5,6 +5,12 @@
 // Uso: cargo run --release
 #[path = "../../src/multimerge_core.rs"]
 pub mod multimerge_core;
+#[path = "../../src/bgzf.rs"]
+#[allow(dead_code)]
+mod bgzf;
+#[path = "../../src/bam.rs"]
+#[allow(dead_code)]
+mod bam;
 #[path = "../../src/externo.rs"]
 mod externo;
 #[path = "../../src/intervalos.rs"]

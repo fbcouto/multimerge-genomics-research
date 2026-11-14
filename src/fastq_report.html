@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FASTQ quality report</title>
+<style>
+:root { color-scheme: light dark; }
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --track: #cde2fb; --warning: #fab219; --good: #0ca30c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --track: #184f95; --warning: #fab219; --good: #0ca30c;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --track: #184f95; --warning: #fab219; --good: #0ca30c;
+}
+html, body { margin: 0; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.viz-root { background: var(--page); color: var(--text-primary); min-height: 100vh; padding: 24px 16px 48px; box-sizing: border-box; }
+.wrap { max-width: 1080px; margin: 0 auto; overflow-wrap: anywhere; }
+h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; overflow-wrap: anywhere; }
+.sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 20px; overflow-wrap: anywhere; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+.tile { padding: 12px 14px; }
+.tile .label { color: var(--text-secondary); font-size: 13px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.card { padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.card .caption { color: var(--text-secondary); font-size: 13px; margin: 0 0 10px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.cols .card { margin-bottom: 0; }
+.cols { margin-bottom: 16px; }
+.notes { list-style: none; margin: 0; padding: 0; }
+.notes li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; padding: 6px 0; }
+.notes svg { flex: 0 0 18px; margin-top: 1px; }
+.plot { position: relative; }
+.plot svg { display: block; width: 100%; overflow: visible; }
+.tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.axis-title { fill: var(--text-secondary); font-size: 12px; }
+.end-label { fill: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.baseline { stroke: var(--axis); stroke-width: 1; }
+.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.leader { stroke: var(--axis); stroke-width: 1; }
+.s1 { stroke: var(--series-1); } .s2 { stroke: var(--series-2); } .s3 { stroke: var(--series-3); } .s4 { stroke: var(--series-4); }
+.f1 { fill: var(--series-1); } .f2 { fill: var(--series-2); } .f3 { fill: var(--series-3); } .f4 { fill: var(--series-4); }
+.bar { fill: var(--series-1); }
+.bar.hot { opacity: 0.75; }
+.cross { stroke: var(--axis); stroke-width: 1; }
+.dot { stroke: var(--surface-1); stroke-width: 2; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 14px; height: 2px; border-radius: 1px; }
+.key-band { width: 14px; height: 10px; border-radius: 2px; background: var(--series-1); }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); min-width: 120px; z-index: 2; display: none; }
+.tip .head { color: var(--text-secondary); margin-bottom: 4px; }
+.tip .row { display: flex; align-items: center; gap: 8px; justify-content: space-between; white-space: nowrap; }
+.tip .row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tip .name { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+details { margin-top: 10px; font-size: 13px; }
+summary { cursor: pointer; color: var(--text-secondary); }
+.table-wrap { max-height: 320px; overflow: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 4px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface-1); color: var(--text-secondary); font-weight: 600; }
+th:first-child, td:first-child { text-align: left; }
+.meters { display: grid; gap: 8px; font-size: 13px; }
+.meter { display: grid; grid-template-columns: minmax(120px, 220px) 1fr minmax(110px, auto); gap: 4px 12px; align-items: center; }
+.meters .track { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.meters .fill { height: 100%; border-radius: 4px; background: var(--series-1); }
+.meters .num { font-variant-numeric: tabular-nums; text-align: right; color: var(--text-primary); }
+.meters .who { color: var(--text-secondary); }
+.plain { font-size: 14px; color: var(--text-secondary); margin: 0; }
+footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
+@media (max-width: 640px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .meter { grid-template-columns: 1fr auto; }
+  .meter .track { grid-column: 1 / -1; grid-row: 2; }
+}
+</style>
+</head>
+<body>
+<main class="viz-root"><div class="wrap">
+  <h1 id="title">FASTQ quality report</h1>
+  <p class="sub" id="subtitle"></p>
+  <section class="tiles" id="tiles" aria-label="Summary"></section>
+  <section class="card" id="notes-card"><h2>Automatic checks</h2><ul class="notes" id="notes"></ul></section>
+  <div id="charts"></div>
+  <footer id="foot"></footer>
+</div></main>
+<script type="application/json" id="data">__MMGEN_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var NS = "http://www.w3.org/2000/svg";
+  var P = D.per_position || {};
+
+  // ---------- small helpers ----------
+  function el(tag, attrs, parent, text) {
+    var e = document.createElement(tag);
+    for (var k in attrs || {}) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function sv(tag, attrs, parent, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs || {}) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function full(n) { return Math.round(n).toLocaleString("en-US"); }
+  function fixed(n, d) { return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  function compact(n, units) {
+    var steps = [[1e12, units[3]], [1e9, units[2]], [1e6, units[1]], [1e3, units[0]]];
+    for (var i = 0; i < steps.length; i++) {
+      if (n >= steps[i][0]) {
+        var v = n / steps[i][0];
+        return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + steps[i][1];
+      }
+    }
+    return full(n);
+  }
+  function niceStep(span, target) {
+    var raw = span / Math.max(1, target), mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), r = raw / mag;
+    return (r <= 1 ? 1 : r <= 2 ? 2 : r <= 2.5 ? 2.5 : r <= 5 ? 5 : 10) * mag;
+  }
+  function ticks(lo, hi, target, whole) {
+    var step = niceStep(hi - lo, target);
+    if (whole) step = Math.max(1, Math.round(step));
+    var out = [], t = Math.ceil(lo / step) * step;
+    for (; t <= hi + step * 1e-9; t += step) out.push(Math.round(t * 1e6) / 1e6 + 0);
+    return out;
+  }
+  function axisNumber(v, top) {
+    if (top >= 10000) return v >= 1e9 ? (v / 1e9) + "B" : v >= 1e6 ? (v / 1e6) + "M" : v >= 1e3 ? (v / 1e3) + "K" : String(v);
+    return v.toLocaleString("en-US");
+  }
+
+  // ---------- one chart frame: axes, grid, hover ----------
+  // spec: { title, caption, legend:[{cls|band, text}], xMin, xMax, yMax, xTitle, yTitle, xWhole,
+  //         draw(g, sx, sy, plot), tip(xValue) -> {head, rows:[{name, value, cls}], dots:[{y, cls}]} | null,
+  //         snap(x) -> x, table:{head:[], rows:()=>[[...]]}, endRoom }
+  function chart(parent, spec) {
+    var card = el("figure", { "class": "card" }, parent);
+    card.style.margin = "0 0 16px";
+    el("h2", {}, card, spec.title);
+    if (spec.caption) el("p", { "class": "caption" }, card, spec.caption);
+    if (spec.legend) {
+      var lg = el("div", { "class": "legend" }, card);
+      spec.legend.forEach(function (it) {
+        var s = el("span", {}, lg);
+        var key = el("i", { "class": it.band ? "key-band" : "key-line" }, s);
+        if (it.band) key.style.opacity = it.band; else key.style.background = "var(--series-" + it.n + ")";
+        s.appendChild(document.createTextNode(it.text));
+      });
+    }
+    var box = el("div", { "class": "plot" }, card);
+    var tip = el("div", { "class": "tip", role: "status" }, box);
+    var svg = sv("svg", { role: "img", "aria-label": spec.title + ". " + (spec.caption || "") }, box);
+    var H = spec.height || 250, M = { l: 46, r: spec.endRoom || 14, t: 8, b: 38 };
+
+    function render() {
+      var W = Math.max(280, box.clientWidth || 600);
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+      svg.setAttribute("height", H);
+      var pw = W - M.l - M.r, ph = H - M.t - M.b;
+      var sx = function (v) { return M.l + (spec.xMax === spec.xMin ? pw / 2 : (v - spec.xMin) / (spec.xMax - spec.xMin) * pw); };
+      var sy = function (v) { return M.t + ph - v / spec.yMax * ph; };
+      var yt = ticks(0, spec.yMax, 4, spec.yWhole);
+      yt.forEach(function (t) {
+        sv("line", { "class": t === 0 ? "baseline" : "gridline", x1: M.l, x2: M.l + pw, y1: sy(t), y2: sy(t) }, svg);
+        sv("text", { "class": "tick", x: M.l - 6, y: sy(t) + 4, "text-anchor": "end" }, svg, axisNumber(t, spec.yMax) + (spec.ySuffix || ""));
+      });
+      var xt = ticks(spec.xMin, spec.xMax, Math.max(3, Math.floor(pw / 70)), spec.xWhole);
+      if (spec.xWhole && spec.xMin === 1 && xt[0] !== 1) xt.unshift(1);
+      xt.forEach(function (t) {
+        sv("text", { "class": "tick", x: sx(t), y: M.t + ph + 16, "text-anchor": "middle" }, svg, axisNumber(t, spec.xMax) + (spec.xSuffix || ""));
+      });
+      sv("text", { "class": "axis-title", x: M.l + pw / 2, y: H - 4, "text-anchor": "middle" }, svg, spec.xTitle);
+      var g = sv("g", {}, svg);
+      spec.draw(g, sx, sy, { left: M.l, right: M.l + pw, top: M.t, bottom: M.t + ph, width: pw });
+
+      // hover layer: a crosshair that snaps to the nearest position
+      var cross = sv("line", { "class": "cross", y1: M.t, y2: M.t + ph, visibility: "hidden" }, svg);
+      var dots = sv("g", {}, svg);
+      var hit = sv("rect", { x: M.l, y: M.t, width: pw, height: ph, fill: "transparent", tabindex: "0", "aria-label": "Explore values with the pointer or the arrow keys" }, svg);
+      var current = null;
+      function show(xv) {
+        var info = spec.tip(xv);
+        while (dots.firstChild) dots.removeChild(dots.firstChild);
+        if (!info) { hide(); return; }
+        current = xv;
+        var px = sx(info.x);
+        cross.setAttribute("x1", px); cross.setAttribute("x2", px); cross.setAttribute("visibility", "visible");
+        (info.dots || []).forEach(function (d) { sv("circle", { "class": "dot f" + d.n, cx: px, cy: sy(d.y), r: 5 }, dots); });
+        while (tip.firstChild) tip.removeChild(tip.firstChild);
+        el("div", { "class": "head" }, tip, info.head);
+        info.rows.forEach(function (r) {
+          var row = el("div", { "class": "row" }, tip);
+          var name = el("span", { "class": "name" }, row);
+          if (r.n) { var k = el("i", { "class": "key-line" }, name); k.style.background = "var(--series-" + r.n + ")"; }
+          name.appendChild(document.createTextNode(r.name));
+          el("b", {}, row, r.value);
+        });
+        tip.style.display = "block";
+        var scale = (box.clientWidth || W) / W, left = px * scale + 12;
+        if (left + tip.offsetWidth > (box.clientWidth || W)) left = px * scale - tip.offsetWidth - 12;
+        tip.style.left = Math.max(0, left) + "px";
+        tip.style.top = "8px";
+      }
+      function hide() { cross.setAttribute("visibility", "hidden"); tip.style.display = "none"; while (dots.firstChild) dots.removeChild(dots.firstChild); current = null; }
+      function fromEvent(ev) {
+        var r = svg.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width * W;
+        return spec.xMin + (x - M.l) / pw * (spec.xMax - spec.xMin);
+      }
+      hit.addEventListener("pointermove", function (ev) { show(spec.snap(fromEvent(ev))); });
+      hit.addEventListener("pointerleave", hide);
+      hit.addEventListener("focus", function () { show(spec.snap(current === null ? spec.xMin : current)); });
+      hit.addEventListener("blur", hide);
+      hit.addEventListener("keydown", function (ev) {
+        var d = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+        if (!d) return;
+        ev.preventDefault();
+        show(spec.snap(Math.min(spec.xMax, Math.max(spec.xMin, (current === null ? spec.xMin : current) + d * (spec.keyStep || 1)))));
+      });
+    }
+    render();
+    if (window.ResizeObserver) new ResizeObserver(render).observe(box);
+    else window.addEventListener("resize", render);
+
+    if (spec.table) {
+      var det = el("details", {}, card), built = false;
+      el("summary", {}, det, "Show as a table");
+      det.addEventListener("toggle", function () {
+        if (built || !det.open) return;
+        built = true;
+        var t = el("table", {}, el("div", { "class": "table-wrap" }, det));
+        var hr = el("tr", {}, el("thead", {}, t));
+        spec.table.head.forEach(function (h) { el("th", { scope: "col" }, hr, h); });
+        var tb = el("tbody", {}, t);
+        spec.table.rows().forEach(function (r) {
+          var tr = el("tr", {}, tb);
+          r.forEach(function (c) { el("td", {}, tr, c); });
+        });
+      });
+    }
+    return card;
+  }
+
+  function path(xs, ys, sx, sy) {
+    var d = "";
+    for (var i = 0; i < xs.length; i++) d += (i ? "L" : "M") + sx(xs[i]).toFixed(1) + " " + sy(ys[i]).toFixed(1);
+    return d;
+  }
+  function band(xs, lo, hi, sx, sy) {
+    var d = path(xs, hi, sx, sy);
+    for (var i = xs.length - 1; i >= 0; i--) d += "L" + sx(xs[i]).toFixed(1) + " " + sy(lo[i]).toFixed(1);
+    return d + "Z";
+  }
+  // Columns on one baseline: capped at 24px, 2px of surface between them, rounded data end.
+  function columns(g, xs, ys, sx, sy, plot, slot) {
+    var w = Math.max(1, Math.min(24, slot - 2));
+    for (var i = 0; i < xs.length; i++) {
+      if (!ys[i]) continue;
+      var x = sx(xs[i]) - w / 2, y = sy(ys[i]), h = plot.bottom - y, r = Math.min(4, w / 2, h);
+      sv("path", { "class": "bar", "data-i": i, d: "M" + x + " " + plot.bottom + "V" + (y + r) + "Q" + x + " " + y + " " + (x + r) + " " + y + "H" + (x + w - r) + "Q" + (x + w) + " " + y + " " + (x + w) + " " + (y + r) + "V" + plot.bottom + "Z" }, g);
+    }
+  }
+  function nearest(xs, v) {
+    var best = 0, bd = Infinity;
+    for (var i = 0; i < xs.length; i++) { var d = Math.abs(xs[i] - v); if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+  function range(n) { var a = []; for (var i = 0; i < n; i++) a.push(i + 1); return a; }
+
+  // ---------- header, tiles, checks ----------
+  var name = String(D.path || "").split(/[\\/]/).pop() || "FASTQ file";
+  document.getElementById("title").textContent = name;
+  document.title = "FASTQ quality report: " + name;
+  document.getElementById("subtitle").textContent = "FASTQ quality report" +
+    (D.complete === false ? " for the first " + full(D.reads) + " reads of the file" : "") +
+    ". Quality scale: Phred+" + D.phred_offset + ".";
+
+  var tiles = document.getElementById("tiles");
+  function tile(label, value, note) {
+    var t = el("div", { "class": "tile" }, tiles);
+    el("div", { "class": "label" }, t, label);
+    el("div", { "class": "value" }, t, value);
+    if (note) el("div", { "class": "note" }, t, note);
+  }
+  tile("Reads", compact(D.reads, ["K", "M", "B", "T"]), full(D.reads));
+  tile("Bases", compact(D.bases, [" kb", " Mb", " Gb", " Tb"]), full(D.bases));
+  tile("Read length", D.min_length === D.max_length ? full(D.max_length) : fixed(D.mean_length, 1),
+    D.min_length === D.max_length ? "every read" : "mean; " + full(D.min_length) + " to " + full(D.max_length));
+  tile("Mean quality", fixed(D.mean_quality, 1), "Phred, over all bases");
+  tile("GC content", fixed(D.gc_percent, 1) + "%", "of A, C, G and T");
+  tile("Duplicated reads", fixed(D.duplication_percent, 1) + "%", "in the first " + compact(D.duplication_sample, ["K", "M", "B", "T"]) + " reads");
+  tile("N bases", fixed(D.n_percent, D.n_percent > 0 && D.n_percent < 0.1 ? 3 : 2) + "%", full(D.reads_with_n) + " reads have one");
+  var worst = (D.adapters || []).reduce(function (a, b) { return b.percent > a.percent ? b : a; }, { percent: 0, name: "" });
+  tile("Reads with adapter", fixed(worst.percent, worst.percent > 0 && worst.percent < 0.1 ? 3 : 1) + "%", worst.percent > 0 ? worst.name : "none of the known adapters");
+
+  var notes = document.getElementById("notes");
+  function icon(kind) {
+    var s = sv("svg", { width: 18, height: 18, viewBox: "0 0 18 18", "aria-hidden": "true" });
+    if (kind === "good") {
+      sv("circle", { cx: 9, cy: 9, r: 8, fill: "var(--good)" }, s);
+      sv("path", { d: "M5 9.4l2.6 2.6L13 6.6", fill: "none", stroke: "#fff", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }, s);
+    } else {
+      sv("path", { d: "M9 1.5l8 14.5H1z", fill: "var(--warning)" }, s);
+      sv("path", { d: "M9 6.5v4.5M9 13.2v.6", fill: "none", stroke: "#0b0b0b", "stroke-width": 1.8, "stroke-linecap": "round" }, s);
+    }
+    return s;
+  }
+  var warnings = D.warnings || [];
+  if (!warnings.length) {
+    var ok = el("li", {}, notes); ok.appendChild(icon("good"));
+    el("span", {}, ok, "Passed: the automatic checks found nothing that needs attention.");
+  }
+  warnings.forEach(function (w) {
+    var li = el("li", {}, notes); li.appendChild(icon("warn"));
+    var sp = el("span", {}, li); el("b", {}, sp, "Attention: "); sp.appendChild(document.createTextNode(w));
+  });
+
+  var charts = document.getElementById("charts");
+  if (!D.reads) {
+    el("p", { "class": "plain" }, el("section", { "class": "card" }, charts), "The file has no reads, so there is nothing to plot.");
+    return;
+  }
+
+  // ---------- 1. quality along the read ----------
+  var n = (P.q50 || []).length, pos = range(n);
+  if (n) {
+    var top = Math.max(40, Math.ceil(Math.max.apply(null, P.q90) / 5) * 5);
+    chart(charts, {
+      title: "Quality along the read",
+      caption: "Phred quality at each position of the read: the median, and the bands that hold the middle 50% and 80% of the bases." +
+        (D.max_length > n ? " Only the first " + full(n) + " positions are shown." : ""),
+      legend: [{ n: 1, text: "Median" }, { band: 0.32, text: "25th to 75th percentile" }, { band: 0.12, text: "10th to 90th percentile" }],
+      xMin: 1, xMax: Math.max(2, n), yMax: top, xWhole: true, yWhole: true, xTitle: "Position in the read", height: 280,
+      draw: function (g, sx, sy) {
+        sv("path", { d: band(pos, P.q10, P.q90, sx, sy), "class": "f1", opacity: 0.12 }, g);
+        sv("path", { d: band(pos, P.q25, P.q75, sx, sy), "class": "f1", opacity: 0.2 }, g);
+        sv("path", { d: path(pos, P.q50, sx, sy), "class": "line s1" }, g);
+      },
+      snap: function (x) { return Math.min(n, Math.max(1, Math.round(x))); },
+      tip: function (x) {
+        var i = x - 1;
+        return { x: x, head: "Position " + full(x), dots: [{ y: P.q50[i], n: 1 }], rows: [
+          { name: "Median", value: String(P.q50[i]), n: 1 },
+          { name: "Mean", value: fixed(P.mean_quality[i], 1) },
+          { name: "25th to 75th", value: P.q25[i] + " to " + P.q75[i] },
+          { name: "10th to 90th", value: P.q10[i] + " to " + P.q90[i] },
+          { name: "Bases here", value: full(P.bases[i]) }] };
+      },
+      table: { head: ["Position", "Bases", "Mean", "10th", "25th", "Median", "75th", "90th"],
+        rows: function () { return pos.map(function (p, i) { return [p, full(P.bases[i]), fixed(P.mean_quality[i], 1), P.q10[i], P.q25[i], P.q50[i], P.q75[i], P.q90[i]]; }); } }
+    });
+
+    // ---------- 2. base composition along the read ----------
+    var pct = { a: [], c: [], g: [], t: [], n: [] }, maxN = 0;
+    for (var i = 0; i < n; i++) {
+      var tot = P.a[i] + P.c[i] + P.g[i] + P.t[i] + P.n[i] || 1;
+      ["a", "c", "g", "t", "n"].forEach(function (k) { pct[k].push(P[k][i] / tot * 100); });
+      maxN = Math.max(maxN, pct.n[i]);
+    }
+    var bases = [["a", "A", 1], ["c", "C", 2], ["g", "G", 3], ["t", "T", 4]];
+    var peak = Math.max.apply(null, bases.map(function (b) { return Math.max.apply(null, pct[b[0]]); }));
+    chart(charts, {
+      title: "Base composition along the read",
+      caption: "Share of each base at each position. In a random library the four lines run flat and close together; a jump at the start or the end points to adapters or primers.",
+      legend: bases.map(function (b) { return { n: b[2], text: b[1] }; }),
+      xMin: 1, xMax: Math.max(2, n), yMax: Math.min(100, Math.max(50, Math.ceil(peak / 10) * 10)), xWhole: true, ySuffix: "%",
+      xTitle: "Position in the read", height: 280, endRoom: 34,
+      draw: function (g, sx, sy, plot) {
+        bases.forEach(function (b) { sv("path", { d: path(pos, pct[b[0]], sx, sy), "class": "line s" + b[2] }, g); });
+        // End labels, kept apart; a leader line ties each one to its line.
+        var ends = bases.map(function (b) { return { text: b[1], y: sy(pct[b[0]][n - 1]) }; }).sort(function (p, q) { return p.y - q.y; });
+        ends.forEach(function (e) { e.at = e.y; });
+        for (var k = 1; k < ends.length; k++) if (ends[k].at - ends[k - 1].at < 14) ends[k].at = ends[k - 1].at + 14;
+        var over = ends[ends.length - 1].at - plot.bottom;
+        if (over > 0) ends.forEach(function (e) { e.at -= over; });
+        ends.forEach(function (e) {
+          sv("line", { "class": "leader", x1: plot.right + 2, y1: e.y, x2: plot.right + 12, y2: e.at }, g);
+          sv("text", { "class": "end-label", x: plot.right + 15, y: e.at + 4 }, g, e.text);
+        });
+      },
+      snap: function (x) { return Math.min(n, Math.max(1, Math.round(x))); },
+      tip: function (x) {
+        var i = x - 1;
+        return { x: x, head: "Position " + full(x),
+          dots: bases.map(function (b) { return { y: pct[b[0]][i], n: b[2] }; }),
+          rows: bases.map(function (b) { return { name: b[1], value: fixed(pct[b[0]][i], 1) + "%", n: b[2] }; })
+            .concat([{ name: "N", value: fixed(pct.n[i], 2) + "%" }]) };
+      },
+      table: { head: ["Position", "A %", "C %", "G %", "T %", "N %"],
+        rows: function () { return pos.map(function (p, i) { return [p, fixed(pct.a[i], 2), fixed(pct.c[i], 2), fixed(pct.g[i], 2), fixed(pct.t[i], 2), fixed(pct.n[i], 3)]; }); } }
+    });
+
+    // ---------- 3. N along the read ----------
+    if (maxN > 0) {
+      chart(charts, {
+        title: "Unread bases (N) along the read",
+        caption: "Share of bases the sequencer could not call, at each position.",
+        xMin: 1, xMax: Math.max(2, n), yMax: Math.max(1, niceStep(maxN, 1) >= maxN ? niceStep(maxN, 1) : Math.ceil(maxN)), xWhole: true, ySuffix: "%",
+        xTitle: "Position in the read", height: 200,
+        draw: function (g, sx, sy, plot) {
+          sv("path", { d: path(pos, pct.n, sx, sy) + "L" + sx(n).toFixed(1) + " " + plot.bottom + "L" + sx(1).toFixed(1) + " " + plot.bottom + "Z", "class": "f1", opacity: 0.1 }, g);
+          sv("path", { d: path(pos, pct.n, sx, sy), "class": "line s1" }, g);
+        },
+        snap: function (x) { return Math.min(n, Math.max(1, Math.round(x))); },
+        tip: function (x) { return { x: x, head: "Position " + full(x), dots: [{ y: pct.n[x - 1], n: 1 }], rows: [{ name: "N", value: fixed(pct.n[x - 1], 3) + "%", n: 1 }, { name: "N bases", value: full(P.n[x - 1]) }] }; }
+      });
+    }
+  }
+
+  var pair = el("div", { "class": "cols" }, charts);
+
+  // ---------- 4. quality per read ----------
+  var rq = D.read_quality_histogram || [], last = 0;
+  rq.forEach(function (v, i) { if (v) last = i; });
+  var qTop = Math.max(40, last), qx = [], qy = [];
+  for (var q = 0; q <= qTop; q++) { qx.push(q); qy.push(rq[q] || 0); }
+  chart(pair, {
+    title: "Quality per read",
+    caption: "How many reads have each mean Phred quality.",
+    xMin: -0.6, xMax: qTop + 0.6, yMax: Math.max.apply(null, qy) || 1, xWhole: true, yWhole: true, xTitle: "Mean quality of the read",
+    draw: function (g, sx, sy, plot) { columns(g, qx, qy, sx, sy, plot, plot.width / (qTop + 1.2)); },
+    snap: function (x) { return Math.min(qTop, Math.max(0, Math.round(x))); },
+    tip: function (x) { return { x: x, head: "Mean quality " + x, rows: [{ name: "Reads", value: full(qy[x]), n: 1 }, { name: "Share", value: fixed(qy[x] / D.reads * 100, 2) + "%" }] }; },
+    table: { head: ["Mean quality", "Reads"], rows: function () { return qx.filter(function (x) { return qy[x]; }).map(function (x) { return [x, full(qy[x])]; }); } }
+  });
+
+  // ---------- 5. GC per read ----------
+  var gc = D.gc_histogram || [], gx = gc.map(function (_, i) { return i; }), gcTotal = gc.reduce(function (a, b) { return a + b; }, 0) || 1;
+  chart(pair, {
+    title: "GC content per read",
+    caption: "How many reads have each GC percentage. One smooth peak is the usual shape; a second peak can mean contamination.",
+    xMin: 0, xMax: 100, yMax: Math.max.apply(null, gc) || 1, yWhole: true, xSuffix: "%", xTitle: "GC content of the read",
+    draw: function (g, sx, sy, plot) {
+      sv("path", { d: path(gx, gc, sx, sy) + "L" + sx(100).toFixed(1) + " " + plot.bottom + "L" + sx(0).toFixed(1) + " " + plot.bottom + "Z", "class": "f1", opacity: 0.1 }, g);
+      sv("path", { d: path(gx, gc, sx, sy), "class": "line s1" }, g);
+    },
+    snap: function (x) { return Math.min(100, Math.max(0, Math.round(x))); },
+    tip: function (x) { return { x: x, head: "GC " + x + "%", dots: [{ y: gc[x], n: 1 }], rows: [{ name: "Reads", value: full(gc[x]), n: 1 }, { name: "Share", value: fixed(gc[x] / gcTotal * 100, 2) + "%" }] }; },
+    table: { head: ["GC %", "Reads"], rows: function () { return gx.filter(function (x) { return gc[x]; }).map(function (x) { return [x, full(gc[x])]; }); } }
+  });
+
+  // ---------- 6. read lengths ----------
+  var lens = D.length_histogram || [];
+  if (lens.length <= 1) {
+    var one = el("section", { "class": "card" }, charts);
+    el("h2", {}, one, "Read lengths");
+    el("p", { "class": "plain" }, one, "Every read has " + full(D.max_length) + " bases.");
+  } else {
+    var lo = D.min_length, hi = D.max_length, bins = Math.min(50, hi - lo + 1), size = Math.ceil((hi - lo + 1) / bins);
+    bins = Math.ceil((hi - lo + 1) / size);
+    var by = [], bx = [];
+    for (var b = 0; b < bins; b++) { by.push(0); bx.push(b); }
+    lens.forEach(function (p) { by[Math.floor((p[0] - lo) / size)] += p[1]; });
+    var label = function (b) { var a = lo + b * size, z = Math.min(hi, a + size - 1); return size === 1 ? full(a) : full(a) + " to " + full(z); };
+    chart(charts, {
+      title: "Read lengths",
+      caption: "How many reads have each length" + (size > 1 ? ", in groups of " + full(size) + " bases." : "."),
+      xMin: lo - size * 0.6, xMax: lo + (bins - 1) * size + size * 0.6, yMax: Math.max.apply(null, by) || 1, xWhole: true, yWhole: true,
+      xTitle: "Read length (bases)", height: 220,
+      draw: function (g, sx, sy, plot) { columns(g, bx.map(function (b) { return lo + b * size; }), by, sx, sy, plot, plot.width / (bins + 0.2)); },
+      snap: function (x) { return lo + Math.min(bins - 1, Math.max(0, Math.round((x - lo) / size))) * size; },
+      tip: function (x) { var b = Math.round((x - lo) / size); return { x: x, head: label(b) + " bases", rows: [{ name: "Reads", value: full(by[b]), n: 1 }, { name: "Share", value: fixed(by[b] / D.reads * 100, 2) + "%" }] }; },
+      keyStep: size,
+      table: { head: ["Length", "Reads"], rows: function () { return bx.filter(function (b) { return by[b]; }).map(function (b) { return [label(b), full(by[b])]; }); } }
+    });
+  }
+
+  // ---------- 7. adapters ----------
+  var ad = el("section", { "class": "card" }, charts);
+  el("h2", {}, ad, "Adapter sequences");
+  el("p", { "class": "caption" }, ad, "Share of reads that contain the start of each known adapter. Each bar runs from 0 to 100% of the reads.");
+  var meters = el("div", { "class": "meters" }, ad);
+  (D.adapters || []).forEach(function (a) {
+    var row = el("div", { "class": "meter" }, meters);
+    el("div", { "class": "who" }, row, a.name);
+    var tr = el("div", { "class": "track", role: "meter", "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": a.percent, "aria-label": a.name }, row);
+    var f = el("div", { "class": "fill" }, tr);
+    f.style.width = a.percent > 0 ? "max(2px, " + a.percent + "%)" : "0";
+    el("div", { "class": "num" }, row, fixed(a.percent, a.percent > 0 && a.percent < 0.1 ? 3 : 2) + "% (" + full(a.reads) + ")");
+  });
+  if (D.likely_adapter) {
+    el("p", { "class": "plain" }, ad, "Most likely adapter: " + D.likely_adapter.name + " (" + D.likely_adapter.sequence + ").").style.marginTop = "10px";
+  }
+
+  document.getElementById("foot").textContent = "Made with MMGEN (MultiMerge Genomics) __MMGEN_VERSION__. Source file: " + (D.path || "");
+})();
+</script>
+</body>
+</html>

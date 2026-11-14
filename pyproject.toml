@@ -9,12 +9,12 @@ build-backend = "maturin"
 
 [project]
 name = "multimerge-genomics"
-description = "Genomics tools for files of any size: validate, normalize chromosome names, sort, merge and intersect VCF/BED/GFF/SAM, plus k-mer modules with optional CUDA acceleration."
+description = "Genomics tools for files of any size: validate, sort, index and query VCF/BED/GFF/SAM/BAM; interval operations; VCF filter and normalization; FASTQ quality report and trimming; k-mer counting; BGZF, BAM and Parquet in and out; optional CUDA acceleration."
 readme = "README.md"
 requires-python = ">=3.10"
 # A versao vem do Cargo.toml.
 dynamic = ["version"]
-keywords = ["bioinformatics", "genomics", "vcf", "bed", "gff", "sorting"]
+keywords = ["bioinformatics", "genomics", "vcf", "bed", "gff", "bam", "fastq", "parquet", "tabix", "sorting", "k-mer"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",

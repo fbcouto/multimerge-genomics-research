@@ -79,7 +79,7 @@ impl Destino for Fusor {
 /// separados por ate `distancia` bases. Grava `cromossomo inicio fim`.
 /// Devolve (intervalos lidos, intervalos gravados).
 pub fn bed_fundir(caminhos: &[String], saida: &str, distancia: u64, op: &Opcoes) -> Result<(usize, usize), String> {
-    let mut fusor = Fusor { w: Some(Escritor::cria(saida)?), distancia, atual: None, saidas: 0 };
+    let mut fusor = Fusor { w: Some(Escritor::cria_para(saida, Formato::Bed)?), distancia, atual: None, saidas: 0 };
     let r = ordenar(caminhos, Formato::Bed, Criterio::Posicao, op, &mut fusor)?;
     Ok((r.registros, fusor.saidas))
 }
@@ -154,7 +154,7 @@ pub fn bed_intersecao(
     let ordem = OrdemNomes::nova(&op.ordem);
     let mut fa = Fluxo { leitor: abre_leitura(&arq_a)?, linha: String::new() };
     let mut fb = Fluxo { leitor: abre_leitura(&arq_b)?, linha: String::new() };
-    let mut w = Escritor::cria(saida)?;
+    let mut w = Escritor::cria_para(saida, Formato::Bed)?;
 
     // Intervalos de B, do cromossomo corrente, que ainda podem tocar um A.
     let mut ativos: Vec<(u64, u64)> = Vec::new();

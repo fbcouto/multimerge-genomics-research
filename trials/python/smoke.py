@@ -101,6 +101,100 @@ try:
     check("bed_intersect: refuses chr1 against 1", False, "no error was raised")
 except RuntimeError as e:
     check("bed_intersect: refuses chr1 against 1", "in common" in str(e), str(e)[:80])
+mmg.bed_subtract([bed_a], [bed_b], p("sub.bed"))
+check("bed_subtract", read(p("sub.bed")) == ["chr1\t10\t18\tx", "chr1\t15\t18\ty", "chr1\t35\t40\tz", "chr1\t100\t110\tk", "chr2\t5\t9\tw"], str(read(p("sub.bed"))))
+mmg.bed_closest([write("one.bed", ["chr1\t50\t60\tm"])], [bed_b], p("closest.bed"))
+check("bed_closest: distance of separated intervals", read(p("closest.bed")) == ["chr1\t50\t60\tm\tchr1\t18\t35\tq\t16"], str(read(p("closest.bed"))))
+mmg.bed_coverage([write("one2.bed", ["chr1\t10\t30\tm"])], [bed_b], p("cov.bed"))
+check("bed_coverage", read(p("cov.bed")) == ["chr1\t10\t30\tm\t1\t12\t20\t0.6000000"], str(read(p("cov.bed"))))
+genome = write("genome.txt", ["chr1\t120", "chr2\t50"])
+mmg.bed_complement([bed_a], genome, p("comp.bed"))
+check("bed_complement", read(p("comp.bed")) == ["chr1\t0\t10", "chr1\t40\t100", "chr1\t110\t120", "chr2\t0\t5", "chr2\t9\t50"], str(read(p("comp.bed"))))
+mmg.bed_slop([bed_a], genome, p("slop.bed"), both=15)
+check("bed_slop: clamped at 0 and at the sequence end", read(p("slop.bed"))[0] == "chr1\t0\t35\tx" and read(p("slop.bed"))[4] == "chr1\t85\t120\tk", str(read(p("slop.bed"))))
+
+# ---------------------------------------------------------------- VCF tools
+st = mmg.vcf_stats(p("sorted.vcf"))
+check("vcf_stats: every A>G record is a SNP and a transition", st["records"] == st["snps"] == st["transitions"] == len(records) and st["transversions"] == 0, str(st)[:120])
+fr = mmg.vcf_filter(p("sorted.vcf"), p("filtered.vcf"), expression="QUAL >= 50 && CHROM == \"2\"")
+want = [l for l in ref if int(l.split("\t")[5]) >= 50 and l.startswith("2\t")]
+check("vcf_filter: expression", fr["kept"] == len(want) and [l for l in read(p("filtered.vcf")) if not l.startswith("#")] == want, str(fr))
+try:
+    mmg.vcf_filter(p("sorted.vcf"), p("x.vcf"), expression="QUAL >> 3")
+    check("vcf_filter: a mistake in the expression is reported", False, "no error")
+except RuntimeError as e:
+    check("vcf_filter: a mistake in the expression is reported with its position", "position" in str(e), str(e)[:120])
+multi = write("multi.vcf", ["##fileformat=VCFv4.2", '##INFO=<ID=AF,Number=A,Type=Float,Description="f">', "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+                            "1\t100\t.\tCTT\tCT,CTTT\t50\tPASS\tAF=0.1,0.2"])
+nr = mmg.vcf_normalize(multi, p("norm.vcf"))
+check("vcf_normalize: splits and trims", [l for l in read(p("norm.vcf")) if not l.startswith("#")] ==
+      ["1\t100\t.\tCT\tC\t50\tPASS\tAF=0.1", "1\t100\t.\tC\tCT\t50\tPASS\tAF=0.2"] and nr["split"] == 1, str(read(p("norm.vcf"))[-2:]))
+# With the reference genome: a T deleted or inserted in TTTTT (96-100), written
+# at its right end, moves to the left end of the run, after the A at 95.
+genome = write("genome.fa", [">1", "ACGTACGTAC" * 9 + "GGGCATTTTTGCA" + "ACGT" * 10])
+run_t = write("run_t.vcf", read(multi)[:-1] + ["1\t99\t.\tTT\tT,TTT\t50\tPASS\tAF=0.1,0.2"])
+nr = mmg.vcf_normalize(run_t, p("norm_ref.vcf"), reference=genome)
+check("vcf_normalize(reference=...): left-aligns, as bcftools norm -f", [l for l in read(p("norm_ref.vcf")) if not l.startswith("#")] ==
+      ["1\t95\t.\tAT\tA\t50\tPASS\tAF=0.1", "1\t95\t.\tA\tAT\t50\tPASS\tAF=0.2"] and nr["left_aligned"] == 2 and nr["ref_mismatch"] == 0,
+      str(read(p("norm_ref.vcf"))[-2:]) + str(nr))
+# TYPE as in bcftools: == every ALT allele, ~ at least one.
+mixed = write("mixed.vcf", header[:1] + header[-1:] + ["1\t10\ta\tA\tG\t50\tPASS\t.", "1\t20\tb\tA\tG,AT\t50\tPASS\t.", "1\t30\tc\tA\tAT\t50\tPASS\t."])
+ids = lambda expr: [l.split("\t")[2] for l in read(p("t.vcf")) if not l.startswith("#")] if mmg.vcf_filter(mixed, p("t.vcf"), expression=expr) else None
+every, some, none = ids('TYPE=="snp"'), ids('TYPE~"snp"'), ids('TYPE!~"snp"')
+check("vcf_filter: TYPE==\"snp\" is every allele, TYPE~\"snp\" at least one", every == ["a"] and some == ["a", "b"] and none == ["c"],
+      f"{every} {some} {none}")
+
+# ---------------------------------------------------------------- containers: BGZF, index, BAM, Parquet
+gz = p("sorted.vcf.gz")
+mmg.sort_genomic([a, b], gz, chrom_order="natural", index=True)
+check("sort_genomic(index=True): the .gz is ordinary gzip and has a .tbi", read(gz)[len(header):] == ref and os.path.exists(gz + ".tbi"))
+got = mmg.query_region(gz, "2:1000-2000")
+check("query_region", got == [l for l in ref if l.startswith("2\t") and 1000 <= int(l.split("\t")[1]) <= 2000], f"{len(got)} records")
+sam = write("x.sam", ["@HD\tVN:1.6", "@SQ\tSN:chr1\tLN:5000", "r1\t0\tchr1\t100\t60\t5M\t*\t0\t0\tACGTA\tIIIII\tNM:i:0",
+                      "r2\t16\tchr1\t50\t60\t2M1I2M\t*\t0\t0\tACGTT\t*\tXS:f:1.5"])
+mmg.sort_genomic([sam], p("x.bam"), index=True)
+mmg.convert_file(p("x.bam"), p("back.sam"))
+back = read(p("back.sam"))
+check("SAM -> sorted BAM -> SAM", back[2:] == [read(sam)[3], read(sam)[2]] and "SO:coordinate" in back[0], str(back))
+check("query_region on a BAM", [l.split("\t")[0] for l in mmg.query_region(p("x.bam"), "chr1:100-100")] == ["r1"])
+mmg.convert_file(p("sorted.vcf"), p("sorted.vcf.parquet"))
+mmg.convert_file(p("sorted.vcf.parquet"), p("from_parquet.vcf"))
+check("VCF -> Parquet -> VCF", read(p("from_parquet.vcf")) == read(p("sorted.vcf")))
+# QUAL as a number (the default) or as the text it was: 12.50 comes back as 12.5, or as 12.50.
+quals = write("quals.vcf", header[:1] + header[-1:] + ["1\t10\ta\tA\tG\t12.50\tPASS\t.", "1\t20\tb\tA\tG\t.\tPASS\t.", "1\t30\tc\tA\tG\t30.0\tPASS\t."])
+mmg.convert_file(quals, p("q.vcf.parquet"))
+mmg.convert_file(p("q.vcf.parquet"), p("q_number.vcf"))
+before = mmg.parquet_options()
+mmg.parquet_options(numbers="text")
+mmg.convert_file(quals, p("q_text.vcf.parquet"))
+mmg.convert_file(p("q_text.vcf.parquet"), p("q_text.vcf"))
+after = mmg.parquet_options(numbers="number")
+try:
+    mmg.parquet_options(numbers="float")
+    refused = False
+except ValueError:
+    refused = True
+check("parquet_options: QUAL as a number by default, or exactly as written",
+      before == {"numbers": "number"} and after == {"numbers": "number"} and refused
+      and [l.split("\t")[5] for l in read(p("q_number.vcf")) if not l.startswith("#")] == ["12.5", ".", "30"]
+      and read(p("q_text.vcf")) == read(quals), str(read(p("q_text.vcf"))[-3:]))
+
+# ---------------------------------------------------------------- FASTQ and k-mers
+ADAPTER = "AGATCGGAAGAGC"
+fq_reads = []
+for i in range(500):
+    s = "".join(random.choice("ACGT") for _ in range(60)) + ADAPTER + "ACGTACGTAC"
+    fq_reads += [f"@r{i}", s, "+", "I" * len(s)]
+fq = write("x.fastq", fq_reads)
+fs = mmg.fastq_stats(fq)
+check("fastq_stats: Phred+33, reads and adapter", fs["phred_offset"] == 33 and fs["reads"] == 500 and fs["likely_adapter"]["sequence"] == ADAPTER, str(fs["likely_adapter"]))
+tr = mmg.fastq_trim(fq, p("trimmed.fastq.gz"), adapter="auto", min_length=20)
+check("fastq_trim: removes the adapter", tr["reads_with_adapter"] == 500 and all(len(l) == 60 for l in read(p("trimmed.fastq.gz"))[1::4]), str(tr))
+mmg.fastq_report(fq, p("report.html"))
+page = open(p("report.html"), encoding="utf-8").read()
+check("fastq_report: writes a self-contained page with the numbers", page.startswith("<!doctype html>") and '"reads":500' in page and "<script src" not in page)
+kc = mmg.count_kmers([fq], p("kmers.tsv"), k=21, memory_mb=1)
+check("count_kmers: canonical counts add up", kc["total_kmers"] == 500 * (83 - 21 + 1) and sum(int(l.split("\t")[1]) for l in read(p("kmers.tsv"))) == kc["total_kmers"], str(kc)[:120])
 
 # ---------------------------------------------------------------- k-mers
 check("128-bit k-mer: encodes and decodes", "ACGTACGTACGTTTGACCA | Bits" in mmg.test_giant_kmer("ACGTACGTACGTTTGACCA"))

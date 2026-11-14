@@ -773,6 +773,8 @@ dependencies = [
  "flate2",
  "lz4_flex",
  "polars",
+ "polars-arrow",
+ "polars-parquet",
  "pyo3",
  "rayon",
  "sysinfo 0.34.2",

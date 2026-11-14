@@ -8,8 +8,19 @@ flate2 = "1.0"
 # Lotes temporarios da ordenacao fora da memoria (LZ4) e RAM livre para o orcamento.
 lz4_flex = "0.11"
 sysinfo = "0.34"
-# So o CLI (src/bin/multimerge_cli.rs) usa o Polars.
+# O CLI (src/bin/multimerge_cli.rs) usa o Polars; o envelope Parquet de
+# VCF/BED/GFF/SAM (src/parquet_io.rs) usa as duas camadas de baixo, que o
+# Polars ja traz: aqui elas so ficam acessiveis diretamente (e o que permite
+# gravar o cabecalho nos metadados do arquivo).
 polars = { version = "0.36", features = ["lazy", "parquet"] }
+polars-parquet = { version = "0.36", default-features = false, features = ["compression"] }
+polars-arrow = { version = "0.36", default-features = false }
+
+[features]
+default = ["parquet"]
+# Liga a leitura e a escrita de `.parquet` em src/externo.rs. O crate de
+# ensaios (trials/) compila os mesmos fontes sem ela, e portanto sem o Polars.
+parquet = []
 
 # Sairam em 2026-11-13, por nao terem nenhum uso no codigo: arrow 47 (que
 # prendia o pyo3 na versao 0.19), cudarc, anyhow, chrono e o bindgen do build.
@@ -21,7 +32,7 @@ cc = "1.0"
 name = "multimerge_genomics"
 version = "0.1.0"
 edition = "2021"
-description = "Genomics tools for files of any size: validate, normalize chromosome names, sort, merge and intersect VCF/BED/GFF/SAM, plus k-mer modules with optional CUDA acceleration."
+description = "Genomics tools for files of any size: validate, sort, index and query VCF/BED/GFF/SAM/BAM; interval operations; VCF filter and normalization; FASTQ quality report and trimming; k-mer counting; BGZF, BAM and Parquet in and out; optional CUDA acceleration."
 license = "Apache-2.0"
 readme = "README.md"
 

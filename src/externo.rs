@@ -28,9 +28,12 @@
 //  ordenado intermediario.
 // =====================================================================
 
+use crate::bam::{BamEscritor, BamLeitor};
+use crate::bgzf::{self, BgzfParLeitor, BgzfWriter};
 use crate::multimerge_core::multi_merge_sort_stable_by;
+#[cfg(feature = "parquet")]
+use crate::parquet_io::{ParquetEscritor, ParquetLeitor};
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -57,19 +60,34 @@ impl Formato {
             "vcf" => Some(Formato::Vcf),
             "bed" => Some(Formato::Bed),
             "gff" | "gff3" | "gtf" => Some(Formato::Gff),
-            "sam" => Some(Formato::Sam),
+            // Um BAM e um SAM em binario: o leitor entrega as mesmas linhas.
+            "sam" | "bam" => Some(Formato::Sam),
             _ => None,
         }
     }
 
-    /// Deduz o formato pela extensao, ignorando `.gz` e `.lz4`.
+    /// Deduz o formato pela extensao, ignorando a do envelope: `.gz`, `.bgz`,
+    /// `.lz4` e `.parquet` (`x.vcf.gz`, `x.bed.parquet`).
     pub fn pelo_nome(caminho: &str) -> Option<Formato> {
         let c = caminho.to_ascii_lowercase();
-        let c = c.strip_suffix(".gz").or_else(|| c.strip_suffix(".lz4")).unwrap_or(&c);
+        let c = [".gz", ".bgz", ".lz4", ".parquet"].iter().find_map(|s| c.strip_suffix(s)).unwrap_or(&c);
         Formato::de_texto(c.rsplit('.').next()?)
     }
 
-    fn e_cabecalho(self, linha: &str) -> bool {
+    /// O formato de um arquivo: pelo nome ou, num `.parquet` que nao o diz no
+    /// nome, pelo que o proprio arquivo declara.
+    pub fn do_arquivo(caminho: &str) -> Option<Formato> {
+        if let Some(f) = Formato::pelo_nome(caminho) {
+            return Some(f);
+        }
+        #[cfg(feature = "parquet")]
+        if caminho.to_ascii_lowercase().ends_with(".parquet") {
+            return crate::parquet_io::formato_do_arquivo(caminho).ok();
+        }
+        None
+    }
+
+    pub fn e_cabecalho(self, linha: &str) -> bool {
         match self {
             Formato::Vcf | Formato::Gff => linha.starts_with('#'),
             Formato::Bed => {
@@ -434,13 +452,34 @@ impl Plano {
 //  ENTRADA E SAIDA
 // ---------------------------------------------------------------------
 
-/// Abre para leitura: `.gz` (inclusive BGZF, que e gzip de varios membros),
-/// `.lz4` ou texto puro.
+fn e_gz(nome_minusculo: &str) -> bool {
+    nome_minusculo.ends_with(".gz") || nome_minusculo.ends_with(".bgz")
+}
+
+/// Abre para leitura, entregando sempre LINHAS DE TEXTO, seja qual for o
+/// envelope: texto puro, `.gz` (gzip comum ou BGZF), `.lz4`, `.bam` (sai o SAM
+/// correspondente) ou `.parquet` (saem as linhas do formato guardado).
+///
+/// Um `.gz` em BGZF e descomprimido em paralelo, bloco a bloco; um gzip comum
+/// nao tem como: e um fluxo so.
 pub fn abre_leitura(caminho: &str) -> Result<Box<dyn BufRead>, String> {
-    let file = File::open(caminho).map_err(|e| format!("Error opening {caminho}: {e}"))?;
     let c = caminho.to_ascii_lowercase();
-    Ok(if c.ends_with(".gz") {
-        Box::new(BufReader::with_capacity(16 << 20, MultiGzDecoder::new(file)))
+    if c.ends_with(".parquet") {
+        #[cfg(feature = "parquet")]
+        return Ok(Box::new(BufReader::with_capacity(1 << 20, ParquetLeitor::abre(caminho)?)));
+        #[cfg(not(feature = "parquet"))]
+        return Err(format!("{caminho}: Parquet support is not compiled into this build"));
+    }
+    let file = File::open(caminho).map_err(|e| format!("Error opening {caminho}: {e}"))?;
+    Ok(if c.ends_with(".bam") {
+        let bam = BamLeitor::novo(BufReader::with_capacity(4 << 20, file)).map_err(|e| format!("{caminho}: {e}"))?;
+        Box::new(BufReader::with_capacity(1 << 20, bam))
+    } else if e_gz(&c) {
+        if bgzf::e_bgzf(caminho) {
+            Box::new(BgzfParLeitor::novo(BufReader::with_capacity(4 << 20, file)))
+        } else {
+            Box::new(BufReader::with_capacity(16 << 20, MultiGzDecoder::new(file)))
+        }
     } else if c.ends_with(".lz4") {
         Box::new(BufReader::with_capacity(4 << 20, FrameDecoder::new(file)))
     } else {
@@ -448,22 +487,57 @@ pub fn abre_leitura(caminho: &str) -> Result<Box<dyn BufRead>, String> {
     })
 }
 
-/// Escritor que escolhe a compressao pela extensao: `.gz`, `.lz4` ou nenhuma.
+/// Escritor que recebe LINHAS DE TEXTO e escolhe o envelope pela extensao:
+///
+///   `.gz`, `.bgz`   BGZF -- um gzip que qualquer programa le e que pode ser
+///                   indexado (tabix); os blocos sao comprimidos em paralelo;
+///   `.lz4`          LZ4 (os lotes temporarios da ordenacao);
+///   `.bam`          BAM, a partir das linhas de um SAM;
+///   `.parquet`      colunas tipadas, com o cabecalho nos metadados;
+///   qualquer outra  texto puro.
 pub enum Escritor {
     Puro(BufWriter<File>),
-    Gz(GzEncoder<BufWriter<File>>),
+    Gz(BgzfWriter<BufWriter<File>>),
     Lz4(FrameEncoder<BufWriter<File>>),
+    Bam(Box<BamEscritor<BufWriter<File>>>),
+    #[cfg(feature = "parquet")]
+    Parquet(Box<ParquetEscritor>),
 }
 
 impl Escritor {
     pub fn cria(caminho: &str) -> Result<Escritor, String> {
+        Escritor::abre(caminho, None, false)
+    }
+
+    /// Como `cria`, dizendo que formato vai ser gravado. So o Parquet precisa
+    /// saber (para dar nome e tipo as colunas); os outros envelopes ignoram.
+    pub fn cria_para(caminho: &str, formato: Formato) -> Result<Escritor, String> {
+        Escritor::abre(caminho, Some(formato), false)
+    }
+
+    /// Para uma tabela derivada de um BED cujas colunas alem da terceira nao
+    /// sao as do formato (a saida de `closest` ou `coverage`).
+    pub fn cria_tabela(caminho: &str) -> Result<Escritor, String> {
+        Escritor::abre(caminho, Some(Formato::Bed), true)
+    }
+
+    fn abre(caminho: &str, formato: Option<Formato>, tabela: bool) -> Result<Escritor, String> {
+        let c = caminho.to_ascii_lowercase();
+        if c.ends_with(".parquet") {
+            #[cfg(feature = "parquet")]
+            return Ok(Escritor::Parquet(Box::new(ParquetEscritor::cria(caminho, formato, tabela)?)));
+            #[cfg(not(feature = "parquet"))]
+            return Err(format!("{caminho}: Parquet support is not compiled into this build"));
+        }
+        let _ = (formato, tabela);
         let file = File::create(caminho).map_err(|e| format!("Error creating {caminho}: {e}"))?;
         let w = BufWriter::with_capacity(16 << 20, file);
-        let c = caminho.to_ascii_lowercase();
-        Ok(if c.ends_with(".gz") {
-            Escritor::Gz(GzEncoder::new(w, flate2::Compression::fast()))
+        Ok(if e_gz(&c) {
+            Escritor::Gz(BgzfWriter::novo(w, bgzf::NIVEL_PADRAO))
         } else if c.ends_with(".lz4") {
             Escritor::Lz4(FrameEncoder::new(w))
+        } else if c.ends_with(".bam") {
+            Escritor::Bam(Box::new(BamEscritor::novo(w)))
         } else {
             Escritor::Puro(w)
         })
@@ -475,12 +549,15 @@ impl Escritor {
             .map_err(|e| e.to_string())
     }
 
-    /// Fecha o fluxo de compressao e descarrega. Sem isto um `.gz` ou `.lz4`
-    /// fica truncado.
+    /// Fecha o envelope e descarrega. Sem isto o arquivo fica truncado (e um
+    /// Parquet, sem o rodape, nem abre).
     pub fn termina(self) -> Result<(), String> {
         match self {
             Escritor::Puro(mut w) => w.flush(),
-            Escritor::Gz(e) => e.finish().and_then(|mut w| w.flush()),
+            Escritor::Gz(e) => e.termina().and_then(|mut w| w.flush()),
+            Escritor::Bam(e) => e.termina().and_then(|mut w| w.flush()),
+            #[cfg(feature = "parquet")]
+            Escritor::Parquet(e) => e.termina().map(|_| ()),
             Escritor::Lz4(e) => e
                 .finish()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -496,13 +573,21 @@ impl Write for Escritor {
             Escritor::Puro(w) => w.write(buf),
             Escritor::Gz(w) => w.write(buf),
             Escritor::Lz4(w) => w.write(buf),
+            Escritor::Bam(w) => w.write(buf),
+            #[cfg(feature = "parquet")]
+            Escritor::Parquet(w) => w.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Escritor::Puro(w) => w.flush(),
-            Escritor::Gz(w) => w.flush(),
+            // Descarregar um BGZF no meio fecharia um bloco pela metade: o que
+            // ja esta pronto segue, o resto espera o `termina`.
+            Escritor::Gz(_) => Ok(()),
             Escritor::Lz4(w) => w.flush(),
+            Escritor::Bam(w) => w.flush(),
+            #[cfg(feature = "parquet")]
+            Escritor::Parquet(w) => w.flush(),
         }
     }
 }
@@ -515,6 +600,10 @@ pub struct DestinoArquivo {
 impl DestinoArquivo {
     pub fn cria(caminho: &str) -> Result<DestinoArquivo, String> {
         Ok(DestinoArquivo { w: Some(Escritor::cria(caminho)?) })
+    }
+
+    pub fn cria_para(caminho: &str, formato: Formato) -> Result<DestinoArquivo, String> {
+        Ok(DestinoArquivo { w: Some(Escritor::cria_para(caminho, formato)?) })
     }
 }
 
@@ -843,8 +932,8 @@ pub fn ordenar(
     Ok(Resumo { registros, lotes: lotes.len(), ignoradas })
 }
 
-/// Ordena um ou mais arquivos para `saida`. A extensao de `saida` escolhe a
-/// compressao: `.gz`, `.lz4` ou nenhuma.
+/// Ordena um ou mais arquivos para `saida`. A extensao de `saida` escolhe o
+/// envelope: `.gz` (BGZF), `.lz4`, `.bam`, `.parquet` ou texto puro.
 pub fn ordenar_arquivos(
     caminhos: &[String],
     saida: &str,
@@ -852,6 +941,72 @@ pub fn ordenar_arquivos(
     criterio: Criterio,
     op: &Opcoes,
 ) -> Result<Resumo, String> {
-    let mut destino = DestinoArquivo::cria(saida)?;
+    let mut destino = DestinoArquivo::cria_para(saida, formato)?;
     ordenar(caminhos, formato, criterio, op, &mut destino)
+}
+
+// ---------------------------------------------------------------------
+//  CONVERSAO ENTRE ENVELOPES
+// ---------------------------------------------------------------------
+
+/// O que a conversao copiou.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ResumoConversao {
+    pub linhas: usize,
+    /// Linhas que nao sao de cabecalho. Igual a `linhas` quando o formato nao
+    /// e conhecido.
+    pub registros: usize,
+}
+
+/// Copia `entrada` para `saida` trocando so o envelope: texto, `.gz` (BGZF),
+/// `.lz4`, `.bam`, `.parquet`. As linhas nao mudam e a ordem tambem nao; em
+/// fluxo, para arquivo de qualquer tamanho.
+///
+/// `formato`: o que o arquivo guarda. Sem ele vale o nome da entrada, depois o
+/// da saida. So faz falta quando a saida e Parquet ou BAM.
+#[allow(dead_code)]
+pub fn converter(entrada: &str, saida: &str, formato: Option<Formato>) -> Result<ResumoConversao, String> {
+    let mesmo = |a: &str, b: &str| match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    };
+    if mesmo(entrada, saida) {
+        return Err(format!(
+            "The output {saida} is the input file itself, and writing it would destroy the input. Choose a different output path."
+        ));
+    }
+    let formato = formato.or_else(|| Formato::do_arquivo(entrada)).or_else(|| Formato::pelo_nome(saida));
+    let mut leitor = abre_leitura(entrada)?;
+    let mut w = match formato {
+        Some(f) => Escritor::cria_para(saida, f)?,
+        None => Escritor::cria(saida)?,
+    };
+    let mut r = ResumoConversao::default();
+    let mut linha = String::new();
+    let copia = (|| -> Result<(), String> {
+        loop {
+            linha.clear();
+            if leitor.read_line(&mut linha).map_err(|e| format!("Error reading {entrada}: {e}"))? == 0 {
+                return Ok(());
+            }
+            let texto = linha.trim_end_matches(['\n', '\r']);
+            r.linhas += 1;
+            if !formato.is_some_and(|f| f.e_cabecalho(texto)) {
+                r.registros += 1;
+            }
+            w.linha(texto).map_err(|e| format!("Error writing {saida}: {e}"))?;
+        }
+    })();
+    let fim = match copia {
+        Ok(()) => w.termina().map_err(|e| format!("Error writing {saida}: {e}")),
+        Err(e) => {
+            drop(w);
+            Err(e)
+        }
+    };
+    // Um arquivo pela metade que parece inteiro e o pior resultado.
+    if fim.is_err() {
+        let _ = std::fs::remove_file(saida);
+    }
+    fim.map(|_| r)
 }

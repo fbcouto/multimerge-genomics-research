@@ -34,11 +34,17 @@ A wrong result with no error message is the most serious kind of bug here. Pleas
 
    ```bash
    cd trials
-   cargo run --release                 # sorting, merging, intersection
-   cargo run --release --bin validate  # validator and chromosome names
-   cargo run --release --bin bloom     # CPU Bloom filter
+   cargo run --release                   # sorting, merging, intersection
+   cargo run --release --bin validate    # validator and chromosome names
+   cargo run --release --bin bloom       # CPU Bloom filter
+   cargo run --release --bin formats     # BGZF, indexes, region queries, BAM
+   cargo run --release --bin bed_ops     # subtract, complement, closest, coverage, slop
+   cargo run --release --bin vcf_tools   # VCF statistics, filter, normalization
+   cargo run --release --bin fastq_qc    # FASTQ statistics and trimming
+   cargo run --release --bin kmer_count  # k-mer counting
    cd ..
    python trials/python/smoke.py                      # the Python API, no external data
+   python trials/python/crosscheck.py                 # against independent tools (pyarrow, polars, biopython, bamnostic, cutadapt...)
    python trials/python/test_ui.py ui_main.py         # the interface's cells (needs marimo, polars, numpy)
    ```
 4. Open a pull request against `main`, describing what changed and how you tested it.

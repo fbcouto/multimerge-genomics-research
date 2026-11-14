@@ -14,4 +14,11 @@ rayon = "1.8"
 flate2 = "1.0"
 lz4_flex = "0.11"
 
+
+
+# src/externo.rs has `#[cfg(feature = "parquet")]` branches: the main crate turns
+# the feature on; here it stays off, so these programs build without Polars.
+[features]
+parquet = []
+
 [workspace]

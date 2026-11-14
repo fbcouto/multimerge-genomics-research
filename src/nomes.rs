@@ -208,7 +208,7 @@ pub fn normalizar_cromossomos(
         resumo: ResumoNomes::default(),
     };
     let mut leitor = abre_leitura(entrada)?;
-    let mut w = Escritor::cria(saida)?;
+    let mut w = Escritor::cria_para(saida, formato)?;
     let mut linha = String::new();
     let mut nova = String::new();
 

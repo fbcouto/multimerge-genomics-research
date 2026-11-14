@@ -25,6 +25,21 @@ pub mod validador;
 // Filtro de Bloom na CPU (gemeo do kernel CUDA) e a ponte para a GPU.
 pub mod bloom;
 pub mod gpu;
+// Envelopes: BGZF (o .gz que se indexa), BAM, os indices tabix e BAI com a
+// consulta por regiao, e Parquet.
+pub mod bam;
+pub mod bgzf;
+pub mod indice;
+#[cfg(feature = "parquet")]
+pub mod parquet_io;
+// Mais operacoes de intervalos, ferramentas de VCF, qualidade e aparo de
+// FASTQ (com o relatorio em HTML) e contagem de k-mers de qualquer tamanho.
+pub mod bed_ops;
+pub mod fastq_qc;
+pub mod kmer_count;
+pub mod referencia;
+pub mod relatorio;
+pub mod vcf_tools;
 
 // A API PYTHON E EM INGLES (2026-11-13): nomes das funcoes, parametros, chaves
 // dos dicionarios, valores aceitos, mensagens e a documentacao que o `help()`
@@ -442,10 +457,16 @@ fn ordem_ou_padrao(texto: Option<&str>, formato: externo::Formato) -> Result<ext
 /// - `memory_mb`: budget for the records; without it, half of the free RAM.
 /// - `temp_dir`: where to write the runs when the input does not fit the
 ///   budget.
+/// - `index`: also build the index of the output (`.tbi` for a `.gz`, `.bai`
+///   for a `.bam`), as `index_file` does. Needs `by="position"`.
+///
+/// Inputs and output can be plain text, `.gz` (BGZF), `.lz4`, `.bam` (for
+/// SAM) or `.parquet`.
 ///
 /// Returns `(records, runs_on_disk, skipped_lines)`.
 #[pyfunction]
-#[pyo3(signature = (paths, output, format=None, by="position", chrom_order=None, memory_mb=None, temp_dir=None))]
+#[pyo3(signature = (paths, output, format=None, by="position", chrom_order=None, memory_mb=None, temp_dir=None, index=false))]
+#[allow(clippy::too_many_arguments)]
 fn sort_genomic(
     py: Python<'_>,
     paths: Vec<String>,
@@ -455,19 +476,34 @@ fn sort_genomic(
     chrom_order: Option<&str>,
     memory_mb: Option<usize>,
     temp_dir: Option<&str>,
+    index: bool,
 ) -> PyResult<(usize, usize, usize)> {
     py.allow_threads(|| {
         let formato = match format {
             Some(f) => externo::Formato::de_texto(f).ok_or_else(|| format!("Unknown format: {f}"))?,
             None => paths
                 .first()
-                .and_then(|c| externo::Formato::pelo_nome(c))
+                .and_then(|c| externo::Formato::do_arquivo(c))
                 .ok_or("Could not infer the format from the file extension; pass `format`")?,
         };
         let criterio = externo::Criterio::de_texto(by)
             .ok_or_else(|| format!("Unknown sort key: {by} (use \"position\", \"quality\" or \"name\")"))?;
+        if index {
+            // Antes de ordenar: descobrir isto depois de uma hora de trabalho
+            // seria tarde.
+            let s = output.to_ascii_lowercase();
+            if criterio != externo::Criterio::Posicao {
+                return Err("index=True needs by=\"position\": an index only works on a file sorted by position".to_string());
+            }
+            if !(s.ends_with(".gz") || s.ends_with(".bgz") || s.ends_with(".bam")) {
+                return Err(format!("index=True needs a .gz (BGZF) or .bam output, and the output is {output}"));
+            }
+        }
         let op = orcamento::opcoes(memory_mb, temp_dir, ordem_ou_padrao(chrom_order, formato)?);
         let r = externo::ordenar_arquivos(&paths, output, formato, criterio, &op)?;
+        if index {
+            indice::indexar(output, Some(formato))?;
+        }
         Ok((r.registros, r.lotes, r.ignoradas))
     })
     .map_err(erro_py)
@@ -563,6 +599,12 @@ fn validate_file(py: Python<'_>, path: &str, format: Option<&str>, max_lines: Op
         .allow_threads(|| {
             let tipo = match format {
                 Some(f) => Some(validador::Tipo::de_texto(f).ok_or_else(|| format!("Unknown format: {f}"))?),
+                None if validador::Tipo::pelo_nome(path).is_none() => externo::Formato::do_arquivo(path).map(|f| match f {
+                    externo::Formato::Vcf => validador::Tipo::Vcf,
+                    externo::Formato::Bed => validador::Tipo::Bed,
+                    externo::Formato::Gff => validador::Tipo::Gff,
+                    externo::Formato::Sam => validador::Tipo::Sam,
+                }),
                 None => None,
             };
             validador::validar_arquivo(path, tipo, max_lines)
@@ -599,7 +641,7 @@ fn normalize_chromosomes(
                 .ok_or_else(|| format!("Unknown style: {style} (use \"chr\" or \"no_chr\")"))?;
             let formato = match format {
                 Some(f) => externo::Formato::de_texto(f).ok_or_else(|| format!("Unknown format: {f}"))?,
-                None => externo::Formato::pelo_nome(input)
+                None => externo::Formato::do_arquivo(input)
                     .ok_or("Could not infer the format from the file extension; pass `format`")?,
             };
             nomes::normalizar_cromossomos(input, output, formato, estilo, mapping)
@@ -654,10 +696,648 @@ fn engine_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
     json_para_py(py, &texto)
 }
 
-/// MultiMerge Genomics: tools for genomic files of any size (validate,
-/// normalize chromosome names, compare reference genomes, sort, merge and
-/// intersect VCF/BED/GFF/SAM) and k-mer modules with optional CUDA
-/// acceleration. Start with `engine_info()`; every function has a docstring.
+// ---------------------------------------------------------
+// MAIS OPERACOES DE INTERVALOS (BED)
+// ---------------------------------------------------------
+
+/// Removes from each interval of A the stretches covered by B (like
+/// `bedtools subtract`) and writes what is left: the line of A with the
+/// coordinates of each remaining piece. `a` and `b` are lists of BED files.
+///
+/// `remove_whole=True` (`bedtools subtract -A`) drops every interval of A
+/// that B touches at all, instead of clipping it.
+///
+/// The inputs do not need to be sorted or to fit in memory. Returns the number
+/// of lines written. Raises an error, instead of writing A unchanged, when A
+/// and B have no sequence name in common.
+#[pyfunction]
+#[pyo3(signature = (a, b, output, remove_whole=false, chrom_order=None, memory_mb=None, temp_dir=None))]
+#[allow(clippy::too_many_arguments)]
+fn bed_subtract(
+    py: Python<'_>,
+    a: Vec<String>,
+    b: Vec<String>,
+    output: &str,
+    remove_whole: bool,
+    chrom_order: Option<&str>,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let op = orcamento::opcoes(memory_mb, temp_dir, ordem_ou_padrao(chrom_order, externo::Formato::Bed)?);
+        bed_ops::bed_subtract(&a, &b, output, remove_whole, &op)
+    })
+    .map_err(erro_py)
+}
+
+/// Writes the stretches of the genome that no interval covers (like
+/// `bedtools complement`). `paths` is a list of BED files; `genome` is a
+/// `.fai` index or a chromosome-sizes file (name and length, tab-separated),
+/// and its order is the order of the output.
+///
+/// Returns the number of lines written. A sequence that is in the BED files
+/// and not in the genome file is an error.
+#[pyfunction]
+#[pyo3(signature = (paths, genome, output, memory_mb=None, temp_dir=None))]
+fn bed_complement(
+    py: Python<'_>,
+    paths: Vec<String>,
+    genome: &str,
+    output: &str,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let op = orcamento::opcoes(memory_mb, temp_dir, externo::OrdemCromossomos::Lexica);
+        bed_ops::bed_complement(&paths, genome, output, &op)
+    })
+    .map_err(erro_py)
+}
+
+/// For each interval of A, finds the nearest interval(s) of B on the same
+/// sequence (like `bedtools closest -d`). Writes one line per closest B: the
+/// line of A, the line of B and the distance. `a` and `b` are lists of BED
+/// files.
+///
+/// The distance is 0 when the two overlap; otherwise the number of bases
+/// between them plus 1, so two intervals that touch are at distance 1. Every
+/// B tied at the smallest distance is written. When B has nothing on the
+/// sequence, the line of A is followed by `.`, `-1`, `-1` and the distance
+/// `-1`.
+///
+/// Returns the number of lines written. Raises an error when A and B have no
+/// sequence name in common.
+#[pyfunction]
+#[pyo3(signature = (a, b, output, chrom_order=None, memory_mb=None, temp_dir=None))]
+fn bed_closest(
+    py: Python<'_>,
+    a: Vec<String>,
+    b: Vec<String>,
+    output: &str,
+    chrom_order: Option<&str>,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let op = orcamento::opcoes(memory_mb, temp_dir, ordem_ou_padrao(chrom_order, externo::Formato::Bed)?);
+        bed_ops::bed_closest(&a, &b, output, &op)
+    })
+    .map_err(erro_py)
+}
+
+/// For each interval of A, how much of it B covers (like `bedtools
+/// coverage`). Writes the line of A plus four columns: the number of
+/// intervals of B that overlap it, the number of its bases covered by at
+/// least one of them, its length, and the covered fraction. `a` and `b` are
+/// lists of BED files.
+///
+/// Returns the number of lines written. Raises an error when A and B have no
+/// sequence name in common.
+#[pyfunction]
+#[pyo3(signature = (a, b, output, chrom_order=None, memory_mb=None, temp_dir=None))]
+fn bed_coverage(
+    py: Python<'_>,
+    a: Vec<String>,
+    b: Vec<String>,
+    output: &str,
+    chrom_order: Option<&str>,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let op = orcamento::opcoes(memory_mb, temp_dir, ordem_ou_padrao(chrom_order, externo::Formato::Bed)?);
+        bed_ops::bed_coverage(&a, &b, output, &op)
+    })
+    .map_err(erro_py)
+}
+
+/// Grows every interval (like `bedtools slop`): the start goes down by `left`
+/// bases and the end goes up by `right`, never below 0 nor beyond the length
+/// of the sequence in `genome` (a `.fai` index or a chromosome-sizes file).
+/// `both` sets the two sides at once. The lines keep their order and their
+/// other columns. Returns the number of lines written.
+#[pyfunction]
+#[pyo3(signature = (paths, genome, output, both=None, left=0, right=0))]
+fn bed_slop(
+    py: Python<'_>,
+    paths: Vec<String>,
+    genome: &str,
+    output: &str,
+    both: Option<u64>,
+    left: u64,
+    right: u64,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let (l, r) = (both.unwrap_or(left), both.unwrap_or(right));
+        let op = orcamento::opcoes(Some(1), None, externo::OrdemCromossomos::Lexica);
+        bed_ops::bed_slop(&paths, genome, output, l, r, &op)
+    })
+    .map_err(erro_py)
+}
+
+// ---------------------------------------------------------
+// VCF: ESTATISTICAS, FILTRO E NORMALIZACAO
+// ---------------------------------------------------------
+
+/// Aceita um texto ou uma lista de textos.
+fn lista_de_textos(valor: Option<&Bound<'_, PyAny>>, nome: &str) -> PyResult<Vec<String>> {
+    let Some(v) = valor else {
+        return Ok(Vec::new());
+    };
+    if let Ok(s) = v.extract::<String>() {
+        return Ok(vec![s]);
+    }
+    v.extract::<Vec<String>>()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err(format!("`{nome}` must be a string or a list of strings")))
+}
+
+/// Counts what a VCF holds, in one pass over a file of any size.
+///
+/// Returns a dictionary: `records`, `samples`, `sequences` (pairs of name and
+/// records), `snps`, `mnps`, `insertions`, `deletions`, `other` (symbolic
+/// alleles, breakends, `*`), `no_alt`, `multiallelic`, `transitions`,
+/// `transversions`, `ts_tv`, `pass`, `filter_missing`, `qual_missing`,
+/// `mean_qual`, `skipped` (lines that are not valid records) and `text` (the
+/// report, ready to print). A site counts once for each type present among
+/// its ALT alleles.
+#[pyfunction]
+fn vcf_stats(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
+    let r = py.allow_threads(|| vcf_tools::vcf_stats(path)).map_err(erro_py)?;
+    let obj = json_para_py(py, &r.json())?;
+    obj.bind(py).set_item("text", r.resumo())?;
+    Ok(obj)
+}
+
+/// Keeps the records of a VCF that satisfy an expression, fall in a region,
+/// or both, and optionally keeps only some samples. Streaming: works for a
+/// file of any size, and needs no index.
+///
+/// - `expression`: for example `QUAL >= 30 && INFO/DP > 10`,
+///   `TYPE == "snp" && FILTER == "PASS"`, `!(INFO/AF < 0.01)`. Fields: `QUAL`,
+///   `POS`, `N_ALT` (numbers); `CHROM`, `ID`, `REF`, `ALT`, `FILTER`, `TYPE`
+///   (text; TYPE is "snp", "mnp", "ins", "del", "indel", "other" or "ref");
+///   `INFO/KEY` (alone, it tests that the key is present). Operators: `==`,
+///   `!=`, `<`, `<=`, `>`, `>=`, `~`, `!~`, `&&`, `||`, `!` and parentheses.
+///   A comparison with a missing value is false.
+///   TYPE works as in bcftools: `TYPE == "snp"` keeps a site when EVERY ALT
+///   allele is a SNP (the default reading), `TYPE ~ "snp"` when AT LEAST ONE
+///   is; `!=` and `!~` are their negations. `FILTER ~ "q10"` keeps a site
+///   whose FILTER includes q10 (`FILTER == "q10"` asks for exactly q10).
+/// - `regions`: a string or a list such as `"chr1"`, `"chr1:1000-2000"`
+///   (1-based, end included). A record is kept when it overlaps any of them.
+/// - `samples`: names of the sample columns to keep, in this order. An empty
+///   list keeps the sites only.
+///
+/// Returns a dictionary: `read`, `kept`, `samples_before`, `samples_after`
+/// and `skipped`. A mistake in the expression raises an error that points at
+/// the character where it stopped making sense.
+#[pyfunction]
+#[pyo3(signature = (input, output, expression=None, regions=None, samples=None))]
+fn vcf_filter(
+    py: Python<'_>,
+    input: &str,
+    output: &str,
+    expression: Option<&str>,
+    regions: Option<&Bound<'_, PyAny>>,
+    samples: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let regioes = lista_de_textos(regions, "regions")?;
+    let amostras = match samples {
+        Some(s) => Some(lista_de_textos(Some(s), "samples")?),
+        None => None,
+    };
+    let r = py
+        .allow_threads(|| vcf_tools::vcf_filter(input, output, expression, &regioes, amostras.as_deref()))
+        .map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Normalizes a VCF: with `split_multiallelic`, a site with several ALT
+/// alleles becomes one record per allele (INFO and FORMAT fields declared
+/// with `Number=A`, `R` or `G` are split with it); then every variant is
+/// trimmed to its shortest representation (shared bases at the end and at the
+/// start are removed, and POS moves with them).
+///
+/// - `reference`: a FASTA of the genome (plain, `.gz` or `.lz4`; a `.fai`
+///   from `samtools faidx` next to a plain one saves a pass over it). With
+///   it, REF is checked against the genome and every indel is LEFT-ALIGNED:
+///   inside a repeat it moves to the leftmost position that gives the same
+///   sequence, as `bcftools norm -f` does, so two files that wrote the same
+///   indel at different places of a repeat agree. Records whose REF differs
+///   from the genome, or whose sequence the genome lacks (`chr1` and `1` are
+///   matched), are only trimmed, and counted. Without it (the default), there
+///   is no left-alignment.
+///
+/// If positions change, the output is sorted again, whatever its size. In a
+/// split record, a genotype allele that belongs to another record is written
+/// as missing (`1/2` becomes `1/.` and `./1`).
+///
+/// Returns a dictionary: `read`, `written`, `split`, `trimmed`,
+/// `position_changed`, `left_aligned`, `ref_mismatch`, `not_in_reference`,
+/// `resorted`, `skipped` and `runs`.
+#[pyfunction]
+#[pyo3(signature = (input, output, split_multiallelic=true, reference=None, chrom_order=None, memory_mb=None, temp_dir=None))]
+#[allow(clippy::too_many_arguments)]
+fn vcf_normalize(
+    py: Python<'_>,
+    input: &str,
+    output: &str,
+    split_multiallelic: bool,
+    reference: Option<&str>,
+    chrom_order: Option<&str>,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let r = py
+        .allow_threads(|| {
+            let op = orcamento::opcoes(memory_mb, temp_dir, ordem_ou_padrao(chrom_order, externo::Formato::Vcf)?);
+            vcf_tools::vcf_normalize(input, output, split_multiallelic, reference, &op)
+        })
+        .map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+// ---------------------------------------------------------
+// FASTQ: QUALIDADE, RELATORIO E APARO
+// ---------------------------------------------------------
+
+/// Measures the quality of a FASTQ file of any size in one pass: read
+/// lengths, quality at each position of the read, base composition, GC
+/// content, N bases, duplicated reads and known adapters.
+///
+/// `max_reads` looks only at the beginning of the file (a quick check).
+///
+/// Returns a dictionary: `path`, `reads`, `bases`, `complete`, `min_length`,
+/// `max_length`, `mean_length`, `length_histogram`, `phred_offset` (33 or
+/// 64, detected), `mean_quality`, `read_quality_histogram`, `per_position`
+/// (columns `bases`, `mean_quality`, `q10`, `q25`, `q50`, `q75`, `q90`, `a`,
+/// `c`, `g`, `t`, `n`; index 0 is the first base of the read),
+/// `positions_reported`, `gc_percent`, `gc_histogram`, `n_bases`, `n_percent`,
+/// `reads_with_n`, `duplication_percent`, `duplication_sample`, `adapters`,
+/// `likely_adapter`, `warnings` (plain-language notes, each with the fix)
+/// and `text` (the report, ready to print). For the same numbers as a page
+/// with charts, use `fastq_report`.
+#[pyfunction]
+#[pyo3(signature = (path, max_reads=None))]
+fn fastq_stats(py: Python<'_>, path: &str, max_reads: Option<u64>) -> PyResult<Py<PyAny>> {
+    let r = py.allow_threads(|| fastq_qc::fastq_stats(path, max_reads)).map_err(erro_py)?;
+    let obj = json_para_py(py, &r.json())?;
+    obj.bind(py).set_item("text", r.resumo())?;
+    Ok(obj)
+}
+
+/// Writes the quality report of a FASTQ file as one self-contained HTML page
+/// (`output`), with charts: quality and base composition along the read,
+/// quality and GC content per read, read lengths and adapters. The page opens
+/// in any browser, offline. Returns the same dictionary as `fastq_stats`.
+#[pyfunction]
+#[pyo3(signature = (path, output, max_reads=None))]
+fn fastq_report(py: Python<'_>, path: &str, output: &str, max_reads: Option<u64>) -> PyResult<Py<PyAny>> {
+    let r = py
+        .allow_threads(|| {
+            let r = fastq_qc::fastq_stats(path, max_reads)?;
+            relatorio::grava_fastq_html(&r, output)?;
+            Ok::<_, String>(r)
+        })
+        .map_err(erro_py)?;
+    let obj = json_para_py(py, &r.json())?;
+    obj.bind(py).set_item("text", r.resumo())?;
+    Ok(obj)
+}
+
+/// Trims and filters the reads of a FASTQ file, single-end or paired-end,
+/// in the order cutadapt uses: low-quality ends, then the 3' adapter, then N
+/// at the ends, then the filters.
+///
+/// - `input`, `output`: the reads and where to write them (`.gz` and `.lz4`
+///   by extension). For paired-end data also pass `input2` and `output2`: a
+///   pair is kept or dropped as a whole, and the two outputs stay in step.
+/// - `adapter`: the 3' adapter of read 1, or `"auto"` to use the known
+///   adapter found in the first reads of the file. `adapter2` is the adapter
+///   of read 2; without it, read 2 uses `adapter`.
+/// - `min_overlap`, `max_error_rate`: how much of the adapter must match, and
+///   the fraction of mismatches allowed (no insertions or deletions).
+/// - `quality_cutoff` (3' end) and `quality_cutoff_5` (5' end): Phred cutoffs
+///   for the quality trimming; 0 turns it off.
+/// - `trim_n`: remove N bases from both ends.
+/// - `min_length`, `max_n`, `min_mean_quality`: reads shorter than, with more
+///   N than, or with a lower mean quality than these are discarded.
+/// - `phred_offset`: 33 (the default) or 64.
+///
+/// Returns a dictionary: `paired`, `reads_in`, `reads_out`, `bases_in`,
+/// `bases_out`, `reads_with_adapter`, `reads_with_adapter2`,
+/// `bases_removed_quality`, `bases_removed_adapter`, `bases_removed_n`,
+/// `discarded_too_short`, `discarded_too_many_n`, `discarded_low_quality`,
+/// and `adapter` / `adapter2` (the sequences that were actually used).
+#[pyfunction]
+#[pyo3(signature = (input, output, input2=None, output2=None, adapter=None, adapter2=None, min_overlap=3,
+                    max_error_rate=0.1, quality_cutoff=0, quality_cutoff_5=0, trim_n=false, min_length=0,
+                    max_n=None, min_mean_quality=None, phred_offset=33))]
+#[allow(clippy::too_many_arguments)]
+fn fastq_trim(
+    py: Python<'_>,
+    input: &str,
+    output: &str,
+    input2: Option<&str>,
+    output2: Option<&str>,
+    adapter: Option<&str>,
+    adapter2: Option<&str>,
+    min_overlap: usize,
+    max_error_rate: f64,
+    quality_cutoff: u8,
+    quality_cutoff_5: u8,
+    trim_n: bool,
+    min_length: usize,
+    max_n: Option<usize>,
+    min_mean_quality: Option<u8>,
+    phred_offset: u8,
+) -> PyResult<Py<PyAny>> {
+    let (r, a1, a2) = py
+        .allow_threads(|| {
+            // "auto": o adaptador conhecido mais frequente no comeco do arquivo.
+            let detecta = |arquivo: &str| -> Result<Option<String>, String> {
+                Ok(fastq_qc::fastq_stats(arquivo, Some(200_000))?.likely_adapter.map(|a| a.1.to_string()))
+            };
+            let e_auto = |a: Option<&str>| a.is_some_and(|t| t.eq_ignore_ascii_case("auto"));
+            let mut a1 = adapter.map(str::to_string);
+            let mut a2 = adapter2.map(str::to_string);
+            if e_auto(adapter) {
+                a1 = detecta(input)?;
+                if let (None, Some(segundo)) = (adapter2, input2) {
+                    a2 = detecta(segundo)?;
+                }
+            }
+            if e_auto(adapter2) {
+                a2 = match input2 {
+                    Some(segundo) => detecta(segundo)?,
+                    None => return Err("adapter2=\"auto\" needs input2: there is no second file to look at".to_string()),
+                };
+            }
+            let opt = fastq_qc::TrimOptions {
+                adapter: a1.clone(),
+                adapter2: a2.clone(),
+                min_overlap,
+                max_error_rate,
+                quality_cutoff,
+                quality_cutoff_5,
+                trim_n,
+                min_length,
+                max_n,
+                min_mean_quality,
+                phred_offset,
+            };
+            let r = fastq_qc::fastq_trim(input, output, input2, output2, &opt)?;
+            // Sem adaptador proprio, a leitura 2 usou o da leitura 1.
+            let usado2 = if input2.is_some() { a2.or_else(|| a1.clone()) } else { None };
+            Ok((r, a1, usado2))
+        })
+        .map_err(erro_py)?;
+    let obj = json_para_py(py, &r.json())?;
+    obj.bind(py).set_item("adapter", a1)?;
+    obj.bind(py).set_item("adapter2", a2)?;
+    Ok(obj)
+}
+
+// ---------------------------------------------------------
+// CONTAGEM DE K-MERS DE QUALQUER TAMANHO
+// ---------------------------------------------------------
+
+/// Counts the k-mers of FASTA and FASTQ files of any size: what does not fit
+/// the memory budget is sorted in runs on disk and merged.
+///
+/// - `paths`: a list of FASTA and/or FASTQ files (plain, `.gz` or `.lz4`).
+/// - `output`: a table with one line per distinct k-mer, `KMER<TAB>count`, in
+///   alphabetical order (the extension picks the compression). Without it,
+///   only the summary is computed.
+/// - `k`: 1 to 63.
+/// - `canonical`: count a k-mer and its reverse complement as one (the
+///   smaller of the two is written). This is what makes reads from the two
+///   strands add up; turn it off only for single-strand data.
+/// - `min_count`: leave rarer k-mers out of the table (they still count in
+///   the summary).
+/// - `memory_mb`, `temp_dir`: as in `sort_genomic`.
+///
+/// A k-mer never crosses from one sequence to the next, and never contains a
+/// base other than A, C, G or T.
+///
+/// Returns a dictionary: `k`, `canonical`, `sequences`, `bases`,
+/// `total_kmers`, `distinct_kmers`, `unique_kmers` (seen once), `max_count`,
+/// `written`, `runs` (run files on disk; 0 when everything fit in memory),
+/// `histogram` (pairs of count and number of distinct k-mers with it: the
+/// abundance spectrum; counts above 10000 share the last entry) and `text`
+/// (the summary, ready to print).
+#[pyfunction]
+#[pyo3(signature = (paths, output=None, k=31, canonical=true, min_count=1, memory_mb=None, temp_dir=None))]
+#[allow(clippy::too_many_arguments)]
+fn count_kmers(
+    py: Python<'_>,
+    paths: Vec<String>,
+    output: Option<&str>,
+    k: u8,
+    canonical: bool,
+    min_count: u32,
+    memory_mb: Option<usize>,
+    temp_dir: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let r = py
+        .allow_threads(|| {
+            let op = orcamento::opcoes(memory_mb, temp_dir, externo::OrdemCromossomos::Lexica);
+            let opt = kmer_count::CountOptions { k, canonical, min_count, memoria_bytes: op.memoria_bytes, dir_temp: op.dir_temp };
+            kmer_count::count_kmers(&paths, output, &opt)
+        })
+        .map_err(erro_py)?;
+    let obj = json_para_py(py, &r.json())?;
+    obj.bind(py).set_item("text", r.resumo())?;
+    Ok(obj)
+}
+
+// ---------------------------------------------------------
+// ENVELOPES: CONVERSAO, INDICE E CONSULTA POR REGIAO
+// ---------------------------------------------------------
+
+/// Rewrites a file in another container, keeping every line and its order:
+/// plain text, `.gz` (BGZF: ordinary gzip that can also be indexed), `.lz4`,
+/// `.bam` (from and to SAM) and `.parquet` (typed columns, with the header
+/// kept in the file metadata). The extensions of `input` and `output` say
+/// what to do: `convert_file("x.sam", "x.bam")`,
+/// `convert_file("x.vcf.gz", "x.vcf.parquet")`, `convert_file("x.bam",
+/// "x.sam")`. Streaming: works for a file of any size.
+///
+/// `format` ("vcf", "bed", "gff" or "sam") is only needed when neither name
+/// says it and the output is Parquet.
+///
+/// Returns a dictionary: `lines` and `records` (lines that are not header).
+#[pyfunction]
+#[pyo3(signature = (input, output, format=None))]
+fn convert_file(py: Python<'_>, input: &str, output: &str, format: Option<&str>) -> PyResult<Py<PyAny>> {
+    let r = py
+        .allow_threads(|| {
+            let formato = match format {
+                Some(f) => Some(externo::Formato::de_texto(f).ok_or_else(|| format!("Unknown format: {f}"))?),
+                None => None,
+            };
+            externo::converter(input, output, formato)
+        })
+        .map_err(erro_py)?;
+    json_para_py(py, &format!("{{\"lines\":{},\"records\":{}}}", r.linhas, r.registros))
+}
+
+/// How every function writes `.parquet` from now on, in this Python process.
+/// Called without arguments, it only returns the current settings.
+///
+/// - `numbers`: how QUAL (VCF) and score (GFF) are stored.
+///   `"number"` (the default) stores them as numbers, so tables can be
+///   filtered and summed without conversion (`pl.col("QUAL") > 30`); a
+///   missing value (`.`) is stored as null, and on the way back to text the
+///   number is written in its shortest form: `12.50` comes back as `12.5`,
+///   `30.0` as `30`. `"text"` stores them exactly as written, so converting
+///   back gives the original file byte for byte.
+///
+/// Returns a dictionary with the settings now in force: `numbers`.
+#[pyfunction]
+#[pyo3(signature = (numbers=None))]
+fn parquet_options(py: Python<'_>, numbers: Option<&str>) -> PyResult<Py<PyAny>> {
+    #[cfg(feature = "parquet")]
+    {
+        if let Some(n) = numbers {
+            match n {
+                "number" => parquet_io::define_numeros_como_texto(false),
+                "text" => parquet_io::define_numeros_como_texto(true),
+                _ => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "numbers must be \"number\" (QUAL and score stored as numbers, the default) or \"text\" (stored exactly as written), not \"{n}\""
+                    )))
+                }
+            }
+        }
+        let atual = if parquet_io::numeros_como_texto() { "text" } else { "number" };
+        json_para_py(py, &format!("{{\"numbers\":\"{atual}\"}}"))
+    }
+    #[cfg(not(feature = "parquet"))]
+    {
+        let _ = (py, numbers);
+        Err(erro_py("Parquet support is not compiled into this build".to_string()))
+    }
+}
+
+/// Builds the index that lets `query_region` (and tabix, samtools, bcftools,
+/// IGV) jump straight to a region: a `.tbi` next to a BGZF-compressed VCF,
+/// BED or GFF (`x.vcf.gz.tbi`), or a `.bai` next to a BAM (`x.bam.bai`).
+///
+/// The file must be sorted by position (`sort_genomic`, or
+/// `sort_genomic(..., index=True)` to do both at once) and, for text, be a
+/// `.gz` written as BGZF: every `.gz` this library writes is.
+///
+/// Returns a dictionary: `index` (the path written), `kind` ("tbi" or
+/// "bai"), `sequences`, `records` and `skipped`.
+#[pyfunction]
+#[pyo3(signature = (path, format=None))]
+fn index_file(py: Python<'_>, path: &str, format: Option<&str>) -> PyResult<Py<PyAny>> {
+    let r = py
+        .allow_threads(|| {
+            let formato = match format {
+                Some(f) => Some(externo::Formato::de_texto(f).ok_or_else(|| format!("Unknown format: {f}"))?),
+                None => None,
+            };
+            indice::indexar(path, formato)
+        })
+        .map_err(erro_py)?;
+    json_para_py(
+        py,
+        &format!(
+            "{{\"index\":{},\"kind\":\"{}\",\"sequences\":{},\"records\":{},\"skipped\":{}}}",
+            nomes::json_texto(&r.indice),
+            r.tipo,
+            r.sequencias,
+            r.registros,
+            r.ignoradas
+        ),
+    )
+}
+
+/// Returns the records of an indexed file that overlap one or more regions,
+/// reading only the parts of the file the index points to. Works on a
+/// BGZF-compressed VCF, BED or GFF with a `.tbi`, and on a BAM with a `.bai`
+/// (see `index_file`).
+///
+/// - `regions`: a string or a list: `"chr1"`, `"chr1:1000"`,
+///   `"chr1:1000-2000"` (1-based, end included, as in samtools and tabix).
+///   Overlapping regions are merged: each record comes out once, in file
+///   order.
+/// - `output`: where to write the records (any container, by extension). The
+///   header goes first unless `header=False`.
+///
+/// With `output`, returns the number of records written. Without it, returns
+/// the records as a list of strings (a BAM gives SAM lines).
+#[pyfunction]
+#[pyo3(signature = (path, regions, output=None, header=true))]
+fn query_region(
+    py: Python<'_>,
+    path: &str,
+    regions: &Bound<'_, PyAny>,
+    output: Option<&str>,
+    header: bool,
+) -> PyResult<Py<PyAny>> {
+    let regioes = lista_de_textos(Some(regions), "regions")?;
+    match output {
+        Some(saida) => {
+            let n = py
+                .allow_threads(|| {
+                    let formato = externo::Formato::do_arquivo(path);
+                    let mut w = match formato {
+                        Some(f) => externo::Escritor::cria_para(saida, f)?,
+                        None => externo::Escritor::cria(saida)?,
+                    };
+                    // BAM e Parquet nao existem sem o cabecalho.
+                    let s = saida.to_ascii_lowercase();
+                    let com_cabecalho = header || s.ends_with(".bam") || s.ends_with(".parquet");
+                    let r = indice::consultar(path, &regioes, &mut |cabecalho, linha| {
+                        if cabecalho && !com_cabecalho {
+                            Ok(())
+                        } else {
+                            w.linha(linha)
+                        }
+                    });
+                    let fim = match r {
+                        Ok(n) => w.termina().map(|_| n),
+                        Err(e) => {
+                            drop(w);
+                            Err(e)
+                        }
+                    };
+                    if fim.is_err() {
+                        let _ = std::fs::remove_file(saida);
+                    }
+                    fim
+                })
+                .map_err(erro_py)?;
+            Ok(n.into_pyobject(py)?.into_any().unbind())
+        }
+        None => {
+            let linhas = py
+                .allow_threads(|| {
+                    let mut linhas: Vec<String> = Vec::new();
+                    indice::consultar(path, &regioes, &mut |cabecalho, linha| {
+                        if !cabecalho {
+                            linhas.push(linha.to_string());
+                        }
+                        Ok(())
+                    })?;
+                    Ok::<_, String>(linhas)
+                })
+                .map_err(erro_py)?;
+            Ok(linhas.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+/// MultiMerge Genomics: tools for genomic files of any size. Validate,
+/// normalize chromosome names, compare reference genomes, sort, index and
+/// query by region; interval operations on BED; statistics, filtering and
+/// normalization of VCF; quality report and trimming of FASTQ; k-mer
+/// counting; plain text, BGZF, BAM and Parquet in and out; and k-mer modules
+/// with optional CUDA acceleration. Start with `engine_info()`; every
+/// function has a docstring.
 #[pymodule]
 fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_and_merge_kmer_files, m)?)?;
@@ -683,5 +1363,21 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(file_reference, m)?)?;
     m.add_function(wrap_pyfunction!(compare_references, m)?)?;
     m.add_function(wrap_pyfunction!(engine_info, m)?)?;
+    m.add_function(wrap_pyfunction!(bed_subtract, m)?)?;
+    m.add_function(wrap_pyfunction!(bed_complement, m)?)?;
+    m.add_function(wrap_pyfunction!(bed_closest, m)?)?;
+    m.add_function(wrap_pyfunction!(bed_coverage, m)?)?;
+    m.add_function(wrap_pyfunction!(bed_slop, m)?)?;
+    m.add_function(wrap_pyfunction!(vcf_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(vcf_filter, m)?)?;
+    m.add_function(wrap_pyfunction!(vcf_normalize, m)?)?;
+    m.add_function(wrap_pyfunction!(fastq_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(fastq_report, m)?)?;
+    m.add_function(wrap_pyfunction!(fastq_trim, m)?)?;
+    m.add_function(wrap_pyfunction!(count_kmers, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_file, m)?)?;
+    m.add_function(wrap_pyfunction!(parquet_options, m)?)?;
+    m.add_function(wrap_pyfunction!(index_file, m)?)?;
+    m.add_function(wrap_pyfunction!(query_region, m)?)?;
     Ok(())
 }

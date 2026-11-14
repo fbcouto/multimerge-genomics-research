@@ -37,17 +37,18 @@ impl Tipo {
             "vcf" => Some(Tipo::Vcf),
             "bed" => Some(Tipo::Bed),
             "gff" | "gff3" | "gtf" => Some(Tipo::Gff),
-            "sam" => Some(Tipo::Sam),
+            "sam" | "bam" => Some(Tipo::Sam),
             "fasta" | "fa" | "fna" | "faa" | "ffn" | "fas" => Some(Tipo::Fasta),
             "fastq" | "fq" => Some(Tipo::Fastq),
             _ => None,
         }
     }
 
-    /// Deduz o tipo pela extensao, ignorando `.gz`, `.bgz` e `.lz4`.
+    /// Deduz o tipo pela extensao, ignorando a do envelope: `.gz`, `.bgz`,
+    /// `.lz4` e `.parquet`. Um `.bam` e lido como o SAM que ele guarda.
     pub fn pelo_nome(caminho: &str) -> Option<Tipo> {
         let c = caminho.to_ascii_lowercase();
-        let c = [".gz", ".bgz", ".lz4"].iter().find_map(|s| c.strip_suffix(s)).unwrap_or(&c);
+        let c = [".gz", ".bgz", ".lz4", ".parquet"].iter().find_map(|s| c.strip_suffix(s)).unwrap_or(&c);
         Tipo::de_texto(c.rsplit('.').next()?)
     }
 

@@ -12,22 +12,48 @@ def imports():
     import numpy as np
     import os
     import asyncio
-    import multimerge_genomics as mmg
+    import multimerge_genomics as _engine
+
+    # Every call to the engine goes through the session record: the AI
+    # explains "the last result of this screen" from it, and screen 29 saves
+    # the session as a Python script. An engine from before the AI layer is
+    # used as it is.
+    try:
+        from multimerge_genomics.ai import Recorder as _Recorder
+        mmg = _Recorder(_engine)
+    except ImportError:
+        mmg = _engine
     return asyncio, mmg, mo, np, os, pl
 
 
 @app.cell
-def global_state(mo):
+def global_state(mmg, mo):
     # allow_self_loops: the cell that calls the setter is re-run too. Without it
     # the menu (which calls set_page) never left the page when a screen opened,
     # and the screen you left through "Back to Menu" stayed on the page.
-    get_page, set_page = mo.state("home", allow_self_loops=True)
+    get_page, _set_page = mo.state("home", allow_self_loops=True)
+
+    def set_page(page):
+        # the session record notes the screen each call is run from
+        if hasattr(mmg, "context"):
+            mmg.context = page
+        _set_page(page)
+
+    # The AI settings (screen 29). A plain dict, read when a question is sent,
+    # so that changing a setting never sends anything by itself; the key is
+    # kept in memory only, never written to disk. get_ai_rev redraws what
+    # shows the settings.
+    ai_settings = {"key": "", "model": "claude-opus-5-5", "effort": "medium", "level": "student",
+                   "consent": False, "human": False}
+    get_ai_rev, set_ai_rev = mo.state(0)
+    # The agent of screen 29, as (agent, round counter): a new tuple redraws it.
+    get_agent, set_agent = mo.state(None)
 
     # Message of the "Generate simulated patient" button (screen 4). It lives
     # here and not in the screen's own cell: a state created in the very cell
     # that shows it is reborn empty on every run.
     get_patient_msg, set_patient_msg = mo.state("", allow_self_loops=True)
-    return get_page, get_patient_msg, set_page, set_patient_msg
+    return ai_settings, get_agent, get_ai_rev, get_page, get_patient_msg, set_agent, set_ai_rev, set_page, set_patient_msg
 
 
 @app.cell
@@ -170,7 +196,8 @@ def file_helpers(mmg, mo, os):
         found = []
         for path in [paths] if isinstance(paths, str) else paths:
             try:
-                report = mmg.validate_file(path, max_lines=100_000)
+                # the engine itself: this check is not a call the session should record
+                report = getattr(mmg, "_module", mmg).validate_file(path, max_lines=100_000)
             except Exception:
                 continue
             for p in report["problems"]:
@@ -546,6 +573,9 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         import gzip
         import random
 
+        # the engine itself, not the session record: writing the examples is
+        # not something the person ran
+        engine = getattr(mmg, "_module", mmg)
         folder = EXAMPLES_DIR
         stamp = os.path.join(folder, "VERSION")
         try:
@@ -652,7 +682,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
             child = [rng.choice(mother), rng.choice(father)]
             trio.append("\t".join(cols + ["GT:DP"] + [f"{gt(g)}:{rng.randint(2, dp)}" for g in (mother, father, child)]))
         write("cohort.vcf", head + columns_line + "\tFORMAT\tmother\tfather\tchild\n" + "\n".join(trio) + "\n")
-        mmg.convert_file(path("cohort.vcf"), path("cohort.vcf.gz"))  # sorted, BGZF: ready for an index
+        engine.convert_file(path("cohort.vcf"), path("cohort.vcf.gz"))  # sorted, BGZF: ready for an index
 
         for name, n in (("sample_a.vcf", 250), ("sample_b.vcf.gz", 200), ("sample_c.vcf", 150)):
             lines = []
@@ -775,7 +805,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
             qual = "".join(chr(33 + q) for q in rng.choices(range(25, 41), k=100))
             sam.append(f"read{i + 1:04d}\t{rng.choice([0, 16])}\t{chrom}\t{pos}\t60\t{cigar}\t*\t0\t0\t{seq}\t{qual}\tNM:i:0")
         write("alignments.sam", "\n".join(sam) + "\n")
-        mmg.sort_genomic([path("alignments.sam")], path("alignments.sorted.bam"))
+        engine.sort_genomic([path("alignments.sam")], path("alignments.sorted.bam"))
 
         # Reads piled on chr1:25,000 (the SNP of indels.vcf): about 40% carry
         # its ALT allele, as a heterozygous variant looks; a few have a base of
@@ -794,7 +824,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
                 qual[k] = "#"  # quality 2
             pile.append(f"pile{i + 1:03d}\t{rng.choice([0, 16])}\tchr1\t{start}\t60\t100M\t*\t0\t0\t{''.join(seq)}\t{''.join(qual)}")
         write("pileup_demo.sam", "\n".join(pile) + "\n")
-        mmg.sort_genomic([path("pileup_demo.sam")], path("pileup_demo.bam"), index=True)
+        engine.sort_genomic([path("pileup_demo.sam")], path("pileup_demo.bam"), index=True)
         os.remove(path("pileup_demo.sam"))
         assert snp_ref != snp_alt
 
@@ -862,8 +892,8 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
             reads.append(f"@read{i + 1:05d}\n{''.join(read)}\n+\n{rng.choice(quals150)}\n")
         write("toy_bacterium_reads.fastq.gz", "".join(reads))
         for name in ("toy_bacterium", "toy_patient"):
-            pl.DataFrame({"K-mers": [mmg.read_fasta_batch([path(name + ".fasta")], 31)]}).write_ipc(path(name + "_K31.arrow"))
-        pl.DataFrame({"K-mers": [mmg.read_fastq_batch([path("toy_bacterium_reads.fastq.gz")], 20, 31)]}).write_ipc(path("toy_bacterium_reads_K31.arrow"))
+            pl.DataFrame({"K-mers": [engine.read_fasta_batch([path(name + ".fasta")], 31)]}).write_ipc(path(name + "_K31.arrow"))
+        pl.DataFrame({"K-mers": [engine.read_fastq_batch([path("toy_bacterium_reads.fastq.gz")], 20, 31)]}).write_ipc(path("toy_bacterium_reads_K31.arrow"))
 
         # Screen 2: 31-mers of two genomes with different GC content.
         for name, gc in (("kmers_gc_rich.txt", 0.65), ("kmers_at_rich.txt", 0.35)):
@@ -903,11 +933,11 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
                     pos = rng2.randint(a + 1, e - 99)
                     lines.append(f"{sample}.{g}.{k}\t{rng2.choice([0, 16])}\t{c}\t{pos}\t60\t100M\t*\t0\t0\t{ref_at(c, pos, 100)}\t{'I' * 100}\tNH:i:1")
             write(f"rnaseq_{sample}.sam", "\n".join(lines) + "\n")
-            mmg.sort_genomic([path(f"rnaseq_{sample}.sam")], path(f"rnaseq_{sample}.bam"))
+            engine.sort_genomic([path(f"rnaseq_{sample}.sam")], path(f"rnaseq_{sample}.bam"))
             os.remove(path(f"rnaseq_{sample}.sam"))
             rna_rows.append(f"{sample}\t{cond}")
         write("rnaseq_samples.tsv", "sample\tcondition\n" + "\n".join(rna_rows) + "\n")
-        mmg.count_reads([path(f"rnaseq_{s.split(chr(9))[0]}.bam") for s in rna_rows], path("annotation.gff3"),
+        engine.count_reads([path(f"rnaseq_{s.split(chr(9))[0]}.bam") for s in rna_rows], path("annotation.gff3"),
                         path("rnaseq_counts.tsv"), sample_names=[s.split("\t")[0] for s in rna_rows])
 
         write("README.md", "# MMGEN examples\n\nSmall simulated files, written by the web interface (`ui_main.py`) when an example "
@@ -1493,6 +1523,48 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     def make_human_demo():
         return make_demo_pack("human")
 
+    # Screen 29 (AI): problems and tasks on the simulated example files. They
+    # need an API key; nothing is sent until the form is submitted.
+    EXAMPLES.update({
+        ("ai", "Describe your problem"): [
+            ("Two VCFs that share no variant",
+             "Two files of the same simulated genome, where one names chromosomes `chr1` and the other `1`, the most common "
+             "first stumble. Expect the AI to spot the naming, send you to screen 10 and write a script that renames, sorts "
+             "and compares them.",
+             {"problem": "I have two VCF files of the same genome, cohort.vcf and ensembl_names.vcf, from two different "
+                         "pipelines. When I look for the variants they have in common I find none, although they should "
+                         "share many. What is going on, and how do I compare them?",
+              "folder": EXAMPLES_DIR, "level": "student"}),
+            ("A file a tool calls invalid",
+             "`with_problems.vcf` has defects planted on purpose. Expect a path that starts with the validator (screen 10), "
+             "what each problem means and how to fix it.",
+             {"problem": "A program refuses my file with_problems.vcf and says it is invalid, and I do not understand its "
+                         "error message. What is wrong with the file, and how do I fix it and get a sorted, indexed copy?",
+              "folder": EXAMPLES_DIR, "level": "student"}),
+            ("Reads from a sequencing facility",
+             "Paired reads with an adapter and low-quality ends. Expect the quality report and the trimming of screen 12, "
+             "with the reason behind each parameter.",
+             {"problem": "A sequencing facility sent me paired reads, reads_R1.fastq.gz and reads_R2.fastq.gz. How do I "
+                         "check their quality and remove the adapters before I use them, and which numbers tell me they "
+                         "are good enough?",
+              "folder": EXAMPLES_DIR, "level": "researcher"}),
+        ],
+        ("ai", "Let the AI run a task"): [
+            ("Check a broken VCF and make a clean copy",
+             "The agent validates `with_problems.vcf`, explains what it finds and tries to write a clean, sorted copy. You "
+             "approve each round of calls before it runs.",
+             {"task": "Validate with_problems.vcf, tell me what is wrong with it, then write a sorted copy next to it if "
+                      "the engine can, and check the copy with the validator.",
+              "folder": EXAMPLES_DIR, "rounds": 6}),
+            ("Merge three samples and describe the result",
+             "Three small VCFs out of order: the agent should sort and merge them into one indexed file and give its "
+             "statistics.",
+             {"task": "Merge sample_a.vcf, sample_b.vcf.gz and sample_c.vcf into one sorted file merged_samples.vcf.gz "
+                      "with its index, then give me the statistics of the merged file.",
+              "folder": EXAMPLES_DIR, "rounds": 6}),
+        ],
+    })
+
     def example_picker(page, task=None):
         """The list of examples of a screen and task."""
         options = {NO_EXAMPLE: ""}
@@ -1559,6 +1631,7 @@ def main_menu(get_page, mmg, mo, set_page):
     btn_menu_outbreak = mo.ui.button(label="🌳 26. Outbreaks: Trees, Viral Mutations & PCR", on_change=lambda _: set_page("outbreak"))
     btn_menu_amplicon = mo.ui.button(label="🌿 27. 16S Amplicons: Taxonomy & Diversity", on_change=lambda _: set_page("amplicon"))
     btn_menu_tmb = mo.ui.button(label="🎯 28. Tumor Mutational Burden (TMB)", on_change=lambda _: set_page("tmb"))
+    btn_menu_ai = mo.ui.button(label="🤖 29. AI Assistant: Describe Your Problem", on_change=lambda _: set_page("ai"))
 
     # What this installation really has: the GPU modules fall back to the CPU.
     _engine = mmg.engine_info()
@@ -1615,12 +1688,18 @@ def main_menu(get_page, mmg, mo, set_page):
             {btn_menu_amplicon}
             {btn_menu_tmb}
         </div>
+
+        <h4 {_section}>AI assistant — optional, uses the Claude API</h4>
+        <div style="display: grid; grid-template-columns: 1fr; gap: 15px; max-width: 420px; margin: 0 auto;">
+            {btn_menu_ai}
+        </div>
         <p style="color: gray; font-size: 0.85em; margin-top: 40px;">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
     </div>
     """)
 
     menu_screen
     return (
+        btn_menu_ai,
         btn_menu_amr,
         btn_menu_outbreak,
         btn_menu_amplicon,
@@ -5568,6 +5647,411 @@ async def tmb_page_backend(asyncio, chosen, code_panel, error_panel, facts, form
         _panel = mo.vstack(_items)
     except Exception as _err:
         _panel = error_panel(_err)
+    _panel
+    return
+
+
+@app.cell
+def ai_helpers(error_panel, mo, os, warn):
+    # What the AI screens share. The AI layer comes with the engine (an older
+    # engine has none); the Anthropic SDK is needed only when a question is sent.
+    try:
+        from multimerge_genomics import ai as ai_lib
+        from multimerge_genomics.ai import assistant as _assistant
+        from multimerge_genomics.ai import knowledge as _knowledge
+        from multimerge_genomics.ai import _catalog
+        AI_MODELS = dict(_assistant.MODELS)
+        AI_DISCLAIMER = _knowledge.DISCLAIMER
+        AI_HUMAN_PAGES = set(_catalog._HUMAN_PAGES)
+        AI_SCREENS = dict(_catalog.SCREEN_BY_PAGE)
+    except ImportError:
+        ai_lib, AI_MODELS, AI_DISCLAIMER, AI_HUMAN_PAGES, AI_SCREENS = None, {"Claude Opus 5.5 (default)": "claude-opus-5-5"}, "", set(), {}
+    AI_EFFORTS = {"Low: the fastest and cheapest": "low", "Medium (default)": "medium", "High: more careful": "high",
+                  "Extra high": "xhigh", "Max: the most careful and the slowest": "max"}
+    AI_LEVELS = {"Student: clear words and the idea behind each step": "student",
+                 "Researcher: concise, with the method's assumptions and limits": "researcher"}
+    AI_SENT = ("**What is sent to Anthropic** (the company behind Claude): the name of the tool, its parameters with "
+               "file names only (no folders), a short summary of the result (long lists cut, sequences replaced by their "
+               "length) and your question; on screen 29, also the names of the files in the folder you give. Never a "
+               "file, a genome or a read. The API is paid by the owner of the key.")
+
+    def ai_blocked(settings, human=False):
+        """Why the AI cannot be asked now, as a panel; None when it can."""
+        if ai_lib is None:
+            return warn("This engine has no AI layer: install a newer `multimerge-genomics`.")
+        if not settings["consent"]:
+            return warn("The AI is off. On screen 29, task *Settings and the session record*, agree to send result "
+                        "summaries to Anthropic and save.")
+        if human and not settings["human"]:
+            return warn("This is a human-genome result: sending its summary needs the second agreement on screen 29 "
+                        "(*human-genome results*).")
+        return None
+
+    def ai_assistant(settings):
+        return ai_lib.Assistant(api_key=settings["key"] or None, model=settings["model"], effort=settings["effort"])
+
+    def ai_is_human(call):
+        return call.page in AI_HUMAN_PAGES or any(t["name"] == call.name and t["human"] for t in ai_lib.catalog())
+
+    def ai_streamer(head):
+        """An on_text callback that shows the answer as it grows, a few times a second."""
+        import time
+        last = [0.0]
+
+        async def show(text):
+            now = time.monotonic()
+            if now - last[0] >= 0.25:
+                last[0] = now
+                mo.output.replace(mo.vstack([x for x in (head, mo.md(text + " ▍")) if x is not None]))
+        return show
+
+    def ai_footer(ans):
+        u = ans.usage or {}
+        bits = [f"model `{ans.model or '?'}`"]
+        if ans.fallback_used:
+            bits.append("answered by the fallback model")
+        if u:
+            bits.append(f"{u.get('input_tokens', 0):,} tokens in (+{u.get('cache_read_input_tokens', 0):,} read from the cache), "
+                        f"{u.get('output_tokens', 0):,} out")
+        bits.append(f"{ans.seconds:.1f} s")
+        return mo.md("<small>" + " · ".join(bits) + ". The AI can be wrong: check what it says against the result and "
+                     "the README.</small>")
+
+    def ai_answer_panel(head, ans, human=False):
+        items = [head] if head is not None else []
+        if ans.refused:
+            items.append(warn("The AI declined to answer this" + (f" ({ans.refusal_category})" if ans.refusal_category else "")
+                              + ". Rephrase the question: for instance, ask about the method rather than about a person."))
+            if ans.text:
+                items.append(mo.md(ans.text))
+        else:
+            items.append(mo.md(ans.text or "*(an empty answer)*"))
+        if ans.stop_reason == "max_tokens":
+            items.append(warn("The answer was cut at its length limit."))
+        if human and AI_DISCLAIMER:
+            items.append(mo.callout(mo.md("**⚠️ " + AI_DISCLAIMER + "**"), kind="danger"))
+        items.append(ai_footer(ans))
+        return mo.vstack(items)
+
+    def ai_error_text(err):
+        name = type(err).__name__
+        known = {
+            "AuthenticationError": "the API key was refused: check it on screen 29 (or ANTHROPIC_API_KEY).",
+            "PermissionDeniedError": "this API key may not use this model: pick another on screen 29.",
+            "RateLimitError": "too many requests, or no credit left: wait a moment, or check the account at console.anthropic.com.",
+            "APIConnectionError": "the Claude API could not be reached (no internet, or a proxy or an antivirus in the way).",
+            "APITimeoutError": "the Claude API took too long to answer: try again, or pick a lower effort on screen 29.",
+            "NotFoundError": "the model was not found: pick another on screen 29.",
+        }
+        return known.get(name, str(err) if name in ("AIUnavailable", "ConsentRequired") else f"{name}: {err}")
+
+    def ai_error(err):
+        if type(err).__name__ in ("AIUnavailable", "ConsentRequired"):
+            return warn(str(err))
+        return error_panel(ai_error_text(err))
+
+    def folder_files(folder, limit=200):
+        """The file names under a folder (relative, three levels down): what the AI sees of it."""
+        out = []
+        root = os.path.abspath(folder or ".")
+        for base, dirs, names in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if not d.startswith((".", "_")) and d not in ("target", "__pycache__", "node_modules"))
+            if os.path.relpath(base, root).count(os.sep) >= 2:
+                dirs[:] = []
+            out += [os.path.relpath(os.path.join(base, n), root).replace(os.sep, "/") for n in sorted(names)]
+            if len(out) >= limit:
+                break
+        return out[:limit]
+
+    return (AI_DISCLAIMER, AI_EFFORTS, AI_LEVELS, AI_MODELS, AI_SCREENS, AI_SENT, ai_answer_panel, ai_assistant, ai_blocked,
+            ai_error, ai_error_text, ai_is_human, ai_lib, ai_streamer, folder_files)
+
+
+@app.cell
+def ai_page_ui(get_page, mo, set_page):
+    mo.stop(get_page() != "ai")
+    btn_back_ai = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
+    btn_refresh_ai = mo.ui.button(label="🔄 Refresh")
+    ai_task = mo.ui.radio(
+        options=["Describe your problem", "Let the AI run a task", "Settings and the session record"],
+        value="Describe your problem", inline=True, label="**What to do:**",
+    )
+    _ui = mo.vstack([
+        btn_back_ai,
+        mo.md("<br>\n\n# 🤖 29. AI Assistant"),
+        mo.callout(mo.md(
+            "An optional assistant built on Claude, Anthropic's AI. **Describe your problem** in your own words: it "
+            "explains the problem in detail, lays out a path through MMGEN's screens and writes the Python script that "
+            "follows it. **Let the AI run a task**: it runs MMGEN's tools on a folder for you, round by round, and nothing "
+            "runs until you approve it. At the bottom of the other screens, **Ask the AI about this result** explains the "
+            "last result of the screen. It needs an Anthropic API key (the API is paid) and your agreement to send result "
+            "summaries: see *Settings and the session record*, which also saves everything you ran as a Python script."),
+            kind="info"),
+        mo.callout(mo.md(
+            "**The AI can be wrong.** It is a teaching aid: check what it says against the results, the README and a "
+            "teacher or a colleague. On human genomes it never replaces a physician or a genetic counselor."), kind="warn"),
+        mo.hstack([ai_task, btn_refresh_ai], justify="space-between", align="center"),
+    ])
+    _ui
+    return ai_task, btn_back_ai, btn_refresh_ai
+
+
+@app.cell
+def ai_page_status(AI_MODELS, ai_lib, ai_settings, get_ai_rev, get_page, label_of, mo, os):
+    mo.stop(get_page() != "ai")
+    get_ai_rev()  # redrawn when the settings are saved
+    if ai_lib is None:
+        _text = "⚪ **AI: not available** · this engine has no AI layer."
+    else:
+        try:
+            import anthropic as _sdk  # noqa: F401
+            _has_sdk = True
+        except ImportError:
+            _has_sdk = False
+        _s = ai_settings
+        _key = ("typed in this session (kept in memory only)" if _s["key"]
+                else "from ANTHROPIC_API_KEY" if os.environ.get("ANTHROPIC_API_KEY") else "none")
+        _on = _s["consent"] and _has_sdk and _key != "none"
+        _text = (f"{'🟢' if _on else '⚪'} **AI: {'on' if _on else 'off'}** · key: {_key} · model: "
+                 f"{label_of(AI_MODELS, _s['model'], _s['model'])} · effort: {_s['effort']} · human-genome results: "
+                 f"{'may be sent' if _s['human'] else 'not sent'}")
+        if not _has_sdk:
+            _text += ' · the Anthropic SDK is not installed: `pip install "multimerge-genomics[ai]"` (or `pip install anthropic`)'
+    mo.md(_text)
+    return
+
+
+@app.cell
+def ai_page_example(ai_task, example_picker, get_page, mo):
+    mo.stop(get_page() != "ai")
+    ai_example = example_picker("ai", ai_task.value)
+    ai_example if ai_task.value != "Settings and the session record" else None
+    return (ai_example,)
+
+
+@app.cell
+def ai_page_form(AI_EFFORTS, AI_LEVELS, AI_MODELS, AI_SENT, ai_example, ai_settings, ai_task, example_for, get_page, label_of, make_form, mo):
+    mo.stop(get_page() != "ai")
+    _ex, _about = example_for("ai", ai_task.value, ai_example.value)
+    _s = ai_settings
+    _note = None
+    if ai_task.value == "Describe your problem":
+        form_ai = make_form({
+            "problem": mo.ui.text_area(value=_ex.get("problem", ""), rows=7, full_width=True,
+                                       label="Your problem, in your own words (what you have, what you want to find out):",
+                                       placeholder="e.g. I have the variants of a family in one VCF and want to know whether the child is really theirs..."),
+            "folder": mo.ui.text(value=_ex.get("folder", "."), full_width=True, label="The folder with your files (the AI sees their names only):"),
+            "level": mo.ui.dropdown(options=AI_LEVELS, value=label_of(AI_LEVELS, _ex.get("level", _s["level"]), next(iter(AI_LEVELS))),
+                                    label="Explain it for:", full_width=True),
+        }, "🤖 Ask the AI")
+    elif ai_task.value == "Let the AI run a task":
+        _note = mo.md("The agent proposes calls to MMGEN's tools; **you approve each round before it runs**. It reads and "
+                      "writes only inside the working folder, and every call it runs goes into the session record.")
+        form_ai = make_form({
+            "task": mo.ui.text_area(value=_ex.get("task", ""), rows=5, full_width=True, label="The task:",
+                                    placeholder="e.g. Validate every VCF in the folder and write sorted, indexed copies of the valid ones."),
+            "folder": mo.ui.text(value=_ex.get("folder", "."), full_width=True, label="Working folder (the agent reads and writes only inside it):"),
+            "human": mo.ui.checkbox(value=False, label="Let it use the human-genome tools (screens 16-21 and 28)"),
+            "rounds": mo.ui.number(start=1, stop=20, step=1, value=_ex.get("rounds", 8), label="At most this many rounds:"),
+        }, "🤖 Give the task to the AI")
+    else:
+        _note = mo.md(AI_SENT)
+        form_ai = make_form({
+            "key": mo.ui.text(kind="password", value=_s["key"], full_width=True, placeholder="sk-ant-...",
+                              label="Anthropic API key (blank: ANTHROPIC_API_KEY of the environment). Kept in memory, never written:"),
+            "model": mo.ui.dropdown(options=AI_MODELS, value=label_of(AI_MODELS, _s["model"], next(iter(AI_MODELS))), label="Model:", full_width=True),
+            "effort": mo.ui.dropdown(options=AI_EFFORTS, value=label_of(AI_EFFORTS, _s["effort"], "Medium (default)"),
+                                     label="Effort (more is slower and costs more):", full_width=True),
+            "level": mo.ui.dropdown(options=AI_LEVELS, value=label_of(AI_LEVELS, _s["level"], next(iter(AI_LEVELS))),
+                                    label="Explain for (the default of the other screens):", full_width=True),
+            "consent": mo.ui.checkbox(value=_s["consent"], label="I agree to send result summaries and my questions to Anthropic to get answers"),
+            "human": mo.ui.checkbox(value=_s["human"], label="Also summaries of human-genome results (screens 16-21 and 28), only of people who agreed to it"),
+        }, "💾 Save the settings")
+    mo.vstack([_x for _x in (_about, _note, form_ai) if _x is not None])
+    return (form_ai,)
+
+
+@app.cell
+async def ai_page_backend(ai_answer_panel, ai_assistant, ai_blocked, ai_error, ai_lib, ai_settings, ai_streamer, ai_task, asyncio, folder_files, form_ai, get_page, mmg, mo, os, set_agent, set_ai_rev, warn):
+    mo.stop(get_page() != "ai")
+    _task = ai_task.value
+    mo.stop(form_ai.value is None, None if _task == "Settings and the session record" else mo.md("⏳ *Fill in the form above and submit it.*"))
+    _v = form_ai.value
+    if _task == "Settings and the session record":
+        ai_settings.update(key=(_v["key"] or "").strip(), model=_v["model"], effort=_v["effort"], level=_v["level"],
+                           consent=bool(_v["consent"]), human=bool(_v["consent"] and _v["human"]))
+        set_ai_rev(lambda n: n + 1)
+        _panel = mo.callout(mo.md("✅ Saved for this session. " + (
+            "The AI is on: the other screens now offer *Ask the AI about this result* at the bottom." if _v["consent"]
+            else "The AI stays off until you agree to send result summaries.")), kind="success")
+    elif _task == "Describe your problem":
+        mo.stop(not (_v["problem"] or "").strip(), warn("Type your problem first."))
+        mo.stop(not os.path.isdir(_v["folder"] or "."), warn(f"The folder `{_v['folder']}` does not exist."))
+        _blocked = ai_blocked(ai_settings)
+        mo.stop(_blocked is not None, _blocked)
+        _files = folder_files(_v["folder"] or ".")
+        _head = mo.md(f"**🤖 The AI's answer** (with the names of {len(_files)} file(s) of `{_v['folder'] or '.'}`):")
+        try:
+            _ans = await ai_assistant(ai_settings).plan_stream(_v["problem"], _files, _v["level"], on_text=ai_streamer(_head))
+            _items = [ai_answer_panel(_head, _ans)]
+            for _w in _ans.warnings:
+                _items.append(warn("Check the script before running it: " + _w))
+            _blocks = ai_lib.assistant.python_blocks(_ans.text)
+            _downloads = [mo.download(data=_ans.text.encode("utf-8"), filename="mmgen_plan.md", mimetype="text/markdown",
+                                      label="⬇️ The answer (Markdown)")]
+            if _blocks:
+                _downloads.insert(0, mo.download(data=_blocks[-1].encode("utf-8"), filename="mmgen_plan.py",
+                                                 mimetype="text/x-python", label="⬇️ The script"))
+            _items.append(mo.hstack(_downloads, justify="start"))
+            _panel = mo.vstack(_items)
+        except Exception as _err:
+            _panel = ai_error(_err)
+    else:
+        mo.stop(not (_v["task"] or "").strip(), warn("Type the task first."))
+        mo.stop(not os.path.isdir(_v["folder"] or "."), warn(f"The working folder `{_v['folder']}` does not exist."))
+        _blocked = ai_blocked(ai_settings, human=bool(_v["human"]))
+        mo.stop(_blocked is not None, _blocked)
+        try:
+            _agent = ai_lib.Agent(_v["task"], _v["folder"] or ".", assistant=ai_assistant(ai_settings),
+                                  allow_human=bool(_v["human"]), max_rounds=int(_v["rounds"]), engine=mmg)
+            with mo.status.spinner("The AI is reading the task and the folder..."):
+                await asyncio.to_thread(_agent.step)
+            set_agent((_agent, 0))
+            _panel = mo.callout(mo.md("🤖 The task went to the AI. Its plan and the calls it proposes are below: "
+                                      "**nothing runs until you approve each round.**"), kind="info")
+        except Exception as _err:
+            _panel = ai_error(_err)
+    _panel
+    return
+
+
+@app.cell
+def ai_page_agent_view(ai_task, error_panel, get_agent, get_page, mo, warn):
+    mo.stop(get_page() != "ai" or ai_task.value != "Let the AI run a task")
+    _held = get_agent()
+    mo.stop(_held is None)
+    _agent = _held[0]
+    btn_agent_run = mo.ui.run_button(kind="success", label="✅ Run these calls" if _agent.pending else "🔁 Ask the AI again")
+    btn_agent_decline = mo.ui.run_button(kind="danger", label="✋ Decline them")
+    _items = [mo.md(f"### 🤖 The agent at work\n**Task:** {_agent.task}  \n**Working folder:** `{_agent.root}`")]
+    for _i, _r in enumerate(_agent.rounds, 1):
+        _parts = [f"**Round {_i}**"]
+        if _r.text.strip():
+            _parts.append(_r.text.strip())
+        if _r.proposals:
+            _code = "\n".join(
+                f"mmg.{_p.name}(" + ", ".join(f"{_k}={_x!r}" for _k, _x in _p.input.items()) + ")"
+                + (f"  # ⛔ will not run: {_p.problem}" if _p.problem else "") for _p in _r.proposals)
+            _parts.append("Proposed calls:\n```python\n" + _code + "\n```")
+        _items.append(mo.callout(mo.md("\n\n".join(_parts)), kind="neutral"))
+        if _r.results:
+            _items.append(mo.accordion({
+                ("✅ " if _ok else "❌ ") + f"{_name}: what went back to the AI": mo.plain_text(_text[:6000])
+                for _name, _ok, _text in _r.results}))
+    if getattr(_agent, "ui_error", None):
+        _items.append(error_panel(_agent.ui_error))
+    if _agent.done:
+        _items.append(mo.callout(mo.md("### The agent's report\n\n" + (_agent.final_text or "")),
+                                 kind="warn" if _agent.refused else "success"))
+        _items.append(mo.download(data=_agent.transcript().encode("utf-8"), filename="mmgen_agent_transcript.md",
+                                  mimetype="text/markdown", label="⬇️ The whole run (Markdown)"))
+        _items.append(mo.md(f"<small>{_agent.usage['input_tokens']:,} tokens in, {_agent.usage['output_tokens']:,} out, "
+                            f"over {len(_agent.rounds)} round(s). The AI can be wrong: check its report against the results.</small>"))
+    elif _agent.pending:
+        _items.append(mo.md("**Approve this round?** The calls run on this computer, in the working folder; a summary of "
+                            "what they return goes back to the AI."))
+        _items.append(mo.hstack([btn_agent_run, btn_agent_decline], justify="start"))
+    else:
+        _items.append(warn("The last request to the AI did not go through."))
+        _items.append(btn_agent_run)
+    mo.vstack(_items)
+    return btn_agent_decline, btn_agent_run
+
+
+@app.cell
+async def ai_page_agent_act(ai_error_text, asyncio, btn_agent_decline, btn_agent_run, get_agent, mo, set_agent):
+    mo.stop(not (btn_agent_run.value or btn_agent_decline.value))
+    _agent, _n = get_agent()
+    _agent.ui_error = None
+    try:
+        if _agent.pending:
+            if btn_agent_run.value:
+                with mo.status.spinner("Running the approved calls..."):
+                    await asyncio.to_thread(_agent.run_pending)
+            else:
+                _agent.decline()
+        if not _agent.done:
+            with mo.status.spinner("The AI is looking at the results..."):
+                await asyncio.to_thread(_agent.step)
+    except Exception as _err:
+        # kept on the agent: this cell's own output is cleared when the view is redrawn
+        _agent.ui_error = ai_error_text(_err)
+    set_agent((_agent, _n + 1))
+    return
+
+
+@app.cell
+def ai_page_session(AI_SCREENS, ai_task, btn_refresh_ai, get_page, mmg, mo):
+    mo.stop(get_page() != "ai" or ai_task.value != "Settings and the session record")
+    btn_refresh_ai  # a click redraws the record
+    mo.stop(not hasattr(mmg, "script"))
+    _rows = []
+    for _c in reversed(list(mmg.calls)):
+        _screen = AI_SCREENS.get(_c.page)
+        _rows.append({"time": _c.when, "screen": f"{_screen[0]}. {_screen[2]}" if _screen else "—", "tool": _c.name,
+                      "seconds": round(_c.seconds, 2), "status": "failed: " + _c.error[:120] if _c.error else "ok"})
+    _items = [mo.md("### 📜 The session record\nEvery tool run in this session, on any screen and by the agent, newest "
+                    "first. Saved as a Python script it does the same again: the record of what you did, for your "
+                    "notebook or the methods section of a report. Press **Refresh** to see the latest calls.")]
+    if _rows:
+        _items += [mo.ui.table(_rows, selection=None, label=f"{len(_rows)} call(s)"),
+                   mo.download(data=mmg.script().encode("utf-8"), filename="mmgen_session.py", mimetype="text/x-python",
+                               label="⬇️ The session as a Python script")]
+    else:
+        _items.append(mo.md("*Nothing has been run in this session yet.*"))
+    mo.vstack(_items)
+    return
+
+
+@app.cell
+def ai_panel_ui(AI_LEVELS, AI_SENT, ai_lib, ai_settings, get_ai_rev, get_page, label_of, make_form, mmg, mo, set_page):
+    # "Ask the AI about this result", at the bottom of every screen with results.
+    get_ai_rev()  # redrawn when the AI settings change
+    mo.stop(get_page() in ("home", "ai", "guide") or ai_lib is None or not hasattr(mmg, "last"))
+    btn_ai_setup = mo.ui.button(label="🤖 Open the AI settings (screen 29)", on_change=lambda _: set_page("ai"))
+    form_ai_ask = make_form({
+        "question": mo.ui.text_area(rows=3, full_width=True, label="Your question (blank: explain the result):",
+                                    placeholder="e.g. Why were so many lines skipped? Is this number good or bad?"),
+        "level": mo.ui.dropdown(options=AI_LEVELS, value=label_of(AI_LEVELS, ai_settings["level"], next(iter(AI_LEVELS))),
+                                label="Explain it for:", full_width=True),
+    }, "🤖 Ask the AI")
+    _body = [mo.md("The AI explains **the last result of this screen**: what the tool did, what the numbers mean, whether "
+                   "they look as expected, what could be wrong and what to do next.\n\n" + AI_SENT)]
+    if ai_settings["consent"]:
+        _body.append(form_ai_ask)
+    else:
+        _body += [mo.md("*The AI is off: turn it on in the settings of screen 29 (it needs an Anthropic API key and your agreement).*"),
+                  btn_ai_setup]
+    mo.accordion({"🤖 Ask the AI about this result (optional)": mo.vstack(_body)})
+    return btn_ai_setup, form_ai_ask
+
+
+@app.cell
+async def ai_panel_answer(ai_answer_panel, ai_assistant, ai_blocked, ai_error, ai_is_human, ai_settings, ai_streamer, form_ai_ask, get_page, mmg, mo, warn):
+    mo.stop(form_ai_ask.value is None)
+    _call = mmg.last(get_page())
+    mo.stop(_call is None, warn("Run a task on this screen first: the AI explains the last result of the screen."))
+    _human = ai_is_human(_call)
+    _blocked = ai_blocked(ai_settings, human=_human)
+    mo.stop(_blocked is not None, _blocked)
+    _q = (form_ai_ask.value["question"] or "").strip()
+    _head = mo.md(f"**🤖 About the result of `mmg.{_call.name}`** (run at {_call.when})" + (f"  \n**Your question:** {_q}" if _q else ""))
+    try:
+        _ans = await ai_assistant(ai_settings).explain_stream(_call.python(), _call.result, _q, form_ai_ask.value["level"],
+                                                               on_text=ai_streamer(_head))
+        _panel = ai_answer_panel(_head, _ans, human=_human)
+    except Exception as _err:
+        _panel = ai_error(_err)
     _panel
     return
 

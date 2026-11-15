@@ -134,6 +134,27 @@ They read any VCF, sorted in natural chromosome order; with a **callable-regions
 The examples use a 64 MB demo pack (`trials/python/make_research_demo.py`): the airway counts, the MAGeCK demos, sketches of 43 reference genomes, reads of the ZymoBIOMICS mock communities, the AMRFinderPlus catalog, four bacterial isolates, 20 SARS-CoV-2 lineages, sketches of 13 *K. pneumoniae* and 4 *S. aureus*, a PCR panel with its sources, the mothur MiSeq SOP reads with an RDP classifier, and the SEQC2 somatic calls of a breast-cancer cell line (chromosome 17).
 
 
+### 🤖 29. AI Assistant *(optional; uses the Claude API)*
+
+An assistant built on Claude, Anthropic's AI, for students who know the question but not yet the tools. It is optional: nothing in MMGEN needs it, and nothing is sent anywhere until you turn it on.
+
+* **Describe your problem** (screen 29) — in your own words, in any language. The answer explains the problem in detail (the biology, the data, what a good answer looks like), lays out a path through MMGEN's screens with the functions and the parameters that matter, says what could go wrong and what MMGEN cannot do, and ends with a Python script that follows the path. The script is checked against MMGEN's catalog before you see it: a function or a parameter that does not exist is pointed out.
+* **Ask the AI about this result** — at the bottom of every screen with results: what the tool did, what the numbers mean, whether they look as expected, what could be wrong and what to try next, for a student or for a researcher.
+* **Let the AI run a task** (screen 29) — an agent that runs MMGEN's tools on a folder for you. It proposes one round of calls at a time and **nothing runs until you approve it**; it reads and writes only inside that folder, and the human-genome tools are off unless you allow them.
+* **The session record** (screen 29) — every tool run in the session, on any screen and by the agent, as a table and as a Python script that does the same again: the record of what you did, for a notebook or the methods section of a report. It needs no AI.
+
+**What is sent, and when.** Only after you agree on screen 29, and only when you press a button: the name of the tool, its parameters with file names only (no folders), a short summary of the result (long lists cut, DNA and protein sequences replaced by their length) and your question; for *Describe your problem*, also the names of the files in the folder you give. Never a file, a genome or a read. Human-genome results (screens 16–21 and 28) need a second agreement, and their answers carry the same notice as those screens: experimental, not a diagnosis, the authors take no responsibility for decisions made on them; analyze only genomes of people who agreed to it. The AI can be wrong: check what it says against the results.
+
+**What it needs.** `pip install "multimerge-genomics[ai]"` (or `pip install anthropic`) and an Anthropic API key from [console.anthropic.com](https://console.anthropic.com) (the API is paid by the owner of the key), typed on screen 29 (kept in memory for the session, never written to disk) or set in `ANTHROPIC_API_KEY`. The model is Claude Opus 5.5 by default; Claude Sonnet 5.5 and Claude Haiku 5.5 are cheaper and faster, and the *effort* setting trades care for speed and cost. On Opus and Sonnet the requests allow the API's server-side fallback: if the model's safety classifiers decline a request, the API may answer it with another model in the same call, and the answer says so. The rules, a glossary, the catalog of every tool and this README go with every request as one cached prompt.
+
+**MMGEN's tools in Claude, or in any MCP client.** `pip install "multimerge-genomics[mcp]"` installs `mmgen-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io) server that offers every tool that takes plain arguments (61 of them, with their documentation and a JSON schema, plus a catalog of the screens) to Claude Desktop, Claude Code or any other MCP client. Paths are relative to a working folder, and no path outside it is accepted, for reading or for writing. For Claude Desktop, in `claude_desktop_config.json`:
+
+```json
+{"mcpServers": {"mmgen": {"command": "mmgen-mcp", "args": ["--root", "C:/path/to/your/data"]}}}
+```
+
+The same pieces are open to Python, in `multimerge_genomics.ai`: `catalog()` and `tool_definitions()` (every tool as a Claude tool definition), `Assistant` (`explain`, `plan` and their streaming forms), `Agent` (the approval loop), `Recorder` (the session record) and `check_script` (an answer's Python checked against the catalog).
+
 ---
 
 ## 💻 Quick Start
@@ -220,9 +241,9 @@ pip install marimo polars numpy scikit-learn pyarrow
 marimo run ui_main.py
 ```
 
-The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has four groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21) and research, microbiology and oncology (22–28). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
+The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21), research, microbiology and oncology (22–28), and the optional AI assistant (29). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
 
-**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 110 of them, at least one for every task: a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, the mothur MiSeq SOP, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` and `mmgen_demo_research_v3.zip`, unpacked into `mmgen_examples/` the first time, from the folder the interface runs in.
+**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 115 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, the mothur MiSeq SOP, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` and `mmgen_demo_research_v3.zip`, unpacked into `mmgen_examples/` the first time, from the folder the interface runs in.
 
 ![Variant detection screen](assets/variant_calling.png)
 
@@ -322,6 +343,7 @@ output.serve_kernel_port_as_iframe(2718, height=900)
 * `regions`: `"chr1"`, `"chr1:1000"` or `"chr1:1000-2000"`, 1-based with the end included, as in samtools and tabix.
 * The GIL is released during file operations, so a user interface stays responsive.
 * Four more functions serve the legacy 64-bit path of module 2: `sort_merge_bytes`, `read_and_merge_kmer_files`, `minhash_signatures` and `decode_kmers`.
+* The AI layer (optional) lives in `multimerge_genomics.ai`, and the MCP server in `mmgen-mcp`: see [29. AI Assistant](#-29-ai-assistant-optional-uses-the-claude-api).
 
 ---
 
@@ -382,6 +404,7 @@ python trials/python/smoke.py                      # smoke test, no external dat
 python trials/python/crosscheck.py                 # against pyarrow, polars, biopython, bamnostic, cutadapt
                                                    #   (and samtools, bcftools, bedtools, tabix, jellyfish when present)
 python trials/python/test_ui.py ui_main.py         # the interface's cells, without a browser
+python trials/python/test_ai.py                    # the AI layer and the MCP server, with a stand-in for Claude (no key, nothing sent)
 python trials/python/test_browser.py ui_main.py    # the interface in a real browser (needs playwright)
 python trials/python/gpu_test.py 1 10              # GPU against CPU against numpy; sizes in millions
 ```

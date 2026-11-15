@@ -2711,7 +2711,12 @@ fn tumor_mutational_burden(
 /// counting; plain text, BGZF, BAM and Parquet in and out; and k-mer modules
 /// with optional CUDA acceleration. Start with `engine_info()`; every
 /// function has a docstring.
+//
+// O módulo compilado é `multimerge_genomics._native`; o pacote Python
+// (python/multimerge_genomics/__init__.py) o reexporta inteiro e acrescenta a
+// parte escrita em Python (o assistente de IA e o servidor MCP).
 #[pymodule]
+#[pyo3(name = "_native")]
 fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_and_merge_kmer_files, m)?)?;
     m.add_function(wrap_pyfunction!(decode_kmers, m)?)?;

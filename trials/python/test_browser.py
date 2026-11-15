@@ -235,6 +235,7 @@ MENU = {
     26: ("26. Outbreaks: Trees, Viral Mutations & PCR", "26. Outbreaks: Trees, Viral Mutations & PCR"),
     27: ("27. 16S Amplicons: Taxonomy & Diversity", "27. 16S Amplicons: Taxonomy & Diversity"),
     28: ("28. Tumor Mutational Burden (TMB)", "28. Tumor Mutational Burden (TMB)"),
+    29: ("29. AI Assistant", "29. AI Assistant"),
 }
 RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
 # The human-genome examples need the demo data and PharmCAT (see test_ui.py).
@@ -622,6 +623,52 @@ try:
             submit(pg, "Compare")
             t = wait_for(pg, "DIFFERENT reference genomes|ERROR", 60)
             check("compare: GRCh38 against GRCh37 is DIFFERENT", t is not None and "GRCh38" in t and "GRCh37" in t, (t or "")[-300:])
+
+        print("== screen 29 and the AI panel (no key here: nothing is sent)")
+        with page(browser) as pg:
+            enter(pg, 10)
+            choose(pg, 0, "broken.vcf")
+            submit(pg, "Validate")
+            wait_for(pg, r"error\(s\)|ERROR", 60)
+            panel = pg.get_by_text("Ask the AI about this result")
+            check("screen 10: the AI panel sits below the result", panel.count() > 0 and panel.first.is_visible())
+            panel.first.click()
+            # the accordion keeps a hidden copy of its content: wait for the
+            # button (one only), then read the visible text
+            pg.get_by_role("button", name="Open the AI settings").wait_for(timeout=30000)
+            pg.wait_for_timeout(500)
+            t = text_of(pg)
+            shot(pg, "screen10_ai_panel_off")
+            check("  closed until the AI is set up, with what would be sent",
+                  "The AI is off" in t and "What is sent to Anthropic" in t, t[-300:])
+            pg.get_by_role("button", name="Open the AI settings").click()
+            back(pg).wait_for(timeout=30000)
+            t = wait_for(pg, "29. AI Assistant", 30)
+            check("  its button opens screen 29", t is not None and "Describe your problem" in t, (t or "")[:300])
+            radio(pg, "Settings and the session record")
+            t = wait_for(pg, "The session record", 30)
+            shot(pg, "screen29_settings")
+            check("screen 29: the session record lists the validation run on screen 10",
+                  t is not None and "validate_file" in t and "10. Validation" in t, (t or "")[-500:])
+            check("  the API key field hides what is typed", pg.locator("input[type=password]").count() == 1)
+            pg.get_by_role("checkbox", name=re.compile("I agree to send")).check()
+            submit(pg, "Save the settings")
+            t = wait_for(pg, "Saved for this session", 30)
+            check("  the settings are saved", t is not None and "AI:" in t, (t or "")[-300:])
+            back(pg).click()
+            enter(pg, 10)
+            pg.get_by_text("Ask the AI about this result").first.click()
+            t = wait_for(pg, "Explain it for", 30)
+            shot(pg, "screen10_ai_panel_on")
+            check("  with the agreement, the panel offers the question form",
+                  t is not None and pg.get_by_role("button", name="Ask the AI").first.is_visible(), (t or "")[-300:])
+            back(pg).click()
+            enter(pg, 29)
+            radio(pg, "Describe your problem")
+            example(pg, "Two VCFs that share no variant")
+            t = text_of(pg)
+            check("screen 29: an example fills in the problem", "ensembl_names.vcf" in (pg.locator("textarea:visible").first.input_value() or ""),
+                  t[-300:])
 
         print("== screen 11: VCF statistics, filter and normalization")
         with page(browser) as pg:

@@ -25,6 +25,18 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
+[project.optional-dependencies]
+# The AI assistant (explain a result, describe your problem, the agent) and the
+# MCP server are optional: the tools themselves need neither.
+ai = ["anthropic>=2.8"]
+mcp = ["mcp>=2.3"]
+
+[project.scripts]
+mmgen-mcp = "multimerge_genomics.mcp_server:main"
+
 [tool.maturin]
 bindings = "pyo3"
-module-name = "multimerge_genomics"
+# Pacote misto: o motor Rust é multimerge_genomics._native, e python/ traz o
+# __init__.py que o reexporta, o assistente de IA e o servidor MCP.
+python-source = "python"
+module-name = "multimerge_genomics._native"

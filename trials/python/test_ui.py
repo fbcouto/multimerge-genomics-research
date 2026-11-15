@@ -115,6 +115,100 @@ examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mm
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
 POOL = dict(helpers[1], **examples[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl)
 
+# The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
+# no key, nothing leaves the machine. It answers by the kind of request.
+from types import SimpleNamespace as NS
+
+from multimerge_genomics import ai as ai_lib
+from multimerge_genomics.ai import assistant as ai_assistant_mod
+
+AI_REQUESTS = []
+PLAN_ANSWER = "\n".join([
+    "1. **The problem**: the two files name chromosomes differently.", "",
+    "2. **The path**: screen 10, then screen 9.", "",
+    "3. **Watch out**: the reference genome.", "",
+    "4. **The script**:",
+    "```python",
+    "import multimerge_genomics as mmg",
+    "mmg.normalize_chromosomes('ensembl_names.vcf', 'renamed.vcf', style='chr')",
+    "mmg.sort_genomic(['renamed.vcf'], 'renamed.sorted.vcf.gz', index=True)",
+    "```", ""])
+
+
+def ai_message(text="", tools=(), stop="end_turn"):
+    content = [NS(type="text", text=text)] if text else []
+    content += [NS(type="tool_use", id=f"tu_{i}", name=n, input=inp) for i, (n, inp) in enumerate(tools)]
+    return NS(content=content, stop_reason=stop, stop_details=None, model="claude-opus-5-5",
+              usage=NS(input_tokens=1200, output_tokens=150, cache_read_input_tokens=20000, cache_creation_input_tokens=0))
+
+
+def ai_reply(kw):
+    last = kw["messages"][-1]["content"]
+    if "tools" in kw:  # the agent: one round of calls, then the report
+        if isinstance(last, str):
+            return ai_message("First I validate the file.", [("validate_file", {"path": "with_problems.vcf"})], stop="tool_use")
+        return ai_message("Report: the validator found the planted problems.")
+    if "My problem" in last:
+        return ai_message(PLAN_ANSWER)
+    return ai_message("The tool read the file; the numbers look as expected for a small simulated file.")
+
+
+class AIStream:
+    def __init__(self, msg):
+        self.msg = msg
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    @property
+    def text_stream(self):
+        async def gen():
+            text = "".join(b.text for b in self.msg.content if b.type == "text")
+            for i in range(0, len(text), 9):
+                yield text[i:i + 9]
+        return gen()
+
+    async def get_final_message(self):
+        return self.msg
+
+
+class AIClient:
+    def __init__(self):
+        class Messages:
+            def create(self, **kw):
+                AI_REQUESTS.append(kw)
+                return ai_reply(kw)
+
+            def stream(self, **kw):
+                AI_REQUESTS.append(kw)
+                return AIStream(ai_reply(kw))
+        self.beta = NS(messages=Messages())
+
+
+ai_assistant_mod.client_factory = lambda key, is_async: AIClient()
+
+
+class Holder:
+    """Stands in for a mo.state: get() and set(value or function)."""
+    def __init__(self, value=None):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, v):
+        self.value = v(self.value) if callable(v) else v
+
+
+AI_SETTINGS = {"key": "", "model": "claude-opus-5-5", "effort": "medium", "level": "student", "consent": True, "human": False}
+AGENT, AI_REV = Holder(), Holder(0)
+ai_help = run(ui.ai_helpers, error_panel=POOL["error_panel"], mo=mo, os=os, warn=POOL["warn"])
+check("the AI helpers cell runs", not isinstance(ai_help, BaseException) and ai_help[1]["ai_lib"] is not None, repr(ai_help)[:300])
+POOL.update(ai_help[1], ai_settings=AI_SETTINGS, get_agent=AGENT.get, set_agent=AGENT.set, get_ai_rev=AI_REV.get, set_ai_rev=AI_REV.set)
+
 
 def cell_run(cell, **given):
     """Runs a cell with what it refers to: the helpers, the modules and `given`.
@@ -546,6 +640,7 @@ SCREENS = {
     "outbreak": (ui.outbreak_page_form, ui.outbreak_page_backend, "form_outbreak", "outbreak_task"),
     "amplicon": (ui.amplicon_page_form, ui.amplicon_page_backend, "form_amplicon", "amplicon_task"),
     "tmb": (ui.tmb_page_form, ui.tmb_page_backend, "form_tmb", None),
+    "ai": (ui.ai_page_form, ui.ai_page_backend, "form_ai", "ai_task"),
 }
 import shutil
 RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
@@ -639,6 +734,8 @@ EXPECT = {
     ("amplicon", "Train a classifier", 0): ["Classifier trained", "my_v4_classifier.model"],
     ("tmb", None, 0): ["TMB measured", "mutations per megabase", "HCC1395"],
     ("tmb", None, 1): ["coding mutations per megabase", "not in a coding sequence"],
+    ("ai", "Describe your problem", 0): ["The AI's answer", "name chromosomes differently", "tokens in"],
+    ("ai", "Let the AI run a task", 0): ["The task went to the AI"],
 }
 # The warnings a form stops with; an example must not hit any of them.
 STOPS = ("Select ", "cannot be", "must be", "Type the", "Type an", "is needed")
@@ -681,6 +778,117 @@ for (page, task), items in EXAMPLES.items():
 check("the examples write only inside mmgen_examples/", set(os.listdir(".")) - before <= {"mmgen_examples"},
       sorted(set(os.listdir(".")) - before))
 check("the example files are written once, not on every pick", examples[1]["make_examples"]() is False)
+
+# ---------------------------------------------------------------------------
+# The AI: screen 29 and the panel at the bottom of the other screens, with
+# the stand-in for Claude above (nothing is sent anywhere).
+# ---------------------------------------------------------------------------
+print("== screen 29 and the AI panel")
+ai_page = lambda: "ai"  # noqa: E731
+r = cell_run(ui.ai_page_ui, get_page=ai_page, set_page=lambda _: None)
+check("  screen 29 opens with its three tasks", not isinstance(r, BaseException) and "Describe your problem" in shown(r)
+      and "Let the AI run a task" in shown(r) and "The AI can be wrong" in shown(r), shown(r)[:300])
+AI_SETTINGS.update(consent=False)
+r = cell_run(ui.ai_page_status, get_page=ai_page)
+check("  the status line says the AI is off before the agreement", "AI: off" in shown(r), shown(r)[:200])
+# Settings: saved into the dict, the redraw counter moves, nothing is sent.
+n_req, rev = len(AI_REQUESTS), AI_REV.value
+settings = Choice("Settings and the session record")
+r = cell_run(ui.ai_page_form, get_page=ai_page, ai_task=settings)
+check("  the settings form has the key, the model and the two agreements",
+      not isinstance(r, BaseException) and "form_ai" in r[1] and "Anthropic API key" in shown(r) and "human-genome results" in shown(r), shown(r)[:300])
+r = cell_run(ui.ai_page_backend, get_page=ai_page, ai_task=settings,
+             form_ai=Form(key=" sk-test ", model="claude-sonnet-5-5", effort="high", level="researcher", consent=True, human=True))
+check("  saving the settings: kept in memory, redrawn, nothing sent",
+      "Saved for this session" in shown(r) and AI_SETTINGS["key"] == "sk-test" and AI_SETTINGS["model"] == "claude-sonnet-5-5"
+      and AI_SETTINGS["human"] and AI_REV.value == rev + 1 and len(AI_REQUESTS) == n_req, (AI_SETTINGS, shown(r)[:200]))
+r = cell_run(ui.ai_page_backend, get_page=ai_page, ai_task=settings,
+             form_ai=Form(key="", model="claude-opus-5-5", effort="medium", level="student", consent=False, human=True))
+check("  the human-genome agreement needs the first one", not AI_SETTINGS["consent"] and not AI_SETTINGS["human"], AI_SETTINGS)
+AI_SETTINGS.update(consent=True, human=False, key="")
+
+# The panel: a session record as the engine, a validation run on screen 10.
+rec = ai_lib.Recorder(mmg)
+val = Choice(None)
+r = cell_run(ui.ai_panel_ui, get_page=lambda: "validate", mmg=rec, set_page=lambda _: None)
+check("  the panel is at the bottom of a screen, with the form", not isinstance(r, BaseException) and "form_ai_ask" in r[1]
+      and "Ask the AI about this result" in raw(r) and "What is sent to Anthropic" in raw(r), raw(r)[:300])
+form_ask = r[1]["form_ai_ask"]
+for page in ("home", "guide", "ai"):
+    rr = cell_run(ui.ai_panel_ui, get_page=lambda p=page: p, mmg=rec, set_page=lambda _: None)
+    check(f"  no panel on '{page}'", not isinstance(rr, BaseException) and rr[0] is None and "form_ai_ask" not in rr[1], repr(rr)[:200])
+rr = cell_run(ui.ai_panel_ui, get_page=lambda: "validate", mmg=mmg, set_page=lambda _: None)
+check("  no panel with an engine that has no session record", not isinstance(rr, BaseException) and rr[0] is None, repr(rr)[:200])
+ask = Form(question="", level="student")
+r = cell_run(ui.ai_panel_answer, get_page=lambda: "validate", mmg=rec, form_ai_ask=ask)
+check("  asking before any result: says to run a task first", stopped(r, "Run a task on this screen first"), shown(r)[:200])
+rec.context = "validate"
+vrep = rec.validate_file(os.path.abspath("mmgen_examples/with_problems.vcf"))
+n_req = len(AI_REQUESTS)
+r = cell_run(ui.ai_panel_answer, get_page=lambda: "validate", mmg=rec, form_ai_ask=ask)
+req = AI_REQUESTS[-1] if len(AI_REQUESTS) > n_req else {}
+user = req.get("messages", [{}])[0].get("content", "")
+check("  the answer is shown, with the model and the tokens", "numbers look as expected" in shown(r) and "validate_file" in shown(r)
+      and "tokens in" in shown(r), shown(r)[:300])
+check("  what went out: the file name, never the folder", "with_problems.vcf" in user and os.path.abspath(".") not in user
+      and "mmgen_examples" not in user and str(vrep["errors"]) in user, user[:400])
+check("  the request: model, effort and fallbacks from the settings", req.get("model") == "claude-opus-5-5"
+      and req.get("output_config") == {"effort": "medium"} and req.get("fallbacks") == "default", {k: req.get(k) for k in ("model", "fallbacks")})
+AI_SETTINGS.update(consent=False)
+r = cell_run(ui.ai_panel_answer, get_page=lambda: "validate", mmg=rec, form_ai_ask=ask)
+check("  without the agreement nothing is sent", stopped(r, "The AI is off") and len(AI_REQUESTS) == n_req + 1, shown(r)[:200])
+r = cell_run(ui.ai_panel_ui, get_page=lambda: "validate", mmg=rec, set_page=lambda _: None)
+check("  and the panel offers the settings instead of the form", "The AI is off" in raw(r) and "Open the AI settings" in raw(r), raw(r)[:300])
+AI_SETTINGS.update(consent=True)
+# A human-genome result needs the second agreement, and the answer carries the notice.
+rec.calls.append(ai_lib.Call("relatedness", (["family.vcf"],), {}, result={"pairs": [{"a": "child", "b": "father", "kinship": 0.25}]},
+                             context="kin"))
+r = cell_run(ui.ai_panel_answer, get_page=lambda: "kin", mmg=rec, form_ai_ask=ask)
+check("  a human-genome result is not sent without the second agreement", stopped(r, "human-genome result"), shown(r)[:200])
+AI_SETTINGS.update(human=True)
+r = cell_run(ui.ai_panel_answer, get_page=lambda: "kin", mmg=rec, form_ai_ask=Form(question="Is he the father?", level="researcher"))
+check("  with it: the answer, and the notice that the authors take no responsibility",
+      "take no responsibility" in shown(r) and "Is he the father?" in shown(r) and "human-genome result" in AI_REQUESTS[-1]["messages"][0]["content"],
+      shown(r)[:300])
+AI_SETTINGS.update(human=False)
+
+# Describe your problem: the plan, the script checked against the catalog, the downloads.
+plan = Choice("Describe your problem")
+r = cell_run(ui.ai_page_backend, get_page=ai_page, ai_task=plan, mmg=rec,
+             form_ai=Form(problem="My two VCFs share nothing.", folder="mmgen_examples", level="student"))
+check("  the plan is shown, with the script and the answer to download", "name chromosomes differently" in shown(r)
+      and "mmgen_plan.py" in raw(r) and "mmgen_plan.md" in raw(r) and "Check the script" not in shown(r), shown(r)[:300])
+check("  the AI saw the names of the example files", "cohort.vcf" in AI_REQUESTS[-1]["messages"][0]["content"])
+r = cell_run(ui.ai_page_backend, get_page=ai_page, ai_task=plan, mmg=rec, form_ai=Form(problem="  ", folder=".", level="student"))
+check("  an empty problem: a warning, nothing sent", stopped(r, "Type your problem first"), shown(r)[:200])
+
+# The agent: a round proposed, nothing run until approved, then the report.
+agent_task = Choice("Let the AI run a task")
+AGENT.value = None
+r = cell_run(ui.ai_page_backend, get_page=ai_page, ai_task=agent_task, mmg=rec,
+             form_ai=Form(task="Validate with_problems.vcf.", folder="mmgen_examples", human=False, rounds=4))
+held = AGENT.value
+check("  the agent starts and proposes a round", "The task went to the AI" in shown(r) and held is not None and held[0].pending
+      and held[0].pending[0].name == "validate_file", shown(r)[:300])
+n_calls = len(rec.calls)
+rec.context = "ai"  # the interface sets it when screen 29 opens
+r = cell_run(ui.ai_page_agent_view, get_page=ai_page, ai_task=agent_task, get_agent=lambda: held)
+check("  the proposal is shown with the buttons; nothing has run", "Proposed calls" in shown(r) and "mmg.validate_file" in shown(r)
+      and "btn_agent_run" in r[1] and len(rec.calls) == n_calls, shown(r)[:300])
+r = cell_run(ui.ai_page_agent_act, btn_agent_run=Choice(True), btn_agent_decline=Choice(False), get_agent=lambda: held)
+agent = AGENT.value[0]
+check("  approved: the call runs (and is recorded) and the AI writes its report",
+      agent.done and "validator found" in agent.final_text and rec.calls[-1].name == "validate_file" and rec.calls[-1].page == "ai"
+      and AGENT.value[1] == 1, (agent.done, agent.final_text, rec.calls[-1].name))
+r = cell_run(ui.ai_page_agent_view, get_page=ai_page, ai_task=agent_task, get_agent=lambda: AGENT.value)
+check("  the view shows the result and the report", "The agent's report" in shown(r) and "mmgen_agent_transcript.md" in raw(r), shown(r)[:300])
+
+# The session record: every call, as a table and as a script.
+r = cell_run(ui.ai_page_session, get_page=ai_page, ai_task=settings, mmg=rec)
+check("  the session record lists the calls and offers the script", "The session record" in shown(r) and "validate_file" in raw(r)
+      and "mmgen_session.py" in raw(r), shown(r)[:300])
+check("  the script repeats the calls", f"r = mmg.validate_file({os.path.abspath('mmgen_examples/with_problems.vcf')!r})" in rec.script(),
+      rec.script()[:500])
 
 print()
 print(f"{done - len(failures)} of {done} checks passed")

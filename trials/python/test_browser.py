@@ -6,7 +6,7 @@
 # test_ui.py cannot see: the navigation, the rendered components, the websocket
 # and screen 2 (clustering).
 #
-# Usage: python trials/python/test_browser.py ui_main.py [folder_for_screenshots]
+# Usage: python trials/python/test_browser.py python/multimerge_genomics/ui_main.py [folder_for_screenshots]
 #
 # Needs marimo, polars, numpy, scikit-learn, playwright and the extension
 # installed. `playwright install` is not needed: the test uses the browser the
@@ -50,7 +50,7 @@ def check(name, cond, detail=""):
 
 
 if len(sys.argv) < 2:
-    sys.exit("Usage: python trials/python/test_browser.py ui_main.py [folder_for_screenshots]")
+    sys.exit("Usage: python trials/python/test_browser.py python/multimerge_genomics/ui_main.py [folder_for_screenshots]")
 UI_PATH = os.path.abspath(sys.argv[1])
 SHOTS = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else None
 if SHOTS:

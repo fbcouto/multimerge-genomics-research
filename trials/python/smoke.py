@@ -26,6 +26,9 @@ def check(name, cond, detail=""):
 info = mmg.engine_info()
 print("engine_info:", info)
 check("engine_info has the expected keys", all(k in info for k in ("version", "gpu_compiled", "gpu", "gpu_memory_mb", "threads")))
+from multimerge_genomics import ui as _ui
+check("the web interface comes with the package (mmgen-ui)", os.path.exists(_ui.app_path())
+      and "@app.cell" in open(_ui.app_path(), encoding="utf-8").read() and "marimo" in _ui.command())
 
 random.seed(42)
 T = tempfile.mkdtemp(prefix="mmg_smoke_")

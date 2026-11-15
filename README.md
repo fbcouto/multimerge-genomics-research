@@ -1,5 +1,7 @@
 # 🧬 MMGEN: MultiMerge Genomics Engine Suite
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
+
 ![MMGEN main menu](assets/menu.png)
 
 MMGEN is a free, open-source genomics toolkit written in **Rust**, with optional **CUDA** acceleration and a **Python** API. It has two families of tools:
@@ -7,7 +9,7 @@ MMGEN is a free, open-source genomics toolkit written in **Rust**, with optional
 * **Everyday file tools that work at any size** — validate a file and say what is wrong with it, fix `chr1` versus `1`, tell GRCh37 from GRCh38; sort, index and query by region; merge, intersect, subtract, complement, find the closest and measure the coverage of intervals; count, filter and normalize variants; measure the quality of FASTQ reads (with an HTML report) and trim them; count k-mers. On VCF, BED, GFF/GTF, SAM/BAM, FASTA and FASTQ files that do not fit in memory, read and written as plain text, gzip (BGZF), BAM or Parquet.
 * **K-mer modules** — ingestion and quality filtering, De Bruijn assembly, mutation detection with Bloom filters, translation and scaffolding, running on an NVIDIA GPU when there is one and on the CPU when there is not.
 
-You can use it from Python, from a reactive web interface (marimo), or from a Google Colab notebook with nothing installed on your machine.
+You can use it from Python or from a web interface with 29 screens, **on your own computer or on Google Colab** (free or paid) with nothing installed on your machine: see [Two ways to run it](#-two-ways-to-run-it).
 
 MMGEN is free (Apache 2.0). If it is useful to you, you can [support its development](#donate) — entirely optional.
 
@@ -155,6 +157,43 @@ An assistant built on Claude, Anthropic's AI, for students who know the question
 
 The same pieces are open to Python, in `multimerge_genomics.ai`: `catalog()` and `tool_definitions()` (every tool as a Claude tool definition), `Assistant` (`explain`, `plan` and their streaming forms), `Agent` (the approval loop), `Recorder` (the session record) and `check_script` (an answer's Python checked against the catalog).
 
+## 🎒 Two ways to run it
+
+| | **On your computer** | **On Google Colab** |
+| :--- | :--- | :--- |
+| What you need | Windows 10/11 (64-bit) or Linux (x86-64, glibc 2.28+), Python 3.10+, 4 GB of RAM (8 GB or more for large files); an NVIDIA GPU is optional | A browser and a Google account |
+| Your data | stays on your machine | is uploaded to the Colab machine (or read from your Google Drive) |
+| Cost | free | free plan, or a paid plan of your choice for more |
+| Best for | your own files, any size your disk holds | a machine that cannot run it (a Chromebook, a tablet, a Mac for now), a class, a GPU |
+
+### On your computer
+
+```bash
+python -m venv mmgen
+mmgen\Scripts\activate           # Windows   (Linux: source mmgen/bin/activate)
+
+# Windows, without an NVIDIA GPU (or with one: the CUDA build below)
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-cp310-abi3-win_amd64.whl"
+# Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-1cuda-cp310-abi3-win_amd64.whl"
+# Linux (CUDA build; also runs without a GPU)
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+
+cd folder/with/your/files
+mmgen-ui                           # the web interface opens in your browser
+```
+
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the pre-release [v0.1.0-alpha.1](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v0.1.0-alpha.1); on macOS, build from source for now (below).
+
+### On Google Colab: free or paid, your choice
+
+[Open the notebook in Colab](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb), then *Runtime → Change runtime type → GPU* if you want one, and run its cells: section 1 installs MMGEN on the Colab machine and section 9 opens the web interface. You work in your browser; the tools run on Google's machine.
+
+* **Free plan** — everything works. The web interface opens inside the notebook (Colab's free-plan rules do not allow using a runtime mainly through a web page outside the notebook). GPUs and session time depend on availability.
+* **Paid plan** — [Colab Pro, Pro+ or Pay As You Go](https://colab.research.google.com/signup), if you want it: faster GPUs (L4, A100), more memory, longer sessions, and the web interface can also open in its own browser tab, through Colab's own link that works only for you.
+
+Either way, the files you write on Colab are gone when the session ends: download them, or work in a folder of your Google Drive.
+
 ---
 
 ## 💻 Quick Start
@@ -165,7 +204,7 @@ The same pieces are open to Python, in `multimerge_genomics.ai`: `catalog()` and
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Pre-built wheels are not published yet; for now, build from source.
+Ready-made packages of the pre-release v0.1.0-alpha.1 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -237,8 +276,8 @@ Every function has a docstring: `help(mmg.sort_genomic)`.
 
 ### Launch the web interface
 ```bash
-pip install marimo polars numpy scikit-learn pyarrow
-marimo run ui_main.py
+pip install "multimerge-genomics[ui]"     # or, after maturin develop: pip install marimo polars numpy scikit-learn pyarrow
+mmgen-ui                                 # or: marimo run python/multimerge_genomics/ui_main.py
 ```
 
 The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21), research, microbiology and oncology (22–28), and the optional AI assistant (29). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
@@ -248,17 +287,15 @@ The interface lists the files of the folder it is started from, and writes its r
 ![Variant detection screen](assets/variant_calling.png)
 
 ### Google Colab
-[`colab/MultiMerge_Genomics_Colab.ipynb`](colab/MultiMerge_Genomics_Colab.ipynb) runs the validation, naming, sorting and interval tools in the browser: one form per task, with the code one double-click away. It creates its own example files, some with defects planted on purpose. Until a wheel is published, its first cell asks for a Linux wheel (`.whl`) of the package, which you can build with `maturin build` on any Linux machine.
+[`colab/MultiMerge_Genomics_Colab.ipynb`](colab/MultiMerge_Genomics_Colab.ipynb) ([open it in Colab](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)) installs the package of the pre-release on the Colab machine, runs the validation, naming, sorting and interval tools as forms (the code one double-click away, on example files it creates, some with defects planted on purpose), opens the whole web interface (section 9) and asks the AI assistant (section 10). See [Two ways to run it](#-two-ways-to-run-it) for the free and paid plans.
 
-#### The web interface on Colab
+#### The web interface on Colab, by hand
 
-The marimo interface runs on Colab too, displayed inside the notebook. With the package installed and `ui_main.py` uploaded to the session (put your data files in the same folder), run this in a cell:
+With the package installed (`pip install "multimerge-genomics[ui] @ <URL of the Linux .whl>"`), in a cell:
 
 ```python
-!pip install -q marimo
-
-import subprocess, time, urllib.request
-subprocess.Popen(["python", "-m", "marimo", "run", "ui_main.py", "--headless", "--port", "2718", "--no-token"], cwd="/content")
+import subprocess, sys, time, urllib.request
+subprocess.Popen([sys.executable, "-m", "multimerge_genomics.ui", "--headless", "--port", "2718"])
 for _ in range(60):  # wait until the server answers
     try:
         urllib.request.urlopen("http://127.0.0.1:2718/", timeout=2)
@@ -267,12 +304,13 @@ for _ in range(60):  # wait until the server answers
         time.sleep(1)
 
 from google.colab import output
-output.serve_kernel_port_as_iframe(2718, height=900)
+output.serve_kernel_port_as_iframe(2718, height=900)           # inside the notebook (every plan)
+# print(output.eval_js("google.colab.kernel.proxyPort(2718)"))  # a link for its own tab (paid plans)
 ```
 
 > **Blank output? Allow third-party cookies for Colab.** Colab shows the interface in an iframe that depends on them. When the browser blocks them, the cell runs without any error and the output simply stays empty. In Chrome, click the crossed-out eye icon at the right end of the address bar and allow third-party cookies for the site; the page reloads, the session stays connected, and running the cell again shows the menu.
 
-`--no-token` is fine here: the port is reachable only through your own Colab session.
+The server answers only inside the Colab machine (`127.0.0.1`); Colab's own proxy brings it to your browser, for your account only. No outside tunnel is needed (Colab's rules forbid connecting to remote proxies).
 
 ---
 
@@ -403,9 +441,9 @@ cargo run --release --bin amplicon    # 178 tests: 16S ASVs, RDP classifier, div
 python trials/python/smoke.py                      # smoke test, no external data
 python trials/python/crosscheck.py                 # against pyarrow, polars, biopython, bamnostic, cutadapt
                                                    #   (and samtools, bcftools, bedtools, tabix, jellyfish when present)
-python trials/python/test_ui.py ui_main.py         # the interface's cells, without a browser
+python trials/python/test_ui.py                    # the interface's cells, without a browser
 python trials/python/test_ai.py                    # the AI layer and the MCP server, with a stand-in for Claude (no key, nothing sent)
-python trials/python/test_browser.py ui_main.py    # the interface in a real browser (needs playwright)
+python trials/python/test_browser.py python/multimerge_genomics/ui_main.py   # the interface in a real browser (needs playwright)
 python trials/python/gpu_test.py 1 10              # GPU against CPU against numpy; sizes in millions
 ```
 

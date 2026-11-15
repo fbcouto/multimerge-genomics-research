@@ -30,9 +30,13 @@ classifiers = [
 # MCP server are optional: the tools themselves need neither.
 ai = ["anthropic>=2.8"]
 mcp = ["mcp>=2.3"]
+# The web interface (mmgen-ui). marimo is held to the versions it was tested
+# with (0.23.11 to 0.25.x): a newer one may change what the screens rely on.
+ui = ["marimo>=0.23.11,<0.26", "polars>=1.0", "numpy", "scikit-learn>=1.3", "pyarrow"]
 
 [project.scripts]
 mmgen-mcp = "multimerge_genomics.mcp_server:main"
+mmgen-ui = "multimerge_genomics.ui:main"
 
 [tool.maturin]
 bindings = "pyo3"

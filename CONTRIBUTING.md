@@ -45,7 +45,7 @@ A wrong result with no error message is the most serious kind of bug here. Pleas
    cd ..
    python trials/python/smoke.py                      # the Python API, no external data
    python trials/python/crosscheck.py                 # against independent tools (pyarrow, polars, biopython, bamnostic, cutadapt...)
-   python trials/python/test_ui.py ui_main.py         # the interface's cells (needs marimo, polars, numpy)
+   python trials/python/test_ui.py         # the interface's cells (needs marimo, polars, numpy)
    ```
 4. Open a pull request against `main`, describing what changed and how you tested it.
 

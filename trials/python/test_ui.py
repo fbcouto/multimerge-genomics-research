@@ -4,7 +4,7 @@
 # whose outputs are compared with the direct call to the API, and every example
 # of every screen (picked, the form filled in, run). Screen 2 (clustering) and
 # the navigation are covered by test_browser.py, which drives a real browser.
-# Usage: python trials/python/test_ui.py ui_main.py
+# Usage: python trials/python/test_ui.py [python/multimerge_genomics/ui_main.py]
 # Needs marimo, polars, numpy and the extension installed.
 import asyncio
 import glob
@@ -35,7 +35,8 @@ def check(name, cond, detail=""):
     print(("  ok    " if cond else "  FAIL  ") + name + ("" if cond else f"  {detail}"))
 
 
-ui_path = os.path.abspath(sys.argv[1])
+# The interface comes with the package: python/multimerge_genomics/ui_main.py (the default).
+ui_path = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "python", "multimerge_genomics", "ui_main.py"))
 spec = importlib.util.spec_from_file_location("ui_main", ui_path)
 ui = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ui)

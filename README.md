@@ -1,6 +1,6 @@
 # 🧬 MMGEN: MultiMerge Genomics Engine Suite
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20417492.svg)](https://doi.org/10.5281/zenodo.20417492) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
 
 ![MMGEN main menu](assets/menu.png)
 
@@ -53,8 +53,8 @@ Every module has a screen in the web interface, and every function is also avail
 * **Quality filter:** FASTQ reads whose mean Phred quality is below the threshold are dropped before their k-mers are extracted.
 
 ### 🧬 2. Taxonomic Clustering *(experimental)*
-* Computes a MinHash signature per k-mer, projects it with PCA and groups the points with HDBSCAN.
-* This is the oldest module and the least validated one: it works on 64-bit k-mers (`k=31`) read from text files, and its clustering quality has not been assessed. Treat it as a demonstration.
+* Groups DNA by its composition, as metagenome binning tools (MetaBAT, CONCOCT) do: sequences (genomes, contigs, long reads) are cut into windows, each window is described by the frequencies of its 136 tetranucleotides (both strands together), and the windows are projected with PCA and grouped with HDBSCAN, with a table of where each group's windows came from and a scatter of the first two components.
+* Composition separates species, not strains: on four bacterial isolates (two *Klebsiella pneumoniae*, two *Staphylococcus aureus*, 10 kb windows) it gives two groups, one per species (57% and 33% GC), with the two strains of each together; three simulated genomes of equal GC but different 4-base word preferences come out as three groups of 20 windows each.
 
 ### 🧩 3. *De Novo* Assembly (De Bruijn Graph)
 * Builds the De Bruijn graph of the k-mers in memory and walks its unbranched paths to produce contigs (unitigs), written to a FASTA file.
@@ -161,29 +161,33 @@ The same pieces are open to Python, in `multimerge_genomics.ai`: `catalog()` and
 
 | | **On your computer** | **On Google Colab** |
 | :--- | :--- | :--- |
-| What you need | Windows 10/11 (64-bit) or Linux (x86-64, glibc 2.28+), Python 3.10+, 4 GB of RAM (8 GB or more for large files); an NVIDIA GPU is optional | A browser and a Google account |
+| What you need | Windows 10/11 (64-bit), macOS 11+ (Apple Silicon or Intel) or Linux (x86-64), Python 3.10+, 4 GB of RAM (8 GB or more for large files); an NVIDIA GPU is optional | A browser and a Google account |
 | Your data | stays on your machine | is uploaded to the Colab machine (or read from your Google Drive) |
 | Cost | free | free plan, or a paid plan of your choice for more |
-| Best for | your own files, any size your disk holds | a machine that cannot run it (a Chromebook, a tablet, a Mac for now), a class, a GPU |
+| Best for | your own files, any size your disk holds | a machine that cannot run it (a Chromebook, a tablet, little memory), a class, a GPU |
 
 ### On your computer
 
 ```bash
 python -m venv mmgen
-mmgen\Scripts\activate           # Windows   (Linux: source mmgen/bin/activate)
+mmgen\Scripts\activate           # Windows   (macOS, Linux: source mmgen/bin/activate)
 
 # Windows, without an NVIDIA GPU (or with one: the CUDA build below)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-win_amd64.whl"
 # Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-1cuda-cp310-abi3-win_amd64.whl"
-# Linux (CUDA build; also runs without a GPU)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v0.1.0-alpha.1/multimerge_genomics-0.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-1cuda-cp310-abi3-win_amd64.whl"
+# Linux (CUDA build; also runs without a GPU; glibc 2.28 or newer)
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+# macOS, Apple Silicon (M1 and later)
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-macosx_11_0_arm64.whl"
+# macOS, Intel
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-macosx_10_12_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the pre-release [v0.1.0-alpha.1](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v0.1.0-alpha.1); on macOS, build from source for now (below).
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.0.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.0.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
 
 ### On Google Colab: free or paid, your choice
 
@@ -204,7 +208,7 @@ Either way, the files you write on Colab are gone when the session ends: downloa
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Ready-made packages of the pre-release v0.1.0-alpha.1 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
+Ready-made packages of the release v2.0.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -237,7 +241,7 @@ To build a wheel instead: `maturin build --release --locked -o dist`, then `pip 
 import multimerge_genomics as mmg
 
 print(mmg.engine_info())
-# {'version': '0.1.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
+# {'version': '2.0.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
 
 # What is wrong with this file?
 report = mmg.validate_file("sample.vcf.gz")
@@ -282,12 +286,12 @@ mmgen-ui                                 # or: marimo run python/multimerge_geno
 
 The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21), research, microbiology and oncology (22–28), and the optional AI assistant (29). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
 
-**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 115 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, the mothur MiSeq SOP, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` and `mmgen_demo_research_v3.zip`, unpacked into `mmgen_examples/` the first time, from the folder the interface runs in.
+**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 116 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` (49 MB) and `mmgen_demo_research_v4.zip` (46 MB), downloaded from the release the first time an example needs them (or taken from the folder the interface runs in) and unpacked into `mmgen_examples/`. The 16S examples of screen 27 use the mothur MiSeq SOP reads, which carry no explicit licence: they are in a third pack that is not published.
 
 ![Variant detection screen](assets/variant_calling.png)
 
 ### Google Colab
-[`colab/MultiMerge_Genomics_Colab.ipynb`](colab/MultiMerge_Genomics_Colab.ipynb) ([open it in Colab](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)) installs the package of the pre-release on the Colab machine, runs the validation, naming, sorting and interval tools as forms (the code one double-click away, on example files it creates, some with defects planted on purpose), opens the whole web interface (section 9) and asks the AI assistant (section 10). See [Two ways to run it](#-two-ways-to-run-it) for the free and paid plans.
+[`colab/MultiMerge_Genomics_Colab.ipynb`](colab/MultiMerge_Genomics_Colab.ipynb) ([open it in Colab](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)) installs the package of the latest release on the Colab machine, runs the validation, naming, sorting and interval tools as forms (the code one double-click away, on example files it creates, some with defects planted on purpose), opens the whole web interface (section 9) and asks the AI assistant (section 10). See [Two ways to run it](#-two-ways-to-run-it) for the free and paid plans.
 
 #### The web interface on Colab, by hand
 
@@ -443,6 +447,7 @@ python trials/python/crosscheck.py                 # against pyarrow, polars, bi
                                                    #   (and samtools, bcftools, bedtools, tabix, jellyfish when present)
 python trials/python/test_ui.py                    # the interface's cells, without a browser
 python trials/python/test_ai.py                    # the AI layer and the MCP server, with a stand-in for Claude (no key, nothing sent)
+python trials/python/test_exercises.py             # the class exercises: made, solved on the screens' tools, graded
 python trials/python/test_browser.py python/multimerge_genomics/ui_main.py   # the interface in a real browser (needs playwright)
 python trials/python/gpu_test.py 1 10              # GPU against CPU against numpy; sizes in millions
 ```
@@ -451,7 +456,7 @@ Every Rust test compares the output with an independent reference written in the
 
 ## 🚧 Status and known limitations
 
-MMGEN is alpha software (version 0.1.0). The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
+MMGEN 2.0.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
 
 * **The k-mer modules 1–7 work in memory, and their k-mers are strand-specific.** Assembly and variant detection suit same-strand input, such as an assembled reference against a mutated copy of it. `count_kmers` (module 13) is the exception: any size, canonical.
 * **Variant detection reports k-mers**, not VCF records.
@@ -465,6 +470,38 @@ MMGEN is alpha software (version 0.1.0). The file tools of modules 8–14 are th
 * Reading and parsing lines uses a single core; that is where sorting time goes. Compressing and decompressing BGZF uses every core.
 * Module 2 (clustering) is experimental — see above.
 * The public API, the messages, the interface and this documentation are in English. Code comments and internal names are still in Portuguese.
+
+## 📓 Notebooks for researchers
+
+[`notebooks/`](notebooks/) is a starting collection of short notebooks for common problems, each runnable as it is on public demo data (or on Colab, one click) and written to be adapted to your own files: two VCFs that will not match, the variants of a gene list, paired-end read QC and trimming, a VCF's summary and filtering, RNA-seq differential expression, SARS-CoV-2 mutations and tree, resistance genes of bacterial isolates, and the sample QC of a human cohort. Each ends with checks of the result and a methods paragraph with the version and the parameters used. Add your own problems in your own folders: `python notebooks/new_problem.py my_problems/my_question "My question"` starts one from the template.
+
+## 🎓 For teachers: exercises with data of their own for every student
+
+`mmgen-exercises` (it comes with the package) gives every student a folder of data made only for them, with the questions, and gives the teacher the answer key, computed by MMGEN on each student's data. Students cannot copy each other's numbers, and the grading is automatic.
+
+```bash
+mmgen-exercises make --students students.txt --out genomics_2026 --course "Genomics 2026" --zip
+# ...the students answer in their answers.csv and hand it back...
+mmgen-exercises grade --key genomics_2026/_teacher/answer_key.csv --answers genomics_2026 --out grades.csv
+```
+
+| Exercise | The student... | Screen(s) |
+| :--- | :--- | :--- |
+| `snps` | compares a patient's genome with the healthy one and counts the planted SNPs | 1 and 4 |
+| `broken_vcf` | finds out why a program refuses a VCF (out of order, spaces instead of tabs, another chromosome naming) | 10 |
+| `adapter` | finds which adapter was used and how many reads survive trimming | 12 |
+| `paternity` | finds the father of a child among three simulated men, one of them the father's brother | 16 |
+| `expression` | finds the genes a treatment changed, in an RNA-seq count table | 22 |
+
+The course name and the student's name are the seed: the same pair always gives the same data (a lost folder can be made again), and a new course gives everyone new data. Pick some of the exercises with `--exercises snps,adapter`. Every file is simulated: no real person or organism. From Python: `multimerge_genomics.exercises.make_class(...)` and `grade(...)`.
+
+## 📑 How to cite
+
+If MMGEN helps your research or your teaching, please cite it (GitHub's *Cite this repository* button gives the same, from [CITATION.cff](CITATION.cff)):
+
+> Couto F. *MMGEN: MultiMerge Genomics* (version 2.0.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
+
+The DOI always resolves to the latest version on Zenodo, where each version has its own DOI too. Please also cite the methods a tool reproduces (DESeq2, KING, MAGeCK, sourmash, Nextclade, cutadapt...), named in the sections above.
 
 ## 💬 Feedback and contributions
 

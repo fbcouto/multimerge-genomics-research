@@ -6,8 +6,10 @@
 # Every module works (with the same results); whoever wants the GPU builds on
 # their own machine with `maturin develop --release`.
 #
-# WRITTEN ON 2026-11-13 AND NOT YET RUN: nothing has been pushed to GitHub.
-# Before trusting a tag, run it once by hand (Actions -> wheels -> Run workflow).
+# First complete run on 2026-11-15 (by hand, Actions -> wheels -> Run workflow):
+# the four wheels built, and the smoke test passed on Linux, Windows and macOS
+# arm64. On a `v*` tag it also creates the GitHub Release with these wheels;
+# the CUDA builds (Linux, Windows) are added to the release by hand.
 name: wheels
 
 on:

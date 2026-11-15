@@ -37,6 +37,7 @@ ui = ["marimo>=0.23.11,<0.26", "polars>=1.0", "numpy", "scikit-learn>=1.3", "pya
 [project.scripts]
 mmgen-mcp = "multimerge_genomics.mcp_server:main"
 mmgen-ui = "multimerge_genomics.ui:main"
+mmgen-exercises = "multimerge_genomics.exercises:main"
 
 [tool.maturin]
 bindings = "pyo3"

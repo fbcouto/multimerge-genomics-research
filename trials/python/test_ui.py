@@ -615,7 +615,7 @@ check("  the guide shows the table of tests, their blind spots and the notice",
 print("== the examples of every screen: picked, filled in, run")
 SCREENS = {
     "qc": (ui.qc_page_form, ui.qc_page_backend, "form_qc", None),
-    "cluster": (ui.cluster_page_form, ui.cluster_page_backend, "form_samples", None),
+    "cluster": (ui.cluster_page_form, ui.cluster_page_backend, "form_cluster", None),
     "assembly": (ui.assembly_page_form, ui.assembly_page_backend, "form_assembly", None),
     "variant": (ui.variant_page_form, ui.variant_page_backend, "form_variant", None),
     "annotation": (ui.annotation_page_form, ui.annotation_page_backend, "form_annotation", None),
@@ -647,6 +647,10 @@ import shutil
 RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
 if RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO):
     shutil.copy(RESEARCH_DEMO, os.path.basename(RESEARCH_DEMO))
+# The 16S examples (screen 27) need their own pack, not published (MMG_16S_DEMO).
+DEMO_16S = os.environ.get("MMG_16S_DEMO")
+if DEMO_16S and os.path.exists(DEMO_16S):
+    shutil.copy(DEMO_16S, os.path.basename(DEMO_16S))
 # The human-genome examples need the demo data (MMG_HUMAN_DEMO = the path of
 # mmgen_demo_human_v1.zip) and, for screen 19, PharmCAT (PHARMCAT_JAR = the
 # pharmcat-<version>-all.jar, with its positions file next to it).
@@ -664,7 +668,8 @@ OPS = ("merge", "intersect", "subtract", "complement", "closest", "coverage", "s
 # What the result of some examples must say (in the page text, without tags).
 EXPECT = {
     ("qc", None, 0): ["Distinct k-mers extracted: 29,970"],
-    ("cluster", None, 0): ["4,000"],
+    ("cluster", None, 0): ["Groups found: 3", "species_A (20)", "species_B (20)", "species_C (20)"],
+    ("cluster", None, 1): ["kpneumoniae_KPNIH1_KPC-3", "saureus_USA300_MRSA"],
     ("assembly", None, 0): ["Longest contig: 30,000 bp"],
     ("variant", None, 0): ["only in the patient): 93"],
     ("annotation", None, 0): ["MSTHEGENEISREAD"],
@@ -752,7 +757,11 @@ for (page, task), items in EXAMPLES.items():
         if human and not (HUMAN_DEMO and os.path.exists(HUMAN_DEMO)):
             print(f"  skip  {page}: {label} (set MMG_HUMAN_DEMO to the demo data zip)")
             continue
-        research = any(isinstance(x, str) and x.startswith("mmgen_examples/research") for x in flat)
+        if any(isinstance(x, str) and x.startswith("mmgen_examples/research_16s/") for x in flat) \
+                and not (DEMO_16S and os.path.exists(DEMO_16S)):
+            print(f"  skip  {page}: {label} (set MMG_16S_DEMO to the 16S demo data zip)")
+            continue
+        research = any(isinstance(x, str) and x.startswith("mmgen_examples/research/") for x in flat)
         if research and not (RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO)):
             print(f"  skip  {page}: {label} (set MMG_RESEARCH_DEMO to the research demo zip)")
             continue

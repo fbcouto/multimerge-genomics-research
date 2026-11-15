@@ -198,6 +198,25 @@ fn sort_merge_bytes<'py>(py: Python<'py>, bytes_a: &[u8], bytes_b: &[u8], device
 // ---------------------------------------------------------
 // MÓDULO 1: QC E LIMPEZA FASTQ/FASTA EM LOTE (BATCH U128)
 // ---------------------------------------------------------
+// Confere as entradas dos leitores de k-mers antes de começar: um caminho
+// errado era um `expect` dentro do Rayon (pânico, que no Python chega como
+// PanicException e as telas não pegavam), e k = 0 entrava em pânico no
+// `windows(0)`. Agora são erros comuns, com o nome do arquivo.
+fn confere_entradas_kmer(paths: &[String], k: u8) -> PyResult<()> {
+    if k == 0 || k > 63 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("k must be between 1 and 63 (got {k})")));
+    }
+    if paths.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err("no input file given"));
+    }
+    for p in paths {
+        if let Err(e) = std::fs::File::open(p) {
+            return Err(pyo3::exceptions::PyOSError::new_err(format!("cannot open {p}: {e}")));
+        }
+    }
+    Ok(())
+}
+
 /// Reads one or more FASTQ files (plain text or `.gz`) and returns their
 /// distinct k-mers, sorted, as raw bytes: 16 bytes (one unsigned 128-bit
 /// integer) per k-mer.
@@ -206,6 +225,7 @@ fn sort_merge_bytes<'py>(py: Python<'py>, bytes_a: &[u8], bytes_b: &[u8], device
 /// up to 63. The files are read in parallel.
 #[pyfunction]
 fn read_fastq_batch<'py>(py: Python<'py>, paths: Vec<String>, min_quality: u8, k: u8) -> PyResult<Bound<'py, PyBytes>> {
+    confere_entradas_kmer(&paths, k)?;
     let kmers = py.allow_threads(|| fastq::processar_fastq_lote(paths, min_quality, k));
 
     // MAGIA MONOLÍTICA (128-bits = 16 bytes)
@@ -220,6 +240,7 @@ fn read_fastq_batch<'py>(py: Python<'py>, paths: Vec<String>, min_quality: u8, k
 /// integer) per k-mer. Windows containing `N` are skipped. `k` goes up to 63.
 #[pyfunction]
 fn read_fasta_batch<'py>(py: Python<'py>, paths: Vec<String>, k: u8) -> PyResult<Bound<'py, PyBytes>> {
+    confere_entradas_kmer(&paths, k)?;
     let kmers = py.allow_threads(|| fasta::processar_fasta_lote(paths, k));
 
     let byte_slice: &[u8] = unsafe {

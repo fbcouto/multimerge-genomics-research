@@ -64,11 +64,11 @@ shutil.copy(UI_PATH, os.path.join(T, "ui_main.py"))
 os.chdir(T)
 random.seed(1)
 K = 55
-GENOME_LEN = 40000  # the "Generate simulated patient" button only plants its mutations above 30,000 bp
+GENOME_LEN = 40000
 genome = "".join(random.choice("ACGT") for _ in range(GENOME_LEN))
 COMP = {"A": "T", "C": "G", "G": "C", "T": "A"}
 
-# Screen 4 makes the patient from a file with exactly this name.
+# Screen 4 makes the simulated patient from this genome (picked in its list).
 with open("ecoli.fasta", "w", newline="\n") as f:
     f.write(">synthetic_reference\n")
     for i in range(0, GENOME_LEN, 70):
@@ -144,7 +144,7 @@ with open("five_columns.vcf", "w", newline="\n") as f:  # not a VCF: no REF, ALT
 with open("quals.vcf", "w", newline="\n") as f:
     f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
     f.write("chr1\t10\ta\tA\tG\t12.50\tPASS\t.\nchr1\t20\tb\tC\tT\t30.0\tPASS\t.\n")
-for _env in ("MMG_HUMAN_DEMO", "MMG_RESEARCH_DEMO"):
+for _env in ("MMG_HUMAN_DEMO", "MMG_RESEARCH_DEMO", "MMG_16S_DEMO"):
     if os.environ.get(_env) and os.path.exists(os.environ[_env]):
         shutil.copy(os.environ[_env], os.path.basename(os.environ[_env]))
 if os.environ.get("PHARMCAT_JAR") and os.path.exists(os.environ["PHARMCAT_JAR"]):
@@ -474,8 +474,11 @@ try:
         print("== screen 4: generate the simulated patient")
         with page(browser) as pg:
             enter(pg, 4)
+            pg.locator("select:visible").first.select_option(label="ecoli.fasta")  # the genome to copy
+            pg.wait_for_timeout(300)
             pg.get_by_role("button", name="Generate simulated patient").click()
-            check("the button confirms on the screen", wait_for(pg, "Done!", 30) is not None, text_of(pg)[-400:])
+            t = wait_for(pg, "Done!", 30)
+            check("the button confirms on the screen, with where the 3 SNPs are", t is not None and t.count("synthetic_reference:") == 3, (t or text_of(pg))[-400:])
             check("and writes mutated_patient.fasta", os.path.exists("mutated_patient.fasta"))
             shot(pg, "screen4_patient")
         t = ingest(browser, ["mutated_patient.fasta"])
@@ -757,50 +760,28 @@ try:
             options = pg.locator("form select:visible").first.locator("option").all_inner_texts()
             check("'Refresh the file list' offers the new file", "quals.vcf.parquet" in options, options)
 
-        print("== screen 2: clustering")
+        print("== screen 2: clustering by composition")
         with page(browser) as pg:
             enter(pg, 2)
-            choose(pg, 0, f"ecoli_K{K}.arrow")
-            choose(pg, 1, f"mutated_patient_K{K}.arrow")
-            submit(pg, "Load and merge the k-mers")
-            t = wait_for(pg, "not accepted here yet|Engine finished", 60)
-            shot(pg, "screen2_128bit_arrow")
-            check("Module 1 .arrow (128 bits): refused with an explanation, instead of '2 k-mers' of garbage",
-                  t is not None and "not accepted here yet" in t, (t or text_of(pg))[-300:])
+            submit(pg, "Cluster the sequences")
+            check("no file chosen: a warning, no error", wait_for(pg, "Select at least one FASTA", 30) is not None, text_of(pg)[-300:])
         with page(browser) as pg:
             enter(pg, 2)
-            choose(pg, 0, "legacy_A.arrow")
-            choose(pg, 1, "legacy_B.arrow")
-            submit(pg, "Load and merge the k-mers")
-            t = wait_for(pg, "Engine finished|not accepted here yet", 120)
-            check("old .arrow (one 64-bit k-mer per row): 3,200 k-mers", number(t, "Engine finished.") == 3200, number(t, "Engine finished."))
-        with page(browser) as pg:
-            enter(pg, 2)
-            choose(pg, 0, "species_A.txt")
-            choose(pg, 1, "species_B.txt")
-            submit(pg, "Load and merge the k-mers")
-            t = wait_for(pg, "Engine finished", 120)
-            check("two .txt files of 31-mers: 4,000 k-mers", number(t, "Engine finished.") == 4000, number(t, "Engine finished."))
-            submit(pg, "Cluster the k-mers")
-            t = wait_for(pg, "Result:", 300)
+            example(pg, "Three simulated species in one file")
+            submit(pg, "Cluster the sequences")
+            t = wait_for(pg, "Clustered|ERROR", 300)
             shot(pg, "screen2_clustering")
-            check("HDBSCAN runs and the table shows up", t is not None and "Cluster_ID" in t, (t or text_of(pg))[-300:])
-            # The table fetches each page from the server: it only works if the
-            # component is still alive on the Python side.
-            first = pg.locator("tbody tr").first.inner_text()
-            nxt = next_page(pg)
-            if nxt is not None:
-                nxt.click()
-                pg.wait_for_timeout(1500)
-            check("the table changes page", nxt is not None and pg.locator("tbody tr").first.inner_text() != first,
-                  first if nxt is not None else pg.evaluate(JS_BUTTONS))
+            check("three simulated species: 3 groups", number(t, "Groups found") == 3, (t or text_of(pg))[-400:])
+            check("each group holds the 20 windows of one species",
+                  all(f"species_{x} (20)" in (t or "") for x in "ABC"), (t or "")[-400:])
+            check("the scatter of the windows is drawn", pg.locator("svg[aria-label^='Windows on the first two']").count() == 1)
 
         print("== one example on every screen: picked from the list, submitted as it comes")
         flows = [
             (1, None, "A 30 kb bacterial genome (FASTA), k = 31", "Start batch ingestion", "Batch processed successfully|ERROR",
              lambda t: number(t, "extracted:") == 29970, "mmgen_examples/toy_bacterium_K31.arrow"),
-            (2, None, "31-mers of two genomes with different GC content", "Load and merge the k-mers", "Engine finished|ERROR",
-             lambda t: number(t, "Engine finished.") == 4000, None),
+            (2, None, "Three simulated species in one file", "Cluster the sequences", "Clustered|ERROR",
+             lambda t: number(t, "Groups found") == 3, None),
             (3, None, "The 31-mers of the 30 kb genome", "Build the De Bruijn graph", "Graph resolved successfully|ERROR",
              lambda t: number(t, "Longest contig:") == 30000, "mmgen_examples/MMGEN_Contigs_K31.fasta"),
             (4, None, "A patient with 3 SNPs against the healthy genome", "Run the search", "Genome scan complete|ERROR",
@@ -849,15 +830,20 @@ try:
                  "Mutations found|ERROR", lambda t: "S:D614G" in t, None),
                 (26, "In-silico PCR", "CDC N1 and N2 assays on 20 SARS-CoV-2 genomes", "🧪 Run the PCR", "PCR done|ERROR",
                  lambda t: "CDC_N1" in t, None),
-                (27, "Diversity", "Early against late after weaning (Bray-Curtis)", "🌿 Measure", "Diversity measured|ERROR",
-                 lambda t: "PERMANOVA" in t, None),
-                (27, "Taxonomy", "The ASVs of the SOP, with the RDP 19 classifier (V4)", "🌿 Classify", "ASVs classified|ERROR",
-                 lambda t: "Muribaculaceae" in t, "mmgen_examples/research/16s/taxonomy.tsv"),
                 (28, None, "HCC1395 breast-cancer cell line, chromosome 17", "🎯 Measure the TMB", "TMB measured|ERROR",
                  lambda t: "mutations per megabase" in t, None),
             ]
         else:
             print("  (the research examples are skipped: set MMG_RESEARCH_DEMO to the research demo data zip)")
+        if os.environ.get("MMG_16S_DEMO") and os.path.exists(os.environ["MMG_16S_DEMO"]):
+            flows += [
+                (27, "Diversity", "Early against late after weaning (Bray-Curtis)", "🌿 Measure", "Diversity measured|ERROR",
+                 lambda t: "PERMANOVA" in t, None),
+                (27, "Taxonomy", "The ASVs of the SOP, with the RDP 19 classifier (V4)", "🌿 Classify", "ASVs classified|ERROR",
+                 lambda t: "Muribaculaceae" in t, "mmgen_examples/research_16s/taxonomy.tsv"),
+            ]
+        else:
+            print("  (the 16S examples are skipped: set MMG_16S_DEMO to the 16S demo data zip)")
         if HUMAN_DEMO and os.path.exists(HUMAN_DEMO):
             flows += [
                 (16, "Trio and paternity test", "HG002 with his parents (the Ashkenazi trio)", "Analyze the trio", r"Exclusions \(father|ERROR",

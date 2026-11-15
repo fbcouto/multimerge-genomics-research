@@ -688,6 +688,9 @@ pub struct Tree {
     /// The genomes (matrix rows) from top to bottom.
     pub leaf_order: Vec<usize>,
     pub newick: String,
+    /// O grupo externo em que a árvore foi enraizada (None: no ponto médio,
+    /// ou UPGMA). Antes o texto dizia "rooted at the midpoint" mesmo assim.
+    pub rooted_on: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1148,9 +1151,10 @@ impl DistanceResult {
             self.k,
             self.scaled,
             if self.scaled == 1 { "every k-mer".to_string() } else { format!("one k-mer in {} kept", self.scaled) },
-            match self.tree.method {
-                TreeMethod::NeighborJoining => "neighbor joining, rooted at the midpoint",
-                TreeMethod::Upgma => "UPGMA",
+            match (&self.tree.method, &self.tree.rooted_on) {
+                (TreeMethod::NeighborJoining, Some(o)) => format!("neighbor joining, rooted on {o}"),
+                (TreeMethod::NeighborJoining, None) => "neighbor joining, rooted at the midpoint".to_string(),
+                (TreeMethod::Upgma, _) => "UPGMA".to_string(),
             }
         );
         for g in &self.genomes {
@@ -1498,7 +1502,7 @@ fn finish_tree(method: TreeMethod, names: &[String], children: Vec<Vec<usize>>, 
     }
     let newick = format!("{};", std::mem::take(&mut text[root]));
     let leaf_order = leaf_order.into_iter().map(|u| nodes[u].taxon.unwrap_or(u)).collect();
-    Tree { method, nodes, root, leaf_order, newick }
+    Tree { method, nodes, root, leaf_order, newick, rooted_on: None }
 }
 
 /// Roots an unrooted tree in the middle of the branch of leaf `leaf`.
@@ -1561,7 +1565,11 @@ pub fn build_tree(names: &[String], d: &[Vec<f64>], method: TreeMethod, outgroup
                     }
                 }
             }
-            Ok(finish_tree(method, names, children, blen, root))
+            let mut t = finish_tree(method, names, children, blen, root);
+            if let Some(i) = out_leaf.filter(|_| n >= 2) {
+                t.rooted_on = Some(names[i].clone());
+            }
+            Ok(t)
         }
         TreeMethod::Upgma => {
             if out_leaf.is_some() {

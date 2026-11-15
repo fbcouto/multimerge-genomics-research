@@ -543,17 +543,26 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # downloaded), and each example is the set of values that fills in the form
     # of a screen and task.
     NO_EXAMPLE = "(none: fill in the form yourself)"
-    EXAMPLES_VERSION = "5"
+    EXAMPLES_VERSION = "6"
     HUMAN_DIR = EXAMPLES_DIR + "/human"
     RESEARCH_DIR = EXAMPLES_DIR + "/research"
     # The demo packs: (folder, version, zip name, URL where it is published —
     # None until it is, e.g. as a GitHub Release asset).
+    # The demo packs: (folder, version, zip, where to download it, what it holds).
+    # Downloaded from the GitHub release the first time an example needs them,
+    # unless the zip is already in this folder. The 16S data (the mothur MiSeq
+    # SOP) carry no explicit licence and are not published.
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/"
     DEMO_PACKS = {
-        "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", None,
-                  "48 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
-        "research": (RESEARCH_DIR, "3", "mmgen_demo_research_v3.zip", None,
-                     "public data: the airway RNA-seq experiment, the MAGeCK demos, reference sketches, mock-community "
-                     "reads, the AMRFinderPlus catalog, four isolates, 20 SARS-CoV-2 lineages and a PCR panel"),
+        "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
+                  "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
+        "research": (RESEARCH_DIR, "4", "mmgen_demo_research_v4.zip", _PACKS_URL + "mmgen_demo_research_v4.zip",
+                     "46 MB of public data: the airway RNA-seq experiment, the MAGeCK demos, reference sketches, "
+                     "mock-community reads, the AMRFinderPlus catalog, four isolates, 20 SARS-CoV-2 lineages, a PCR panel "
+                     "and tumor calls"),
+        "amplicon16s": (EXAMPLES_DIR + "/research_16s", "1", "mmgen_demo_16s_v1.zip", None,
+                        "the 16S reads of the mothur MiSeq SOP. It is not published with MMGEN, because those data carry "
+                        "no explicit licence; the SOP files are at https://mothur.org/wiki/miseq_sop/"),
     }
     EXAMPLE_FILES = (
         "toy_genome.fa", "toy_genome.fa.fai", "cohort.vcf", "cohort.vcf.gz", "sample_a.vcf", "sample_b.vcf.gz",
@@ -563,7 +572,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         "rnaseq_ctrl_1.bam", "rnaseq_treat_2.bam", "rnaseq_samples.tsv", "rnaseq_counts.tsv",
         "toy_bacterium.fasta", "toy_patient.fasta", "toy_bacterium_reads.fastq.gz", "toy_bacterium_K31.arrow",
         "toy_patient_K31.arrow", "toy_bacterium_reads_K31.arrow", "kmers_gc_rich.txt", "kmers_at_rich.txt",
-        "plasmid_contigs.fasta", "chromosome_contigs.fasta", "README.md",
+        "plasmid_contigs.fasta", "chromosome_contigs.fasta", "three_species.fasta", "README.md",
     )
 
     def make_examples():
@@ -940,6 +949,32 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         engine.count_reads([path(f"rnaseq_{s.split(chr(9))[0]}.bam") for s in rna_rows], path("annotation.gff3"),
                         path("rnaseq_counts.tsv"), sample_names=[s.split("\t")[0] for s in rna_rows])
 
+        # Three "species" for screen 2: 100 kb each from its own third-order
+        # Markov model (each 3-base context has its own next-base
+        # probabilities), at about the same GC, so only the 4-base word
+        # preferences tell them apart. A generator of its own, so the files
+        # above do not change.
+        rng3 = random.Random(13)
+        species = []
+        for sp in ("species_A", "species_B", "species_C"):
+            table = {}
+            for ctx in range(64):
+                w = [rng3.gammavariate(0.6, 1.0) for _ in range(4)]
+                tot = sum(w)
+                table[ctx] = [x / tot for x in w]
+            ctx, out = 0, []
+            for _ in range(100_000):
+                r, acc, b = rng3.random(), 0.0, 3
+                for i, pr in enumerate(table[ctx]):
+                    acc += pr
+                    if r < acc:
+                        b = i
+                        break
+                out.append("ACGT"[b])
+                ctx = ((ctx << 2) | b) & 63
+            species.append((sp, "".join(out)))
+        write("three_species.fasta", fasta_text(species))
+
         write("README.md", "# MMGEN examples\n\nSmall simulated files, written by the web interface (`ui_main.py`) when an example "
               "is picked on a screen. They are made up: no real person or organism. Delete the folder at any time; "
               "it is written again when needed.\n\n"
@@ -962,6 +997,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
               "* `toy_bacterium.fasta`, `toy_patient.fasta` (3 SNPs), `toy_bacterium_reads.fastq.gz` (30x, 0.5% errors) "
               "and their 31-mers (`*_K31.arrow`).\n"
               "* `kmers_gc_rich.txt`, `kmers_at_rich.txt`: 31-mers of two genomes with different GC content.\n"
+              "* `three_species.fasta`: three simulated 100 kb genomes with different 4-base word preferences (screen 2).\n"
               "* `plasmid_contigs.fasta`, `chromosome_contigs.fasta`: contigs that overlap at their ends.\n")
         with open(stamp, "w", encoding="utf-8") as fh:
             fh.write(EXAMPLES_VERSION)
@@ -982,9 +1018,11 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
              {"files": [_E + "toy_patient.fasta"], "kmer_size": 31}),
         ],
         ("cluster", None): [
-            ("31-mers of two genomes with different GC content",
-             "2,000 k-mers of 31 bases from a GC-rich genome (65% GC) and 2,000 from an AT-rich one (35%). Load them, then click **Cluster the k-mers**. This screen is experimental: its grouping has not been validated.",
-             {"sample_a": _E + "kmers_gc_rich.txt", "sample_b": _E + "kmers_at_rich.txt"}),
+            ("Three simulated species in one file",
+             "Three 100 kb genomes, each drawn from its own composition model (the same GC content, different "
+             "4-base word preferences), cut into 5 kb windows. Expect 3 groups, each holding the 20 windows of one "
+             "species: the tetranucleotide signature tells them apart even at equal GC.",
+             {"fastas": [_E + "three_species.fasta"], "window": 5000, "min_cluster": 5, "dims": 5}),
         ],
         ("assembly", None): [
             ("The 31-mers of the 30 kb genome",
@@ -1200,9 +1238,18 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # of the example panels and the PharmCAT positions.
     _H = HUMAN_DIR + "/"
     _R = RESEARCH_DIR + "/"
+    _R16 = EXAMPLES_DIR + "/research_16s/"
     _GIAB = ("Genome in a Bottle (GIAB) reference genomes are public data from consenting volunteers of the Personal Genome "
              "Project, used worldwide to test sequencing. The demo keeps chr22, the example panel genes and the "
              "pharmacogene positions.")
+    EXAMPLES[("cluster", None)].append(
+        ("Four bacterial isolates: two Klebsiella pneumoniae, two Staphylococcus aureus",
+         "The assemblies of four isolates of screen 25, in 10 kb windows. Expect the two species apart (about 57% and "
+         "33% GC) and the two strains of each species together: composition separates species, not strains. Plasmid "
+         "windows may form small groups of their own or stay ungrouped.",
+         {"fastas": [_R + f"microbio/isolates/{_g}.fna.gz" for _g in ("kpneumoniae_KPNIH1_KPC-3", "kpneumoniae_ATCC_BAA-2146_NDM-1",
+                                                                        "saureus_USA300_MRSA", "saureus_NCTC8325_MSSA")],
+          "window": 10000, "min_cluster": 10, "dims": 5}))
     EXAMPLES.update({
         ("findings", "ClinVar findings"): [
             ("HG002: pathogenic and likely pathogenic, at least 1 review star",
@@ -1408,31 +1455,31 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
              "weaning, 2,000 read pairs each, and a Mock community of 20 known strains. Each pair is merged, reads with more "
              "than one expected error are dropped, the rest denoised into ASVs and chimeras removed. Expect about three "
              "quarters of the reads kept, and the Mock's 20 strains among the most abundant ASVs.",
-             {"sheet": _R + "16s/samples.tsv"}),
+             {"sheet": _R16 + "samples.tsv"}),
         ],
         ("amplicon", "Taxonomy"): [
             ("The ASVs of the SOP, with the RDP 19 classifier (V4)",
              "The naive Bayesian classifier of the RDP, trained on the V4 region of the RDP training set 19. Expect the "
              "mouse gut families: Muribaculaceae first, then Lachnospiraceae, Bacteroidaceae, Lactobacillaceae; few ASVs "
              "reach a genus at confidence 0.8, as is usual for 250-base V4 reads.",
-             {"fasta": _R + "16s/sop_asvs.fasta", "model": _R + "16s/rdp19_v4_classifier.model", "table": _R + "16s/sop_asv_table.tsv"}),
+             {"fasta": _R16 + "sop_asvs.fasta", "model": _R16 + "rdp19_v4_classifier.model", "table": _R16 + "sop_asv_table.tsv"}),
         ],
         ("amplicon", "Diversity"): [
             ("Early against late after weaning (Bray-Curtis)",
              "The 19 mouse samples: alpha diversity per sample, and how far apart the samples are (Bray-Curtis), drawn by "
              "principal coordinates. The gut community changes as the mice grow: expect early and late apart, and "
              "PERMANOVA p near 0.001.",
-             {"table": _R + "16s/sop_asv_table_mouse.tsv", "metadata": _R + "16s/samples_design.tsv", "column": "time"}),
+             {"table": _R16 + "sop_asv_table_mouse.tsv", "metadata": _R16 + "samples_design.tsv", "column": "time"}),
             ("The same with Jaccard (which ASVs are present, not how many)",
              "Presence and absence only: the first axis alone separates early from late.",
-             {"table": _R + "16s/sop_asv_table_mouse.tsv", "metadata": _R + "16s/samples_design.tsv", "column": "time", "metric": "jaccard"}),
+             {"table": _R16 + "sop_asv_table_mouse.tsv", "metadata": _R16 + "samples_design.tsv", "column": "time", "metric": "jaccard"}),
         ],
         ("amplicon", "Train a classifier"): [
             ("RDP training set 19, V4 region only (a few seconds)",
              "Only the stretch between the 515F and 806R primers of each reference sequence is used: a smaller model "
              "that suits V4 reads better than one trained on whole 16S genes.",
-             {"reference": _R + "16s/rdp_19_toGenus_trainset.fa.gz", "primer_f": "GTGYCAGCMGCCGCGGTAA", "primer_r": "GGACTACNVGGGTWTCTAAT",
-              "output": _R + "16s/my_v4_classifier.model"}),
+             {"reference": _R16 + "rdp_19_toGenus_trainset.fa.gz", "primer_f": "GTGYCAGCMGCCGCGGTAA", "primer_r": "GGACTACNVGGGTWTCTAAT",
+              "output": _R16 + "my_v4_classifier.model"}),
         ],
         ("tmb", None): [
             ("HCC1395 breast-cancer cell line, chromosome 17",
@@ -1584,7 +1631,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
             with mo.status.spinner("Writing the example files..."):
                 make_examples()
                 for _kind, (_folder, *_rest) in DEMO_PACKS.items():
-                    if any(isinstance(x, str) and x.startswith(_folder) for x in flat):
+                    if any(isinstance(x, str) and x.startswith(_folder + "/") for x in flat):
                         make_demo_pack(_kind)
         except Exception as err:
             return {}, mo.callout(mo.md(f"**🔥 ERROR:** the example files could not be written in `{EXAMPLES_DIR}/`: {err}"), kind="danger")
@@ -1815,15 +1862,19 @@ def cluster_page_ui(example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "cluster")
 
     # A global variable (no leading "_"), like on the other screens: marimo only
-    # keeps a component alive when it is bound to a global variable. As
-    # `_btn_back`, this button did nothing when clicked.
+    # keeps a component alive when it is bound to a global variable.
     btn_back_cluster = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     cluster_example = example_picker("cluster")
 
     _ui = mo.vstack([
         btn_back_cluster,
         mo.md("<br>\n\n# 🧬 Taxonomic Clustering"),
-        mo.callout(mo.md("**Experimental.** Each k-mer gets a MinHash signature, the signatures are projected to 3 dimensions (PCA) and grouped with HDBSCAN. The grouping has not been validated."), kind="info"),
+        mo.callout(mo.md(
+            "Groups DNA by its **composition**, as metagenome binning tools (MetaBAT, CONCOCT) do: every sequence is cut "
+            "into windows, each window is described by the frequency of its 136 tetranucleotides (4-base words, both "
+            "strands together), the windows are projected with PCA and grouped with HDBSCAN. Windows of the same genome "
+            "share a signature, so the groups tend to be species. Strains of one species are not separated, and "
+            "plasmids or phages may form groups of their own. **Experimental**, for teaching."), kind="info"),
         cluster_example,
     ])
     _ui
@@ -1834,132 +1885,155 @@ def cluster_page_ui(example_picker, get_page, mo, set_page):
 def cluster_page_form(cluster_example, example_for, files_with, get_page, make_form, mo):
     mo.stop(get_page() != "cluster")
     _ex, _about = example_for("cluster", None, cluster_example.value)
-    _files = files_with("arrow", "kmer_text")
-    form_samples = make_form({
-        "sample_a": mo.ui.dropdown(options=_files, value=_ex.get("sample_a"), label="📂 Sample A (.txt, one 31-mer per line):", full_width=True),
-        "sample_b": mo.ui.dropdown(options=_files, value=_ex.get("sample_b"), label="📂 Sample B (.txt, one 31-mer per line):", full_width=True),
-    }, "🚀 1. Load and merge the k-mers")
-    mo.vstack([_x for _x in (_about, form_samples) if _x is not None])
-    return (form_samples,)
-
-
-@app.cell
-async def cluster_page_backend(asyncio, chosen, form_samples, get_page, mmg, mo, np, pl, warn):
-    mo.stop(get_page() != "cluster")
-    mo.stop(form_samples.value is None, mo.md("🧬 *Waiting for the two samples...*"))
-
-    _p_a, _p_b = form_samples.value["sample_a"], form_samples.value["sample_b"]
-    mo.stop(not chosen(_p_a) or not chosen(_p_b), warn("Select both samples."))
-    # An .arrow next to a .txt went to the text reader, which read the binary as lines.
-    mo.stop(
-        _p_a.endswith(".arrow") != _p_b.endswith(".arrow"),
-        mo.callout(mo.md("⚠️ Both samples must be of the same kind: two `.arrow` files or two text files."), kind="warn")
-    )
-
-    with mo.status.spinner("Reading the files, sorting and merging the k-mers..."):
-        await asyncio.sleep(0)
-
-        if _p_a.endswith(".arrow") and _p_b.endswith(".arrow"):
-            _col_a = pl.read_ipc(_p_a).get_column("K-mers")
-            _col_b = pl.read_ipc(_p_b).get_column("K-mers")
-            # This module works with 64-bit k-mers (k=31), one per row. The
-            # .arrow files Module 1 writes today are something else: a single
-            # row holding every 128-bit k-mer as binary. On that column
-            # .to_numpy().tobytes() returns the bytes of the pointer, and the
-            # screen carried on with "2 k-mers" of garbage and no error at all.
-            mo.stop(
-                not (_col_a.dtype.is_integer() and _col_b.dtype.is_integer()),
-                mo.callout(mo.md("⚠️ This module clusters k-mers of 31 bases (64 bits). The `.arrow` files written by Module 1 hold 128-bit k-mers and are not accepted here yet. Use `.txt` files with one 31-base k-mer per line."), kind="warn")
-            )
-            _bytes_a = _col_a.to_numpy().tobytes()
-            _bytes_b = _col_b.to_numpy().tobytes()
-            _merged_bytes = await asyncio.to_thread(mmg.sort_merge_bytes, _bytes_a, _bytes_b)
-        else:
-            _merged_bytes = await asyncio.to_thread(mmg.read_and_merge_kmer_files, _p_a, _p_b)
-
-        _merged = np.frombuffer(_merged_bytes, dtype=np.uint64)
-
-    with mo.status.spinner("Computing MinHash signatures on the CPU..."):
-        await asyncio.sleep(0)
-        _signature_bytes = await asyncio.to_thread(mmg.minhash_signatures, _merged_bytes, 50)
-        signature_matrix = np.frombuffer(_signature_bytes, dtype=np.uint64).reshape(-1, 50)
-
-        df_kmers = pl.DataFrame({
-            "K-mer (u64)": _merged,
-            "DNA_sequence": await asyncio.to_thread(mmg.decode_kmers, _merged_bytes, 31)
-        })
-
-    _panel = mo.md(f"✅ Engine finished. **{df_kmers.height:,}** k-mers ready for clustering.")
-    _panel
-    return df_kmers, signature_matrix
-
-
-@app.cell
-def cluster_page_hdbscan(df_kmers, get_page, make_form, mo):
-    mo.stop(get_page() != "cluster")
-
-    form_cluster = make_form({"sample_percent": mo.ui.slider(start=1, stop=100, step=1, value=5, show_value=True, label="HDBSCAN sample (%):")},
-                             "🧬 2. Cluster the k-mers")
-
-    form_cluster
+    _files = [f for f in files_with("fasta") if not f.startswith("(")]
+    _files += [f for f in _ex.get("fastas", []) if f not in _files]
+    form_cluster = make_form({
+        "fastas": mo.ui.multiselect(options=_files, value=_ex.get("fastas", []), label="🧬 Sequences (FASTA: genomes, contigs or long reads):", full_width=True),
+        "window": mo.ui.number(start=1000, stop=100000, step=1000, value=_ex.get("window", 5000), label="Window length (bases):"),
+        "min_cluster": mo.ui.number(start=2, stop=1000, step=1, value=_ex.get("min_cluster", 5), label="Smallest group (windows):"),
+        "dims": mo.ui.number(start=2, stop=20, step=1, value=_ex.get("dims", 5), label="PCA dimensions kept:"),
+    }, "🧬 Cluster the sequences")
+    mo.vstack([_x for _x in (_about, form_cluster) if _x is not None])
     return (form_cluster,)
 
 
 @app.cell
-async def cluster_page_result(asyncio, df_kmers, form_cluster, get_page, mo, np, pl, signature_matrix):
-    from sklearn.cluster import HDBSCAN
-    from sklearn.decomposition import PCA
-
+async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_page, mo, np, os, warn):
     mo.stop(get_page() != "cluster")
-    mo.stop(form_cluster.value is None)
+    mo.stop(form_cluster.value is None, mo.md("🧬 *Pick the sequences and submit the form.*"))
+    _v = form_cluster.value
+    _paths = list(_v["fastas"] or [])
+    mo.stop(not _paths, warn("Select at least one FASTA file."))
+    _W, _min, _dims = int(_v["window"]), int(_v["min_cluster"]), int(_v["dims"])
 
-    _fraction = form_cluster.value["sample_percent"] / 100.0
-    _total_rows = len(df_kmers)
+    def _compute():
+        import gzip
+        from sklearn.cluster import HDBSCAN
+        from sklearn.decomposition import PCA
 
-    # With very little data (a 6 k-mer test, say) use 100% of it.
-    if _total_rows < 1000:
-        _sample_size = _total_rows
-    else:
-        _sample_size = int(_total_rows * _fraction)
+        code = np.full(256, -1, dtype=np.int64)
+        for _i, _b in enumerate(b"ACGT"):
+            code[_b] = _i
+            code[ord(chr(_b).lower())] = _i
+        # canonical tetranucleotides: a word and its reverse complement count together
+        words = np.arange(256)
+        rc = np.zeros(256, dtype=np.int64)
+        for _w in range(256):
+            _d = [(_w >> (2 * (3 - _j))) & 3 for _j in range(4)]
+            rc[_w] = sum((3 - _d[3 - _j]) << (2 * (3 - _j)) for _j in range(4))
+        canon = np.minimum(words, rc)
+        keep = np.unique(canon)
+        col = {int(_c): _j for _j, _c in enumerate(keep)}
+        to_col = np.array([col[int(_c)] for _c in canon])
 
-    if _sample_size < 4:
-        mo.stop(True, mo.md("⚠️ **Error:** not enough data. The model needs at least 4 k-mers to compute the 3-D projection (PCA)."))
+        def records(path):
+            opener = gzip.open if path.endswith(".gz") else open
+            name, parts = None, []
+            with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith(">"):
+                        if name is not None:
+                            yield name, "".join(parts)
+                        name, parts = line[1:].split()[0] if line[1:].split() else "sequence", []
+                    elif line:
+                        parts.append(line)
+            if name is not None:
+                yield name, "".join(parts)
 
-    if _sample_size > 100000:
-        mo.stop(True, mo.md(f"""
-        ⚠️ **CPU bottleneck warning:** you are trying to cluster **{_sample_size:,}** k-mers. HDBSCAN in Python (CPU) is not built for that volume and may take hours.
-        👉 **What to do:** lower the slider and click Cluster again.
-        """))
+        rows, labels, gcs = [], [], []
+        n_seq = 0
+        for path in _paths:
+            for name, seq in records(path):
+                n_seq += 1
+                label = os.path.basename(path) if len(_paths) > 1 else name
+                arr = code[np.frombuffer(seq.encode("ascii", "replace"), dtype=np.uint8)]
+                for a in range(0, len(arr) - _W // 2, _W):
+                    w = arr[a:a + _W]
+                    if len(w) < _W // 2 or (w < 0).mean() > 0.1:
+                        continue
+                    ok = (w[:-3] >= 0) & (w[1:-2] >= 0) & (w[2:-1] >= 0) & (w[3:] >= 0)
+                    four = (w[:-3] * 64 + w[1:-2] * 16 + w[2:-1] * 4 + w[3:])[ok]
+                    counts = np.bincount(to_col[four], minlength=len(keep)).astype(float)
+                    rows.append(counts / max(counts.sum(), 1))
+                    labels.append(label)
+                    valid = w[w >= 0]
+                    gcs.append(float(((valid == 1) | (valid == 2)).mean()) if len(valid) else 0.0)
+        if len(rows) < max(4, _min):
+            return {"error": f"only {len(rows)} window(s) of {_W:,} bases: give longer sequences, or a shorter window."}
+        X = np.log(np.array(rows) + 1e-4)
+        X = (X - X.mean(axis=0)) / (X.std(axis=0) + 1e-9)
+        pca = PCA(n_components=min(_dims, X.shape[0] - 1, X.shape[1]))
+        Z = pca.fit_transform(X)
+        lab = HDBSCAN(min_cluster_size=_min, copy=True).fit_predict(Z)
+        return {"Z": Z, "labels": lab, "sources": labels, "gc": gcs, "sequences": n_seq,
+                "explained": pca.explained_variance_ratio_}
 
-    with mo.status.spinner(f"Sampling {_sample_size:,} points and computing their geometry..."):
-        await asyncio.sleep(0)
+    try:
+        with mo.status.spinner("Cutting the sequences into windows and measuring their composition..."):
+            _r = await asyncio.to_thread(_compute)
+    except Exception as _err:
+        _r = {"error": f"{type(_err).__name__}: {_err}"}
+    mo.stop("error" in _r, error_panel(_r.get("error")))
 
-        _indices = np.arange(_total_rows)
-        # Only slice when the sample is smaller than the total.
-        if _sample_size < _total_rows:
-            _indices = np.random.choice(_indices, _sample_size, replace=False)
+    _lab, _src, _gc, _Z = _r["labels"], _r["sources"], _r["gc"], _r["Z"]
+    _clusters = sorted(set(int(_c) for _c in _lab) - {-1})
+    _noise = int((_lab == -1).sum())
+    _names = {_c: f"group {_c + 1}" for _c in _clusters}
+    _names[-1] = "ungrouped"
 
-        _df_sample = df_kmers[_indices]
-        _embeddings = signature_matrix[_indices].astype(np.float64)
+    # one row per group: size, GC and where its windows came from
+    _summary = []
+    for _c in _clusters + ([-1] if _noise else []):
+        _idx = [_i for _i, _x in enumerate(_lab) if _x == _c]
+        _from = {}
+        for _i in _idx:
+            _from[_src[_i]] = _from.get(_src[_i], 0) + 1
+        _summary.append({"group": _names[_c], "windows": len(_idx), "bases": len(_idx) * _W,
+                         "GC %": round(100 * sum(_gc[_i] for _i in _idx) / len(_idx), 1),
+                         "from": ", ".join(f"{_k} ({_n})" for _k, _n in sorted(_from.items(), key=lambda _t: -_t[1]))})
 
-        _reduced = PCA(n_components=3).fit_transform(_embeddings)
+    # the scatter: PC1 x PC2, one colour per group (validated palette), grey = ungrouped
+    _PAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+    _GREY = "#898781"
+    _col = {_c: (_PAL[_i] if _i < len(_PAL) else _GREY) for _i, _c in enumerate(_clusters)}
+    _col[-1] = _GREY
+    _xs, _ys = _Z[:, 0], _Z[:, 1]
+    _x0, _x1, _y0, _y1 = float(_xs.min()), float(_xs.max()), float(_ys.min()), float(_ys.max())
+    _dx, _dy = (_x1 - _x0) or 1, (_y1 - _y0) or 1
+    _x0, _x1, _y0, _y1 = _x0 - 0.06 * _dx, _x1 + 0.06 * _dx, _y0 - 0.06 * _dy, _y1 + 0.06 * _dy
+    W, H, L, R, T, B = 600, 420, 50, 16, 16, 40
+    X = lambda v: L + (v - _x0) / (_x1 - _x0) * (W - L - R)
+    Y = lambda v: T + (H - T - B) - (v - _y0) / (_y1 - _y0) * (H - T - B)
+    _order = sorted(range(len(_lab)), key=lambda _i: _lab[_i] != -1)  # grey first, underneath
+    _dots = "".join(f'<circle cx="{X(float(_xs[_i])):.1f}" cy="{Y(float(_ys[_i])):.1f}" r="4" fill="{_col[int(_lab[_i])]}" '
+                    f'stroke="var(--background, #fff)" stroke-width="1.5"><title>{_src[_i]}: {_names[int(_lab[_i])]}</title></circle>'
+                    for _i in _order)
+    _ev = _r["explained"]
+    _axes = (f'<text x="{L + (W - L - R) / 2:.1f}" y="{H - 8}" text-anchor="middle" fill="currentColor" fill-opacity="0.8">PC1 ({100 * _ev[0]:.0f}%)</text>'
+             f'<text transform="translate(14,{T + (H - T - B) / 2:.1f}) rotate(-90)" text-anchor="middle" fill="currentColor" fill-opacity="0.8">PC2 ({100 * _ev[1]:.0f}%)</text>')
+    _legend = ('<div style="display:flex; flex-wrap:wrap; gap: 6px 16px; font: 12px system-ui, sans-serif; margin: 6px 0;">'
+               + "".join(f'<span><span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:{_col[_c]}; '
+                         f'margin-right:5px; vertical-align:-1px"></span>{_names[_c]}</span>' for _c in _clusters + ([-1] if _noise else []))
+               + "</div>")
+    _chart = mo.Html(f'<div style="max-width:{W}px">{_legend}<svg viewBox="0 0 {W} {H}" width="100%" role="img" '
+                     f'aria-label="Windows on the first two principal components, coloured by group" '
+                     f'style="font: 12px system-ui, sans-serif; color: inherit;">{_dots}{_axes}</svg></div>')
 
-        # HDBSCAN wants groups of at least 50; adjust for small tests.
-        _min_cluster = min(50, max(2, _sample_size // 2))
-        _labels = HDBSCAN(min_cluster_size=_min_cluster, n_jobs=-1, copy=False).fit_predict(_reduced)
-
-        _df_clustered = _df_sample.with_columns(pl.Series("Cluster_ID", _labels))
-        _total_clusters = len(set(_labels)) - (1 if -1 in _labels else 0)
-
-    _table = mo.ui.table(_df_clustered, selection="single", pagination=True)
-
-    _final_panel = mo.vstack([
-        mo.callout(mo.md(f"**Result:** {_total_clusters} cluster(s) found. (K-mers left ungrouped / noise: {sum(_labels == -1)})"), kind="success"),
-        _table
+    _panel = mo.vstack([
+        mo.callout(mo.md("### 🧬 Clustered\n" + facts([
+            ("Groups found", f"`{len(_clusters)}`"),
+            ("Windows", f"`{len(_lab):,}` of {_W:,} bases, from {_r['sequences']:,} sequence(s)"),
+            ("Ungrouped windows", f"`{_noise:,}`"),
+        ])), kind="success"),
+        mo.ui.table(_summary, selection=None, label="The groups and where their windows came from"),
+        _chart,
+        mo.md("A group made of windows from a single source is a clean bin; a source split across groups, or windows "
+              "left ungrouped, often means a plasmid, a phage or a region of unusual composition. Try a longer window "
+              "or a larger smallest group for steadier groups."),
     ])
-
-    _final_panel
-    return HDBSCAN, PCA
+    _panel
+    return
 
 
 @app.cell
@@ -2051,7 +2125,7 @@ async def assembly_page_backend(asyncio, beside, chosen, form_assembly, get_page
 
 
 @app.cell
-def variant_page_ui(example_picker, get_page, get_patient_msg, mo, os, set_page, set_patient_msg):
+def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, get_page, get_patient_msg, make_examples, mo, os, set_page, set_patient_msg):
     mo.stop(get_page() != "variant")
 
     def _back(_):
@@ -2060,29 +2134,61 @@ def variant_page_ui(example_picker, get_page, get_patient_msg, mo, os, set_page,
 
     btn_back_variant = mo.ui.button(label="⬅️ Back to Menu", on_change=_back)
 
+    # The simulated patient: a copy of a "healthy" genome with a few SNPs
+    # planted at positions it reports, so the search below can be checked.
+    _example_genome = f"{EXAMPLES_DIR}/toy_bacterium.fasta"
+    _genomes = {f: f for f in files_with("plain_fasta") if f != NO_FILE and not f.endswith("mutated_patient.fasta")}
+    _genomes.setdefault(_example_genome, _example_genome)
+    patient_source = mo.ui.dropdown(options=_genomes, value=next(iter(_genomes)), label="Healthy genome to copy (FASTA):", full_width=True)
+    patient_snps = mo.ui.number(start=1, stop=50, step=1, value=3, label="SNPs to plant:")
+
     def generate_patient():
-        # The simulated patient is made from a file with exactly this name.
-        _base_name = "ecoli.fasta"
+        import random
 
-        if not os.path.exists(_base_name):
-            set_patient_msg(f"❌ Error: the file '{_base_name}' is not in this folder!")
+        source = patient_source.value
+        try:
+            if source == _example_genome and not os.path.exists(source):
+                make_examples()
+            records, name, seq = [], None, []
+            with open(source, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith(">"):
+                        if name is not None:
+                            records.append([name, list("".join(seq))])
+                        name, seq = line[1:], []
+                    elif line:
+                        seq.append(line)
+            if name is not None:
+                records.append([name, list("".join(seq))])
+        except OSError as err:
+            set_patient_msg(f"❌ Could not read `{source}`: {err}")
             return
-
-        with open(_base_name, "r") as f: lines = f.readlines()
-        seq = "".join([l.strip() for l in lines if not l.startswith(">")])
-        seq_list = list(seq)
-
-        if len(seq_list) > 30000:
-            seq_list[5000] = 'T' if seq_list[5000] == 'A' else 'A'
-            seq_list[15000] = 'G' if seq_list[15000] == 'C' else 'C'
-            seq_list[25000] = 'C' if seq_list[25000] == 'G' else 'G'
-
-        mutated = "".join(seq_list)
-        with open("mutated_patient.fasta", "w") as f:
-            f.write(">Mutated_Patient_Ecoli\n")
-            for i in range(0, len(mutated), 80): f.write(mutated[i:i+80] + "\n")
-
-        set_patient_msg("✅ Done! 'mutated_patient.fasta' was written to disk with 3 mutations.")
+        # Positions at least 100 bases from each other and from the ends of
+        # their sequence: each SNP then changes exactly k k-mers, for any k up
+        # to 63 (screen 1 asks for k later).
+        n = int(patient_snps.value)
+        rng = random.Random(2026)  # the same genome gives the same patient
+        slots = [(i, pos) for i, (_, s) in enumerate(records) for pos in range(100, len(s) - 100, 100)
+                 if s[pos].upper() in "ACGT"]
+        if len(slots) < n:
+            set_patient_msg(f"❌ `{source}` is too short for {n} SNPs at least 100 bases apart.")
+            return
+        planted = []
+        for i, pos in sorted(rng.sample(slots, n)):
+            ref = records[i][1][pos].upper()
+            alt = rng.choice([b for b in "ACGT" if b != ref])
+            records[i][1][pos] = alt
+            planted.append(f"{records[i][0].split()[0]}:{pos + 1} {ref}>{alt}")
+        out = beside(source, "mutated_patient.fasta")
+        with open(out, "w", newline="\n") as fh:
+            for name, s in records:
+                fh.write(f">{name} (simulated patient)\n")
+                text = "".join(s)
+                for j in range(0, len(text), 80):
+                    fh.write(text[j:j + 80] + "\n")
+        set_patient_msg(f"✅ Done! `{out}` was written with {n} SNP(s): " + ", ".join(planted)
+                        + ". Run both genomes through Module 1, then compare them below.")
 
     btn_generate = mo.ui.button(label="💉 Generate simulated patient", on_click=lambda _: generate_patient())
     variant_example = example_picker("variant")
@@ -2090,15 +2196,15 @@ def variant_page_ui(example_picker, get_page, get_patient_msg, mo, os, set_page,
     _ui = mo.vstack([
         btn_back_variant,
         mo.md("<br>\n\n# ⚠️ Variant Calling (SNPs)"),
-        mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below creates a simulated patient from `ecoli.fasta`, with 3 planted mutations; run it through Module 1 to get its `.arrow` file. Or pick the example: a small genome and a patient, ready as k-mers."), kind="info"),
-        btn_generate,
+        mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below makes a simulated patient: a copy of the genome you pick, with SNPs planted at positions it tells you; run both through Module 1 to get their `.arrow` files. Or pick the example: a small genome and a patient, ready as k-mers."), kind="info"),
+        mo.hstack([patient_source, patient_snps, btn_generate], justify="start", align="end", widths=[4, 1, 1.4]),
         # The button's feedback (an empty one gave "****", which Markdown draws
         # as a horizontal rule).
         mo.md(f"**{get_patient_msg()}**" if get_patient_msg() else ""),
         variant_example,
     ])
     _ui
-    return btn_back_variant, btn_generate, generate_patient, variant_example
+    return btn_back_variant, btn_generate, generate_patient, patient_snps, patient_source, variant_example
 
 
 @app.cell

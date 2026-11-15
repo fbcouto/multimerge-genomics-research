@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use MMGEN in your research or teaching, please cite it as below."
+title: "MMGEN: MultiMerge Genomics"
+abstract: >-
+  Free, open-source genomics toolkit written in Rust, with optional CUDA
+  acceleration, a Python API and a web interface: validation, sorting,
+  indexing and region queries of VCF, BED, GFF/GTF, SAM/BAM files of any
+  size; interval operations; VCF filtering and normalization; FASTQ quality
+  reports and trimming; k-mer counting; human-genetics, RNA-seq, CRISPR,
+  metagenomics, antimicrobial-resistance, outbreak, 16S and tumor tools for
+  teaching and research.
+type: software
+authors:
+  - family-names: Couto
+    given-names: Fernando
+    orcid: "https://orcid.org/0009-0003-3832-5564"
+repository-code: "https://github.com/fbcouto/multimerge-genomics-research"
+url: "https://github.com/fbcouto/multimerge-genomics-research"
+license: Apache-2.0
+# The concept DOI: it always resolves to the latest version of MMGEN on Zenodo.
+doi: 10.5281/zenodo.20417492
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20417492
+    description: "MMGEN, all versions (resolves to the latest)."
+  - type: doi
+    value: 10.5281/zenodo.20417493
+    description: "Version v1.0.0 (2026-05-27), the earlier engine, from the repository fbcouto/multimerge-genomics."
+version: 2.0.0
+date-released: 2026-11-15
+keywords:
+  - bioinformatics
+  - genomics
+  - vcf
+  - bam
+  - fastq
+  - k-mer
+  - rust
+  - cuda
+  - education

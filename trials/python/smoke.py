@@ -26,7 +26,19 @@ def check(name, cond, detail=""):
 info = mmg.engine_info()
 print("engine_info:", info)
 check("engine_info has the expected keys", all(k in info for k in ("version", "gpu_compiled", "gpu", "gpu_memory_mb", "threads")))
+for _call, _want in ((lambda: mmg.read_fasta_batch(["no/such/file.fasta"], 31), OSError),
+                     (lambda: mmg.read_fastq_batch(["no/such/file.fastq"], 20, 31), OSError),
+                     (lambda: mmg.read_fasta_batch([__file__], 0), ValueError)):
+    try:
+        _call()
+        _got = None
+    except BaseException as _err:  # a Rust panic would come as PanicException (a BaseException)
+        _got = _err
+    check(f"k-mer readers: a bad input is a {_want.__name__}, not a crash", isinstance(_got, _want), repr(_got))
 from multimerge_genomics import ui as _ui
+from multimerge_genomics import exercises as _exercises
+check("the class exercises come with the package (mmgen-exercises)",
+      set(_exercises.EXERCISES) == {"snps", "broken_vcf", "adapter", "paternity", "expression"})
 check("the web interface comes with the package (mmgen-ui)", os.path.exists(_ui.app_path())
       and "@app.cell" in open(_ui.app_path(), encoding="utf-8").read() and "marimo" in _ui.command())
 

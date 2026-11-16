@@ -1,0 +1,3 @@
+# The test tables are checked by size and SHA-256 against their manifest.json:
+# keep them byte for byte (no CRLF conversion on Windows checkouts).
+trials/fixtures/pgx_tables/*.json -text

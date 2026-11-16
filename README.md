@@ -1,6 +1,6 @@
 # 🧬 MMGEN: MultiMerge Genomics Engine Suite
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20417492.svg)](https://doi.org/10.5281/zenodo.20417492) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20417492.svg)](https://doi.org/10.5281/zenodo.20417492) [![PyPI](https://img.shields.io/pypi/v/multimerge-genomics.svg)](https://pypi.org/project/multimerge-genomics/) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
 
 ![MMGEN main menu](assets/menu.png)
 
@@ -208,22 +208,20 @@ figures.save(figures.manhattan(r["rows"]), "manhattan.svg")
 python -m venv mmgen
 mmgen\Scripts\activate           # Windows   (macOS, Linux: source mmgen/bin/activate)
 
-# Windows, without an NVIDIA GPU (or with one: the CUDA build below)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-win_amd64.whl"
-# Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
+# Windows, macOS or Linux, without an NVIDIA GPU: from PyPI
+pip install "multimerge-genomics[ui,ai]"
+
+# With an NVIDIA GPU, the CUDA builds attached to the release (they also run without a GPU):
+# Windows (CUDA 11.8)
 pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-1cuda-cp310-abi3-win_amd64.whl"
-# Linux (CUDA build; also runs without a GPU; glibc 2.28 or newer)
+# Linux (glibc 2.28 or newer)
 pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-manylinux_2_28_x86_64.whl"
-# macOS, Apple Silicon (M1 and later)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-macosx_11_0_arm64.whl"
-# macOS, Intel
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-macosx_10_12_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.4.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The CPU-only packages (Windows, macOS on Apple Silicon and Intel, Linux with glibc 2.17 or newer) come from [PyPI](https://pypi.org/project/multimerge-genomics/), built and tested by the project's continuous integration; `pip` picks the one for your system. The CUDA packages are attached to the release [v2.4.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0), with the same CPU-only packages.
 
 ### On Google Colab: free or paid, your choice
 

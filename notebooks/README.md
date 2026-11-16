@@ -22,11 +22,11 @@ paragraph with the version and the parameters used; how to adapt it; references.
 ## How to run them
 
 **On Google Colab** (nothing to install): click the badge, then *Runtime > Run all*. The first cell installs
-MMGEN from the [v2.4.0 release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0) (about a minute); the data cell downloads the demo pack it needs
+MMGEN from [PyPI](https://pypi.org/project/multimerge-genomics/) (about a minute); the data cell downloads the demo pack it needs
 once (about 45 MB each).
 
-**On your computer**: install the MMGEN wheel for your system from the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0)
-(`python -m pip install <the .whl file>`), plus `python -m pip install jupyter matplotlib pandas`, and open the
+**On your computer**: `python -m pip install multimerge-genomics` (from PyPI; the CUDA builds are on the
+[release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0)), plus `python -m pip install jupyter matplotlib pandas`, and open the
 notebook with Jupyter in a working folder. The notebooks write the demo files to `data/` and their results to
 `results/<notebook name>/`, both in the folder where they run.
 

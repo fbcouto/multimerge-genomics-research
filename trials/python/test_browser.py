@@ -61,6 +61,8 @@ if SHOTS:
 # ---------------------------------------------------------------------------
 T = tempfile.mkdtemp(prefix="mmg_browser_")
 shutil.copy(UI_PATH, os.path.join(T, "ui_main.py"))
+for _side in ("ui_theme.css", "ui_head.html"):   # the workbench theme and the rail's script, next to the app
+    shutil.copy(os.path.join(os.path.dirname(UI_PATH), _side), os.path.join(T, _side))
 os.chdir(T)
 random.seed(1)
 K = 55
@@ -355,7 +357,7 @@ NO_EXAMPLE = "(none: fill in the form yourself)"
 def example(pg, label):
     """Picks an example in the screen's example list; the form is filled in."""
     pg.locator("select:visible").filter(has=pg.locator("option", has_text=NO_EXAMPLE)).first.select_option(label=label)
-    pg.get_by_text("The form below is filled in with this example").first.wait_for(timeout=60000)
+    pg.get_by_text("The form is filled in with this example").first.wait_for(timeout=60000)
     pg.wait_for_timeout(800)
 
 
@@ -370,8 +372,9 @@ def submit(pg, label):
 
 
 def radio(pg, name):
-    """Picks a task on screens 9-14; the form below is rebuilt for it."""
-    pg.get_by_role("radio", name=name, exact=True).click()
+    """Picks a task (a tab since the workbench layout; a radio button before): the form below is rebuilt for it."""
+    tab = pg.get_by_role("tab", name=name, exact=True)
+    (tab if tab.count() else pg.get_by_role("radio", name=name, exact=True)).click()
     pg.wait_for_timeout(1200)
 
 
@@ -460,6 +463,51 @@ try:
                 pg.wait_for_timeout(400)
                 check(f"screen {n}: 'Back to Menu' brings the menu back and removes the screen",
                       menu_button(pg, 1).is_visible() and not back(pg).is_visible() and pg.locator("h1", has_text=title).count() == 0)
+
+        print("== the rail of tools (ui_theme.css + ui_head.html)")
+        with page(browser) as pg:
+            rail = pg.locator(".mmg-rail a.mmg-item")
+            check(f"the rail lists the {len(MENU)} screens and 'Start here'", rail.count() == len(MENU) + 1, rail.count())
+            check("the rail is visible beside the menu", pg.locator(".mmg-rail").is_visible())
+            pg.locator(".mmg-rail a.mmg-item[data-page='sort']").click()
+            back(pg).wait_for(timeout=30000)
+            pg.wait_for_timeout(600)
+            check("a rail click opens the screen and names it in the address",
+                  pg.locator("h1", has_text=MENU[9][1]).count() == 1 and pg.evaluate("() => location.hash") == "#sort", pg.evaluate("() => location.hash"))
+            check("the rail marks the open screen", pg.evaluate("() => document.querySelector('.mmg-rail a.active')?.dataset.page") == "sort")
+            t = text_of(pg)
+            check("the header strip says where you are and the folder", "File tools" in t and os.path.basename(T) in t, t[:300])
+            pg.locator(".mmg-rail a.mmg-item[data-page='fastq']").click()
+            pg.locator("h1", has_text=MENU[12][1]).wait_for(timeout=30000)
+            check("the rail switches from one screen to another", pg.locator("h1", has_text=MENU[9][1]).count() == 0 and pg.evaluate("() => location.hash") == "#fastq")
+            shot(pg, "rail_screen12")
+            back(pg).click()
+            menu_button(pg, 1).wait_for(timeout=30000)
+            pg.wait_for_timeout(500)
+            check("'Back to Menu' clears the address", pg.evaluate("() => location.hash") == "")
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(500)
+            # Playwright calls an element slid off the screen "visible" (it has a box): read the drawer's own state.
+            drawer_open = "() => { const r = document.querySelector('.mmg-rail'); return r.classList.contains('open') && r.getBoundingClientRect().left >= 0; }"
+            check("on a phone the rail is a drawer, closed", not pg.evaluate(drawer_open) and pg.evaluate("() => document.querySelector('.mmg-rail').getBoundingClientRect().right <= 0")
+                  and pg.locator(".mmg-rail-toggle").is_visible())
+            pg.locator(".mmg-rail-toggle").click()
+            pg.wait_for_timeout(400)
+            check("the drawer opens", pg.evaluate(drawer_open))
+            shot(pg, "rail_phone")
+            pg.locator(".mmg-rail a.mmg-item[data-page='validate']").click()
+            back(pg).wait_for(timeout=30000)
+            pg.wait_for_timeout(400)
+            check("a choice closes the drawer and opens the screen", not pg.evaluate(drawer_open) and pg.evaluate("() => location.hash") == "#validate")
+            check("the tasks are tabs; on a phone the strip scrolls sideways instead of overflowing the page",
+                  pg.get_by_role("tab").count() == 3 and pg.evaluate(
+                      "() => { const t = document.querySelector('marimo-tabs'); return !!t && getComputedStyle(t).overflowX === 'auto'; }")
+                  and pg.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"))
+        pg2 = browser.new_page(viewport={"width": 1280, "height": 1500})
+        pg2.goto(URL + "#pgx", wait_until="domcontentloaded")
+        back(pg2).wait_for(timeout=90000)
+        check("an address with the screen (#pgx) opens it directly", pg2.locator("h1", has_text=MENU[19][1]).count() == 1)
+        pg2.close()
 
         print("== screen 1: ingestion (FASTA and FASTQ -> k-mers -> .arrow)")
         t = ingest(browser, ["ecoli.fasta"])

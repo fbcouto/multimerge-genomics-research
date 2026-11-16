@@ -606,6 +606,21 @@ check("  SAM -> reads.bam, 20 records", os.path.exists("reads.bam") and "22 (20 
 r = convert_backend(file="quals.vcf", target="text", numbers="number", output="")
 check("  already in that container: stops with a warning", stopped(r, "already in that container"), shown(r)[:200])
 
+print("== the rail of tools and the header strip")
+r = cell_run(ui.workbench_rail, get_page=lambda: "sort", set_page=lambda _: None)
+check("  the rail lists the 31 screens as links, the open one marked",
+      not isinstance(r, BaseException) and raw(r).count('class="mmg-item') == 32 and 'class="mmg-item active" href="#sort"' in raw(r)
+      and raw(r).count("mmg-rail-bridge") == 1, raw(r)[:300])
+_rail_pages = {p for _, _, items in r[1]["RAIL_GROUPS"] for p, _, _ in items}
+_menu_pages = set(re.findall(r'set_page\("(\w+)"\)', ui.main_menu._cell.code)) - {"home"}
+check("  every screen of the menu is in the rail, and only those", _rail_pages == _menu_pages, sorted(_rail_pages ^ _menu_pages))
+r = cell_run(ui.workbench_header, RAIL_GROUPS=r[1]["RAIL_GROUPS"], RAIL_HUMAN=r[1]["RAIL_HUMAN"], get_page=lambda: "pgx")
+check("  the header strip: group, screen, folder and the human-genome chip",
+      not isinstance(r, BaseException) and "Human genetics" in shown(r) and "19. Pharmacogenomics" in shown(r)
+      and os.path.basename(os.getcwd()) in shown(r) and "human genome" in shown(r), shown(r)[:300])
+for _side in ("ui_theme.css", "ui_head.html"):
+    check(f"  {_side} is next to the interface", os.path.exists(os.path.join(os.path.dirname(ui.__file__), _side)))
+
 print("== screen 15: the guide to the tests")
 r = cell_run(ui.guide_page_ui, get_page=lambda: "guide", set_page=lambda _: None)
 check("  the guide shows the table of tests, their blind spots and the notice",

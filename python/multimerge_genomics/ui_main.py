@@ -2,7 +2,10 @@ import marimo
 
 __generated_with = "0.23.11"
 # app_title is the browser tab title.
-app = marimo.App(width="full", app_title="MMGEN Suite")
+# css_file: the workbench theme (the rail of tools); html_head_file: the script that
+# makes the rail's links navigate. Both next to this file; marimo only injects the
+# head file when the app is served (`marimo run`, `mmgen-ui`), not in `marimo edit`.
+app = marimo.App(width="full", app_title="MMGEN Suite", css_file="ui_theme.css", html_head_file="ui_head.html")
 
 
 @app.cell
@@ -272,6 +275,21 @@ def file_helpers(mmg, mo, os, re):
             "by an accredited laboratory and interpreted by a qualified professional (a physician or a genetic "
             "counselor). Analyze only the genomes of people who have agreed to it: genetic data are sensitive "
             "personal data, about the person and about their relatives."), kind="danger")
+
+    def task_tabs(options, value, **_ignored):
+        """The tasks of a screen as tabs (the form below is rebuilt for the one
+        chosen). `.value` is the task's name, as the radio buttons gave it."""
+        return mo.ui.tabs({o: mo.Html("") for o in options}, value=value)
+
+    def form_with_note(form, *notes):
+        """The form, with the example's note (what it shows, what to expect) and
+        any other note beside it on a wide screen, below it on a narrow one."""
+        notes = [n for n in notes if n is not None]
+        if not notes:
+            return form
+        # A grid of the theme (ui_theme.css): two columns from 900 px, one below.
+        # (mo.hstack with widths never wraps: its columns have no base width.)
+        return mo.Html(f'<div class="mmg-form-note"><div class="f">{form}</div><div class="n">{mo.vstack(notes, gap=0.5)}</div></div>')
 
     def svg_download(svg, name, title=None):
         """A button that saves a chart as a standalone SVG file (vector, for a paper)."""
@@ -567,8 +585,10 @@ def file_helpers(mmg, mo, os, re):
         facts,
         files_under,
         files_with,
+        form_with_note,
         human_notice,
         make_form,
+        task_tabs,
         figure_panel,
         output_name,
         svg_download,
@@ -602,7 +622,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # Downloaded from the GitHub release the first time an example needs them,
     # unless the zip is already in this folder. The 16S data (the mothur MiSeq
     # SOP) carry no explicit licence and are not published.
-    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/"
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/"
     DEMO_PACKS = {
         "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
                   "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
@@ -1933,7 +1953,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         except Exception as err:
             return {}, mo.callout(mo.md(f"**🔥 ERROR:** the example files could not be written in `{EXAMPLES_DIR}/`: {err}"), kind="danger")
         return dict(values), mo.callout(mo.md(
-            f"**🧪 {label}**\n\n{about}\n\nThe form below is filled in with this example (its files are in `{EXAMPLES_DIR}/`): "
+            f"**🧪 {label}**\n\n{about}\n\nThe form is filled in with this example (its files are in `{EXAMPLES_DIR}/`): "
             "submit it as it is, or change a field first."), kind="info")
 
     def label_of(options, value, default):
@@ -1941,6 +1961,80 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         return next((k for k, v in options.items() if v == value), default)
 
     return EXAMPLES, HUMAN_DIR, RESEARCH_DIR, example_for, example_picker, label_of, make_demo_pack, make_examples, make_human_demo
+
+
+@app.cell
+def workbench_rail(get_page, mmg, mo, set_page):
+    # The rail of tools, on every page: the five groups and their 31 screens,
+    # numbered as in the README and the AI catalog. Each entry is a plain link
+    # (#sort, #pgx...), styled by ui_theme.css; the script in ui_head.html hands
+    # the click to the hidden marimo button of that page (.mmg-rail-bridge),
+    # which sets the page as the menu does, and keeps the address in step so a
+    # bookmark or a reload opens the same screen. The menu stays as the "home"
+    # page. marimo only keeps a component alive when it is bound to a global
+    # variable, so the 31 buttons live in one mo.ui.array (rail_buttons).
+    RAIL_GROUPS = [
+        ("K-mer modules", "#1baf7a", [("qc", 1, "QC & Ingestion"), ("cluster", 2, "Taxonomic Clustering"), ("assembly", 3, "Genome Assembly"),
+                                      ("variant", 4, "Variant Calling (SNPs)"), ("annotation", 5, "Functional Annotation"),
+                                      ("bloom", 6, "Bloom Filters"), ("scaffold", 7, "Genome Scaffolding")]),
+        ("File tools, any size", "#2a78d6", [("vcf", 8, "VCF Multimerge & Sorting"), ("sort", 9, "Sort, Index & Intervals"),
+                                             ("validate", 10, "Validation & Names"), ("vcftools", 11, "VCF Stats, Filter & Normalize"),
+                                             ("fastq", 12, "FASTQ Quality & Trimming"), ("kmercount", 13, "K-mer Counting"),
+                                             ("convert", 14, "Formats & Conversion")]),
+        ("Human genetics", "#e87ba4", [("guide", 15, "Which Test Sees What"), ("kin", 16, "Relatedness, Trios & Paternity"),
+                                       ("anc", 17, "Ancestry & Polygenic Scores"), ("findings", 18, "Disease Findings & Panels"),
+                                       ("pgx", 19, "Pharmacogenomics"), ("chrom", 20, "Sex Chromosomes & Homozygosity"),
+                                       ("lookup", 21, "Variant Lookup & Browser"), ("assoc", 30, "Genotype & Outcome")]),
+        ("Research & microbiology", "#eda100", [("rnaseq", 22, "RNA-seq"), ("crispr", 23, "CRISPR Screens"), ("meta", 24, "Metagenomics"),
+                                                ("amr", 25, "Resistance Genes"), ("outbreak", 26, "Outbreaks & Viral Mutations"),
+                                                ("amplicon", 27, "16S Amplicons"), ("tmb", 28, "Tumor Mutational Burden"),
+                                                ("contam", 31, "Contaminant Screening")]),
+        ("Assistant", "#6250d6", [("ai", 29, "AI Assistant")]),
+    ]
+    RAIL_HUMAN = {"guide", "kin", "anc", "findings", "pgx", "chrom", "lookup", "assoc"}
+    _pages = [p for _, _, items in RAIL_GROUPS for p, _, _ in items]
+    rail_buttons = mo.ui.array([mo.ui.button(label=p, on_change=lambda _, p=p: set_page(p)) for p in _pages])
+    rail_home = mo.ui.button(label="home", on_change=lambda _: set_page("home"))
+    _by_page = dict(zip(_pages, rail_buttons))
+    _current = get_page()
+    _engine = mmg.engine_info()
+
+    def _entry(page, number, title):
+        _cls = "mmg-item active" if page == _current else "mmg-item"
+        return f'<a class="{_cls}" href="#{page}" data-page="{page}"><span class="n">{number}</span><span class="t">{title}</span></a>'
+
+    _parts = ['<button class="mmg-rail-toggle" type="button" aria-label="Tools">☰ Tools</button>',
+              '<nav class="mmg-rail" aria-label="Tools">',
+              f'<div class="mmg-brand"><span class="logo"></span>MMGEN <small>{_engine["version"]}</small></div>',
+              _entry("home", "⌂", "Start here")]
+    for _name, _colour, _items in RAIL_GROUPS:
+        _parts.append(f'<div class="mmg-group"><h4><span class="sw" style="background:{_colour}"></span>{_name}</h4>')
+        _parts.extend(_entry(_p, _n, _t) for _p, _n, _t in _items)
+        _parts.append("</div>")
+    _where = "GPU" if _engine["gpu"] else "CPU"
+    _parts.append(f'<div class="mmg-rail-foot"><span class="dot"></span>{_where} · {_engine["threads"]} threads</div></nav>')
+    # The hidden buttons the script clicks, one per page.
+    _parts.append('<div class="mmg-rail-bridge" hidden>' + f'<span data-page="home">{rail_home}</span>'
+                  + "".join(f'<span data-page="{_p}">{_by_page[_p]}</span>' for _p in _pages) + "</div>")
+    mo.Html("".join(_parts))
+    return RAIL_GROUPS, RAIL_HUMAN, rail_buttons, rail_home
+
+
+@app.cell
+def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os):
+    # The strip above every screen: where you are (group › screen) and the
+    # context every tool shares: the folder the files are listed from, and
+    # where the engine runs.
+    mo.stop(get_page() == "home")
+    _page = get_page()
+    _crumb = next((f'{_g} <span class="sep">›</span> <b>{_n}. {_t}</b>' for _g, _, _items in RAIL_GROUPS for _p, _n, _t in _items if _p == _page), "")
+    _engine = mmg.engine_info()
+    _chips = [f'<span class="mmg-chip ctx" title="{os.getcwd()}">📁 {os.path.basename(os.getcwd()) or os.getcwd()}</span>',
+              f'<span class="mmg-chip">{"GPU" if _engine["gpu"] else "CPU"} · {_engine["threads"]} threads</span>']
+    if _page in RAIL_HUMAN:
+        _chips.append('<span class="mmg-chip" title="Human genome data: experimental software, for teaching and research">🧬 human genome</span>')
+    mo.Html(f'<div class="mmg-top"><span class="crumb">{_crumb}</span><span class="chips">{"".join(_chips)}</span></div>') if _crumb else None
+    return
 
 
 @app.cell
@@ -1982,7 +2076,8 @@ def main_menu(get_page, mmg, mo, set_page):
     # What this installation really has: the GPU modules fall back to the CPU.
     _engine = mmg.engine_info()
     _where = "NVIDIA GPU (CUDA)" if _engine["gpu"] else "CPU"
-    _grid = 'style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 850px; margin: 0 auto;"'
+    # auto-fit: two columns on a wide screen, one on a phone (a fixed 1fr 1fr clipped every label at 390 px)
+    _grid = 'style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; max-width: 850px; margin: 0 auto;"'
     _section = 'style="color: gray; margin: 30px 0 12px 0; text-align: center;"'
 
     menu_screen = mo.md(f"""
@@ -2100,7 +2195,7 @@ def qc_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def qc_page_form(example_for, files_with, get_page, make_form, mo, qc_example):
+def qc_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, qc_example):
     mo.stop(get_page() != "qc")
     _ex, _about = example_for("qc", None, qc_example.value)
     form_qc = make_form({
@@ -2108,7 +2203,7 @@ def qc_page_form(example_for, files_with, get_page, make_form, mo, qc_example):
         "kmer_size": mo.ui.slider(start=21, stop=63, step=2, value=_ex.get("kmer_size", 55), show_value=True, label="K-mer size:"),
         "min_quality": mo.ui.slider(start=0, stop=40, step=1, value=_ex.get("min_quality", 20), show_value=True, label="Minimum mean quality (FASTQ only):"),
     }, "🚀 Start batch ingestion")
-    mo.vstack([_x for _x in (_about, form_qc) if _x is not None])
+    form_with_note(form_qc, _about)
     return (form_qc,)
 
 
@@ -2193,7 +2288,7 @@ def cluster_page_ui(example_picker, get_page, mo, set_page):
 
     _ui = mo.vstack([
         btn_back_cluster,
-        mo.md("<br>\n\n# 🧬 Taxonomic Clustering"),
+        mo.md("<br>\n\n# 🧬 2. Taxonomic Clustering"),
         mo.callout(mo.md(
             "Groups DNA by its **composition**, as metagenome binning tools (MetaBAT, CONCOCT) do: every sequence is cut "
             "into windows, each window is described by the frequency of its 136 tetranucleotides (4-base words, both "
@@ -2207,7 +2302,7 @@ def cluster_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def cluster_page_form(cluster_example, example_for, files_with, get_page, make_form, mo):
+def cluster_page_form(cluster_example, example_for, files_with, form_with_note, get_page, make_form, mo):
     mo.stop(get_page() != "cluster")
     _ex, _about = example_for("cluster", None, cluster_example.value)
     _files = [f for f in files_with("fasta") if not f.startswith("(")]
@@ -2218,7 +2313,7 @@ def cluster_page_form(cluster_example, example_for, files_with, get_page, make_f
         "min_cluster": mo.ui.number(start=2, stop=1000, step=1, value=_ex.get("min_cluster", 5), label="Smallest group (windows):"),
         "dims": mo.ui.number(start=2, stop=20, step=1, value=_ex.get("dims", 5), label="PCA dimensions kept:"),
     }, "🧬 Cluster the sequences")
-    mo.vstack([_x for _x in (_about, form_cluster) if _x is not None])
+    form_with_note(form_cluster, _about)
     return (form_cluster,)
 
 
@@ -2369,7 +2464,7 @@ def assembly_page_ui(example_picker, get_page, mo, set_page):
 
     _ui = mo.vstack([
         btn_back_assembly,
-        mo.md("<br>\n\n# 🧩 Genome Assembly (De Bruijn)"),
+        mo.md("<br>\n\n# 🧩 3. Genome Assembly (De Bruijn)"),
         mo.callout(mo.md("This module takes the k-mers from Module 1, splits each one into a prefix (K-1) and a suffix (K-1), and maps the overlaps in memory, in Rust. The unbranched paths of that graph are the contigs."), kind="info"),
         assembly_example,
     ])
@@ -2378,14 +2473,14 @@ def assembly_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def assembly_page_form(assembly_example, example_for, files_with, get_page, make_form, mo):
+def assembly_page_form(assembly_example, example_for, files_with, form_with_note, get_page, make_form, mo):
     mo.stop(get_page() != "assembly")
     _ex, _about = example_for("assembly", None, assembly_example.value)
     # The .arrow files written by Module 1.
     form_assembly = make_form({
         "kmer_file": mo.ui.dropdown(options=files_with("arrow"), value=_ex.get("kmer_file"), label="🧬 K-mer file (.arrow, written by Module 1):", full_width=True),
     }, "🧩 Build the De Bruijn graph and assemble")
-    mo.vstack([_x for _x in (_about, form_assembly) if _x is not None])
+    form_with_note(form_assembly, _about)
     return (form_assembly,)
 
 
@@ -2536,7 +2631,7 @@ def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, g
 
     _ui = mo.vstack([
         btn_back_variant,
-        mo.md("<br>\n\n# ⚠️ Variant Calling (SNPs)"),
+        mo.md("<br>\n\n# ⚠️ 4. Variant Calling (SNPs)"),
         mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below makes a simulated patient: a copy of the genome you pick, with SNPs planted at positions it tells you; run both through Module 1 to get their `.arrow` files. Or pick the example: a small genome and a patient, ready as k-mers."), kind="info"),
         mo.hstack([patient_source, patient_snps, btn_generate], justify="start", align="end", widths=[4, 1, 1.4]),
         # The button's feedback (an empty one gave "****", which Markdown draws
@@ -2549,7 +2644,7 @@ def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, g
 
 
 @app.cell
-def variant_page_form(example_for, files_with, get_page, make_form, mo, variant_example):
+def variant_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, variant_example):
     mo.stop(get_page() != "variant")
     _ex, _about = example_for("variant", None, variant_example.value)
     _files = files_with("arrow")
@@ -2559,7 +2654,7 @@ def variant_page_form(example_for, files_with, get_page, make_form, mo, variant_
         "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=_ex.get("filter_mb", 16), show_value=True, label="Bloom filter size (MB):"),
         "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=_ex.get("num_hashes", 5), show_value=True, label="Hashes per k-mer:"),
     }, "🔍 3. Run the search")
-    mo.vstack([_x for _x in (_about, form_variant) if _x is not None])
+    form_with_note(form_variant, _about)
     return (form_variant,)
 
 
@@ -2626,7 +2721,7 @@ def annotation_page_ui(example_picker, get_page, mo, set_page):
 
     _ui = mo.vstack([
         btn_back_annotation,
-        mo.md("<br>\n\n# 📘 Functional Annotation (Translation)"),
+        mo.md("<br>\n\n# 📘 5. Functional Annotation (Translation)"),
         mo.callout(mo.md("DNA alone is only an instruction manual. To see whether a mutation matters, we translate the code three letters at a time (codons) and check whether the **protein** changed. Paste a sequence below to try it."), kind="info"),
         annotation_example,
     ])
@@ -2635,7 +2730,7 @@ def annotation_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def annotation_page_form(annotation_example, example_for, get_page, make_form, mo):
+def annotation_page_form(annotation_example, example_for, form_with_note, get_page, make_form, mo):
     mo.stop(get_page() != "annotation")
     _ex, _about = example_for("annotation", None, annotation_example.value)
     form_annotation = make_form({
@@ -2646,7 +2741,7 @@ def annotation_page_form(annotation_example, example_for, get_page, make_form, m
             full_width=True,
         ),
     }, "⚙️ Translate to protein")
-    mo.vstack([_x for _x in (_about, form_annotation) if _x is not None])
+    form_with_note(form_annotation, _about)
     return (form_annotation,)
 
 
@@ -2696,7 +2791,7 @@ def bloom_page_ui(example_picker, get_page, mo, set_page):
 
     _ui = mo.vstack([
         btn_back_bloom,
-        mo.md("<br>\n\n# 🔍 Probabilistic Bloom Filters"),
+        mo.md("<br>\n\n# 🔍 6. Probabilistic Bloom Filters"),
         mo.callout(mo.md("A Bloom filter answers \"have I seen this k-mer?\" in a fixed amount of memory: each k-mer sets a few bits, chosen by its hashes. It never misses a k-mer it holds, but the fuller it gets, the more often it says yes to one it does not hold (a false positive)."), kind="info"),
         bloom_example,
     ])
@@ -2705,7 +2800,7 @@ def bloom_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def bloom_page_form(bloom_example, example_for, files_with, get_page, make_form, mo):
+def bloom_page_form(bloom_example, example_for, files_with, form_with_note, get_page, make_form, mo):
     mo.stop(get_page() != "bloom")
     _ex, _about = example_for("bloom", None, bloom_example.value)
     form_bloom = make_form({
@@ -2713,7 +2808,7 @@ def bloom_page_form(bloom_example, example_for, files_with, get_page, make_form,
         "filter_mb": mo.ui.slider(start=1, stop=128, step=1, value=_ex.get("filter_mb", 16), show_value=True, label="Filter size (MB):"),
         "num_hashes": mo.ui.slider(start=1, stop=10, step=1, value=_ex.get("num_hashes", 5), show_value=True, label="Number of hashes:"),
     }, "🔍 Build the Bloom filter")
-    mo.vstack([_x for _x in (_about, form_bloom) if _x is not None])
+    form_with_note(form_bloom, _about)
     return (form_bloom,)
 
 
@@ -2763,7 +2858,7 @@ def scaffold_page_ui(example_picker, get_page, mo, set_page):
 
     _ui = mo.vstack([
         btn_back_scaffold,
-        mo.md("<br>\n\n# 🧬 Genome Scaffolding"),
+        mo.md("<br>\n\n# 🧬 7. Genome Scaffolding"),
         mo.callout(mo.md("The De Bruijn graph produced contigs. Scaffolding takes those blocks and stitches them together wherever their ends overlap exactly, trying to rebuild the original chromosome, circular ones included."), kind="info"),
         scaffold_example,
     ])
@@ -2772,7 +2867,7 @@ def scaffold_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def scaffold_page_form(example_for, files_with, get_page, make_form, mo, scaffold_example):
+def scaffold_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, scaffold_example):
     mo.stop(get_page() != "scaffold")
     _ex, _about = example_for("scaffold", None, scaffold_example.value)
     form_scaffold = make_form({
@@ -2780,7 +2875,7 @@ def scaffold_page_form(example_for, files_with, get_page, make_form, mo, scaffol
         # With K=55 in the assembly, the contigs overlap by exactly K-1 (54).
         "overlap": mo.ui.slider(start=21, stop=100, step=1, value=_ex.get("overlap", 54), show_value=True, label="Exact overlap at the ends (bases):"),
     }, "🏗️ Close the genome (scaffolding)")
-    mo.vstack([_x for _x in (_about, form_scaffold) if _x is not None])
+    form_with_note(form_scaffold, _about)
     return (form_scaffold,)
 
 
@@ -2860,7 +2955,7 @@ def vcf_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def vcf_page_form(example_for, files_with, get_page, make_form, mo, vcf_example):
+def vcf_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, vcf_example):
     mo.stop(get_page() != "vcf")
     _ex, _about = example_for("vcf", None, vcf_example.value)
     form_vcf = make_form({
@@ -2868,7 +2963,7 @@ def vcf_page_form(example_for, files_with, get_page, make_form, mo, vcf_example)
         "sort_by": mo.ui.dropdown(options=["POS", "QUAL"], value=_ex.get("sort_by", "POS"), label="📊 Sort by:", full_width=True),
         "output_name": mo.ui.text(value=_ex.get("output_name", "Merged_Sorted.vcf"), label="💾 Output file name:", full_width=True),
     }, "🚀 Start the Multimerge engine")
-    mo.vstack([_x for _x in (_about, form_vcf) if _x is not None])
+    form_with_note(form_vcf, _about)
     return (form_vcf,)
 
 
@@ -2929,11 +3024,11 @@ async def vcf_page_backend(asyncio, chosen, form_vcf, get_page, mmg, mo, os, war
 
 
 @app.cell
-def sort_page_ui(get_page, mo, set_page):
+def sort_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "sort")
     btn_back_sort = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_sort = mo.ui.button(label="🔄 Refresh the file list")
-    sort_task = mo.ui.radio(
+    sort_task = task_tabs(
         options=["Sort & merge", "Index & query a region", "Interval operations (BED)"],
         value="Sort & merge", inline=True, label="**What to do:**",
     )
@@ -2954,7 +3049,7 @@ def sort_page_ui(get_page, mo, set_page):
         btn_back_sort,
         mo.md("<br>\n\n# 📏 9. Sorting, Indexing & Intervals"),
         mo.callout(mo.md("Sort and merge VCF, BED, GFF/GTF and SAM/BAM files of any size (what does not fit in memory is sorted in runs on disk); build the `.tbi` / `.bai` index of a sorted file and read only the region you ask for; or run the interval operations of bedtools on BED files, which do not need to be sorted. Results are written next to their input."), kind="info"),
-        mo.hstack([sort_task, btn_refresh_sort], justify="space-between", align="center"),
+        mo.hstack([sort_task, btn_refresh_sort], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_sort, btn_refresh_sort, interval_op, sort_task
@@ -2971,7 +3066,7 @@ def sort_page_example(example_picker, get_page, interval_op, mo, sort_task):
 
 
 @app.cell
-def sort_page_form(btn_refresh_sort, example_for, files_with, get_page, interval_op, label_of, make_form, mo, real_files, sort_example, sort_task):
+def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, get_page, interval_op, label_of, make_form, mo, real_files, sort_example, sort_task):
     mo.stop(get_page() != "sort")
     btn_refresh_sort  # a click re-runs this cell, which lists the folder again
     _task = sort_task.value
@@ -3027,7 +3122,7 @@ def sort_page_form(btn_refresh_sort, example_for, files_with, get_page, interval
         _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <first A file>.{_op}.<same extension>", label="Output file:", full_width=True)
         form_sort = make_form(_fields, f"🚀 Run {_op}")
 
-    mo.vstack([_x for _x in (_about, form_sort) if _x is not None])
+    form_with_note(form_sort, _about)
     return (form_sort,)
 
 
@@ -3188,11 +3283,11 @@ async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, f
 
 
 @app.cell
-def validate_page_ui(get_page, mo, set_page):
+def validate_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "validate")
     btn_back_validate = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_validate = mo.ui.button(label="🔄 Refresh the file list")
-    validate_task = mo.ui.radio(
+    validate_task = task_tabs(
         options=["Validate a file", "Rename chromosomes (chr1 ↔ 1)", "Compare reference genomes"],
         value="Validate a file", inline=True, label="**What to do:**",
     )
@@ -3200,7 +3295,7 @@ def validate_page_ui(get_page, mo, set_page):
         btn_back_validate,
         mo.md("<br>\n\n# 🩺 10. Validation & Chromosome Names"),
         mo.callout(mo.md("Find out what is wrong with a file before another tool fails on it: the validator reads VCF, BED, GFF/GTF, SAM/BAM, FASTA and FASTQ files of any size and gives, for each kind of problem, the line where it first shows up, how often it repeats and how to fix it. Rename the chromosomes of a whole file (`chr1` ↔ `1`), and check that two files are on the same reference genome (GRCh37 or GRCh38) before combining them."), kind="info"),
-        mo.hstack([validate_task, btn_refresh_validate], justify="space-between", align="center"),
+        mo.hstack([validate_task, btn_refresh_validate], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_validate, btn_refresh_validate, validate_task
@@ -3215,7 +3310,7 @@ def validate_page_example(example_picker, get_page, mo, validate_task):
 
 
 @app.cell
-def validate_page_form(btn_refresh_validate, example_for, files_with, get_page, label_of, make_form, mo, real_files, validate_example, validate_task):
+def validate_page_form(btn_refresh_validate, example_for, files_with, form_with_note, get_page, label_of, make_form, mo, real_files, validate_example, validate_task):
     mo.stop(get_page() != "validate")
     btn_refresh_validate  # a click re-runs this cell, which lists the folder again
     _task = validate_task.value
@@ -3244,7 +3339,7 @@ def validate_page_form(btn_refresh_validate, example_for, files_with, get_page, 
             "b": mo.ui.dropdown(options=_refs, value=_ex.get("b"), label="File B:", full_width=True),
         }, "⚖️ Compare")
 
-    mo.vstack([_x for _x in (_about, form_validate) if _x is not None])
+    form_with_note(form_validate, _about)
     return (form_validate,)
 
 
@@ -3362,16 +3457,16 @@ async def validate_page_backend(asyncio, chosen, clashes, code_panel, error_pane
 
 
 @app.cell
-def vcftools_page_ui(get_page, mo, set_page):
+def vcftools_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "vcftools")
     btn_back_vcftools = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_vcftools = mo.ui.button(label="🔄 Refresh the file list")
-    vcftools_task = mo.ui.radio(options=["Statistics", "Filter", "Normalize"], value="Statistics", inline=True, label="**What to do:**")
+    vcftools_task = task_tabs(options=["Statistics", "Filter", "Normalize"], value="Statistics", inline=True, label="**What to do:**")
     _ui = mo.vstack([
         btn_back_vcftools,
         mo.md("<br>\n\n# 🧪 11. VCF Statistics, Filtering & Normalization"),
         mo.callout(mo.md("Count what a VCF holds; keep the records that match an expression, as in bcftools; and normalize the variants: split multiallelic sites, trim them, and, given the genome, left-align the indels as `bcftools norm -f` does. The file is read as a stream, so its size does not matter."), kind="info"),
-        mo.hstack([vcftools_task, btn_refresh_vcftools], justify="space-between", align="center"),
+        mo.hstack([vcftools_task, btn_refresh_vcftools], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_vcftools, btn_refresh_vcftools, vcftools_task
@@ -3386,7 +3481,7 @@ def vcftools_page_example(example_picker, get_page, mo, vcftools_task):
 
 
 @app.cell
-def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, get_page, label_of, make_form, mo, real_files, vcftools_example, vcftools_task):
+def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_note, get_page, label_of, make_form, mo, real_files, vcftools_example, vcftools_task):
     mo.stop(get_page() != "vcftools")
     btn_refresh_vcftools  # a click re-runs this cell, which lists the folder again
     _task = vcftools_task.value
@@ -3425,7 +3520,7 @@ def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, get_page, 
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.norm.<same extension>", label="Output file:", full_width=True),
         }, "🧹 Normalize")
 
-    mo.vstack(_above + [form_vcftools])
+    form_with_note(form_vcftools, *_above)
     return (form_vcftools,)
 
 
@@ -3543,16 +3638,16 @@ async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_pane
 
 
 @app.cell
-def fastq_page_ui(get_page, mo, set_page):
+def fastq_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "fastq")
     btn_back_fastq = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_fastq = mo.ui.button(label="🔄 Refresh the file list")
-    fastq_task = mo.ui.radio(options=["Quality report", "Trim reads"], value="Quality report", inline=True, label="**What to do:**")
+    fastq_task = task_tabs(options=["Quality report", "Trim reads"], value="Quality report", inline=True, label="**What to do:**")
     _ui = mo.vstack([
         btn_back_fastq,
         mo.md("<br>\n\n# 📈 12. FASTQ Quality Report & Trimming"),
         mo.callout(mo.md("Measure the quality of the reads in one pass over a file of any size: quality along the read, base composition, GC, N bases, duplication, lengths and known adapters, in a report page that also opens offline. Then trim them as `cutadapt --no-indels` does: low-quality ends, the 3' adapter and N at the ends, dropping the reads that end up too short. The two files of a pair stay in step."), kind="info"),
-        mo.hstack([fastq_task, btn_refresh_fastq], justify="space-between", align="center"),
+        mo.hstack([fastq_task, btn_refresh_fastq], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_fastq, btn_refresh_fastq, fastq_task
@@ -3567,7 +3662,7 @@ def fastq_page_example(example_picker, fastq_task, get_page, mo):
 
 
 @app.cell
-def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, files_with, get_page, label_of, make_form, mo, real_files):
+def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, files_with, form_with_note, get_page, label_of, make_form, mo, real_files):
     mo.stop(get_page() != "fastq")
     btn_refresh_fastq  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("fastq", fastq_task.value, fastq_example.value)
@@ -3604,7 +3699,7 @@ def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, f
             "output2": mo.ui.text(value=_ex.get("output2", ""), placeholder="blank: <R2 file>.trimmed.<same extension>", label="Output for R2:", full_width=True),
         }, "✂️ Trim")
 
-    mo.vstack([_x for _x in (_about, form_fastq) if _x is not None])
+    form_with_note(form_fastq, _about)
     return (form_fastq,)
 
 
@@ -3706,14 +3801,14 @@ def kmercount_page_ui(example_picker, get_page, mo, set_page):
         btn_back_kmercount,
         mo.md("<br>\n\n# 🔢 13. K-mer Counting"),
         mo.callout(mo.md("Count every k-mer (k from 1 to 63) of FASTA and FASTQ files of any size: what does not fit in memory is sorted in runs on disk and merged. Canonical by default, so a k-mer and its reverse complement count as one and reads from the two strands add up. The abundance spectrum shows how many distinct k-mers were seen once, twice, and so on: in sequencing reads, the k-mers seen once are mostly errors, and the peak sits at the coverage."), kind="info"),
-        mo.hstack([kmercount_example, btn_refresh_kmercount], justify="space-between", align="center"),
+        mo.hstack([kmercount_example, btn_refresh_kmercount], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_kmercount, btn_refresh_kmercount, kmercount_example
 
 
 @app.cell
-def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, get_page, kmercount_example, make_form, mo):
+def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, form_with_note, get_page, kmercount_example, make_form, mo):
     mo.stop(get_page() != "kmercount")
     btn_refresh_kmercount  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("kmercount", None, kmercount_example.value)
@@ -3724,7 +3819,7 @@ def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, get_page
         "min_count": mo.ui.number(start=1, stop=10**9, step=1, value=_ex.get("min_count", 1), label="Leave out of the table the k-mers seen fewer times than:"),
         "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the summary only, no table (for example kmers.tsv.gz)", label="Table of counts:", full_width=True),
     }, "🔢 Count")
-    mo.vstack([_x for _x in (_about, form_kmercount) if _x is not None])
+    form_with_note(form_kmercount, _about)
     return (form_kmercount,)
 
 
@@ -3800,14 +3895,14 @@ def convert_page_ui(example_picker, get_page, mo, set_page):
         btn_back_convert,
         mo.md("<br>\n\n# 📦 14. Formats & Conversion"),
         mo.callout(mo.md("Change only the container of a VCF, BED, GFF/GTF or SAM file, keeping every line and its order: plain text, gzip (written as BGZF, which can also be indexed), LZ4, BAM (from and to SAM) and Parquet, a table of typed columns that pandas, polars, DuckDB or Spark open directly, with the header kept in the file, so it converts back to the same text."), kind="info"),
-        mo.hstack([convert_example, btn_refresh_convert], justify="space-between", align="center"),
+        mo.hstack([convert_example, btn_refresh_convert], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_convert, btn_refresh_convert, convert_example
 
 
 @app.cell
-def convert_page_form(btn_refresh_convert, convert_example, example_for, files_with, get_page, label_of, make_form, mo):
+def convert_page_form(btn_refresh_convert, convert_example, example_for, files_with, form_with_note, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "convert")
     btn_refresh_convert  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("convert", None, convert_example.value)
@@ -3829,7 +3924,7 @@ def convert_page_form(btn_refresh_convert, convert_example, example_for, files_w
                                label="QUAL (VCF) and score (GFF) in a Parquet output:"),
         "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the same name with the new extension", label="Output file:", full_width=True),
     }, "📦 Convert")
-    mo.vstack([_x for _x in (_about, form_convert) if _x is not None])
+    form_with_note(form_convert, _about)
     return (form_convert,)
 
 
@@ -3900,7 +3995,7 @@ def guide_page_ui(get_page, human_notice, mo, set_page):
          "Balanced rearrangements; single-base variants", "CEL / IDAT, then genotype tables or VCF",
          "Runs of homozygosity and genetic sex from a VCF (screen 20)"),
         ("MLPA", "Exons (tens of bases)", "Deletions and duplications of target genes (SMN1, DMD, 22q11.2)",
-         "Point variants outside the probes", "Fragment-analysis tables", "Planned: copy number from the read depth of a BAM"),
+         "Point variants outside the probes", "Fragment-analysis tables", "Mean depth in bins over any region of a BAM (depth_profile), and the CYP2D6 copy number against control regions (screen 19); genome-wide CNV calling is planned"),
         ("Gene panel or exome (short reads)", "Single base", "SNVs and small indels in the targeted genes or coding regions",
          "Non-coding regions; long repeat expansions; complex rearrangements; many CNVs", "FASTQ → BAM → VCF",
          "Quality and trimming (12), sorting and indexing (9), VCF tools (11), gene panels and ClinVar findings (18)"),
@@ -3973,11 +4068,11 @@ def guide_page_ui(get_page, human_notice, mo, set_page):
 
 
 @app.cell
-def kin_page_ui(get_page, human_notice, mo, set_page):
+def kin_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "kin")
     btn_back_kin = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_kin = mo.ui.button(label="🔄 Refresh the file list")
-    kin_task = mo.ui.radio(options=["Relatedness of several people", "Trio and paternity test"], value="Relatedness of several people",
+    kin_task = task_tabs(options=["Relatedness of several people", "Trio and paternity test"], value="Relatedness of several people",
                            inline=True, label="**What to do:**")
     kin_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -3995,7 +4090,7 @@ def kin_page_ui(get_page, human_notice, mo, set_page):
             "**This is not a paternity test with legal value**: that requires an accredited laboratory, verified identities, a "
             "chain of custody and the consent of everyone tested."), kind="info"),
         kin_folder,
-        mo.hstack([kin_task, btn_refresh_kin], justify="space-between", align="center"),
+        mo.hstack([kin_task, btn_refresh_kin], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_kin, btn_refresh_kin, kin_folder, kin_task
@@ -4010,7 +4105,7 @@ def kin_page_example(example_picker, get_page, kin_task, mo):
 
 
 @app.cell
-def kin_page_form(NO_FILE, btn_refresh_kin, example_for, files_under, get_page, kin_example, kin_folder, kin_task, label_of, make_form, mo):
+def kin_page_form(btn_refresh_kin, example_for, files_under, form_with_note, get_page, kin_example, kin_folder, kin_task, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "kin")
     btn_refresh_kin  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("kin", kin_task.value, kin_example.value)
@@ -4039,7 +4134,7 @@ def kin_page_form(NO_FILE, btn_refresh_kin, example_for, files_under, get_page, 
                                        label="Frequencies of which population (the closest to the family's ancestry):", full_width=True),
             "de_novo": mo.ui.text(value=_ex.get("de_novo", ""), placeholder="blank: only count them", label="Write the de novo candidates to (VCF):", full_width=True),
         }, "👪 Analyze the trio")
-    mo.vstack([_x for _x in (_about, form_kin) if _x is not None])
+    form_with_note(form_kin, _about)
     return (form_kin,)
 
 
@@ -4136,11 +4231,11 @@ async def kin_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel
 
 
 @app.cell
-def anc_page_ui(get_page, human_notice, mo, set_page):
+def anc_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "anc")
     btn_back_anc = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_anc = mo.ui.button(label="🔄 Refresh the file list")
-    anc_task = mo.ui.radio(options=["Ancestry", "Polygenic score", "Build a reference panel"], value="Ancestry", inline=True, label="**What to do:**")
+    anc_task = task_tabs(options=["Ancestry", "Polygenic score", "Build a reference panel"], value="Ancestry", inline=True, label="**What to do:**")
     anc_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
         btn_back_anc,
@@ -4155,7 +4250,7 @@ def anc_page_ui(get_page, human_notice, mo, set_page):
             "statistical summary for research and teaching: it is not a diagnosis, and it carries over poorly to ancestries "
             "unlike those of the study that made it."), kind="info"),
         anc_folder,
-        mo.hstack([anc_task, btn_refresh_anc], justify="space-between", align="center"),
+        mo.hstack([anc_task, btn_refresh_anc], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return anc_folder, anc_task, btn_back_anc, btn_refresh_anc
@@ -4170,7 +4265,7 @@ def anc_page_example(anc_task, example_picker, get_page, mo):
 
 
 @app.cell
-def anc_page_form(NO_FILE, anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, get_page, label_of, make_form, mo):
+def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "anc")
     btn_refresh_anc  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("anc", anc_task.value, anc_example.value)
@@ -4214,7 +4309,7 @@ def anc_page_form(NO_FILE, anc_example, anc_folder, anc_task, btn_refresh_anc, e
             "thin_bp": mo.ui.number(start=0, stop=10**7, step=1000, value=_ex.get("thin_bp", 0), label="At most one site per (bases; 0 = all):"),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <source>.panel.tsv.gz next to it", label="Panel file:", full_width=True),
         }, "🧱 Build the panel")
-    mo.vstack([_x for _x in (_about, form_anc) if _x is not None])
+    form_with_note(form_anc, _about)
     return (form_anc,)
 
 
@@ -4344,11 +4439,11 @@ async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_
 
 
 @app.cell
-def chrom_page_ui(get_page, human_notice, mo, set_page):
+def chrom_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "chrom")
     btn_back_chrom = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_chrom = mo.ui.button(label="🔄 Refresh the file list")
-    chrom_task = mo.ui.radio(options=["Genetic sex", "Runs of homozygosity"], value="Genetic sex", inline=True, label="**What to do:**")
+    chrom_task = task_tabs(options=["Genetic sex", "Runs of homozygosity"], value="Genetic sex", inline=True, label="**What to do:**")
     chrom_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
         btn_back_chrom,
@@ -4364,7 +4459,7 @@ def chrom_page_ui(get_page, human_notice, mo, set_page):
             "heterozygous call, so a genotyping error does not split a run), or strictly (any heterozygous call ends a run). "
             "Genetic sex is not gender identity."), kind="info"),
         chrom_folder,
-        mo.hstack([chrom_task, btn_refresh_chrom], justify="space-between", align="center"),
+        mo.hstack([chrom_task, btn_refresh_chrom], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_chrom, btn_refresh_chrom, chrom_folder, chrom_task
@@ -4379,7 +4474,7 @@ def chrom_page_example(chrom_task, example_picker, get_page, mo):
 
 
 @app.cell
-def chrom_page_form(NO_FILE, btn_refresh_chrom, chrom_example, chrom_folder, chrom_task, example_for, files_under, get_page, label_of, make_form, mo):
+def chrom_page_form(btn_refresh_chrom, chrom_example, chrom_folder, chrom_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "chrom")
     btn_refresh_chrom  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("chrom", chrom_task.value, chrom_example.value)
@@ -4402,7 +4497,7 @@ def chrom_page_form(NO_FILE, btn_refresh_chrom, chrom_example, chrom_folder, chr
         form_chrom = make_form(_fields, "🧫 Find the runs")
     else:
         form_chrom = make_form(_fields, "🧫 Infer")
-    mo.vstack([_x for _x in (_about, form_chrom) if _x is not None])
+    form_with_note(form_chrom, _about)
     return (form_chrom,)
 
 
@@ -4477,11 +4572,11 @@ async def chrom_page_backend(asyncio, chosen, chrom_task, code_panel, error_pane
 
 
 @app.cell
-def findings_page_ui(get_page, human_notice, mo, set_page):
+def findings_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "findings")
     btn_back_findings = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_findings = mo.ui.button(label="🔄 Refresh the file list")
-    findings_task = mo.ui.radio(options=["ClinVar findings", "Gene panel from an annotation"], value="ClinVar findings",
+    findings_task = task_tabs(options=["ClinVar findings", "Gene panel from an annotation"], value="ClinVar findings",
                                 inline=True, label="**What to do:**")
     findings_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -4490,7 +4585,7 @@ def findings_page_ui(get_page, human_notice, mo, set_page):
         human_notice(),
         mo.callout(mo.md("Which of a person's variants does **ClinVar** (NCBI's public archive of variant classifications) list, and how is each one classified: pathogenic, likely pathogenic, uncertain, benign. Each finding comes with its review stars (how well supported the classification is), the conditions and the zygosity. Restrict it to the genes of a **panel**, as the gene panels of clinical laboratories do, or get the coordinates of a panel's genes from an annotation (GFF). The person's VCF and ClinVar must be on the same assembly; download ClinVar from ftp.ncbi.nlm.nih.gov/pub/clinvar/."), kind="info"),
         findings_folder,
-        mo.hstack([findings_task, btn_refresh_findings], justify="space-between", align="center"),
+        mo.hstack([findings_task, btn_refresh_findings], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_findings, btn_refresh_findings, findings_folder, findings_task
@@ -4505,7 +4600,7 @@ def findings_page_example(example_picker, findings_task, get_page, mo):
 
 
 @app.cell
-def findings_page_form(GENE_PANELS, NO_FILE, btn_refresh_findings, example_for, files_under, findings_example, findings_folder, findings_task, get_page, label_of, make_form, mo):
+def findings_page_form(btn_refresh_findings, example_for, files_under, findings_example, findings_folder, findings_task, form_with_note, GENE_PANELS, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "findings")
     btn_refresh_findings  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("findings", findings_task.value, findings_example.value)
@@ -4551,7 +4646,7 @@ def findings_page_form(GENE_PANELS, NO_FILE, btn_refresh_findings, example_for, 
             "naming": mo.ui.dropdown(options=_namings, value=label_of(_namings, _ex.get("naming", "chr"), "chr1, chr2... (UCSC)"), label="Chromosome names:", full_width=True),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: panel.bed next to the annotation", label="Save the regions to (BED):", full_width=True),
         }, "🧬 Get the regions")
-    mo.vstack([_x for _x in (_about, form_findings) if _x is not None])
+    form_with_note(form_findings, _about)
     return (form_findings,)
 
 
@@ -4647,7 +4742,7 @@ async def findings_page_backend(GENE_PANELS, asyncio, beside, chosen, code_panel
 
 
 @app.cell
-def pgx_page_ui(get_page, human_notice, mo, set_page):
+def pgx_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "pgx")
     import shutil as _shutil
     _java = _shutil.which("java")
@@ -4658,7 +4753,7 @@ def pgx_page_ui(get_page, human_notice, mo, set_page):
     btn_get_hla = mo.ui.button(label="⬇️ Download the HLA reference sequences (68 MB, IPD-IMGT/HLA)", value=0, on_click=lambda v: v + 1)
     # MMGEN's own engine is the default (decision of the author, 2026-11-16, after it
     # met the acceptance criterion against PharmCAT); PharmCAT is optional, for comparison.
-    pgx_engine = mo.ui.radio(options=["MMGEN's engine (mmgen-pgx)", "PharmCAT", "A group of people and a protocol's medicines (mmgen-pgx)"],
+    pgx_engine = task_tabs(options=["MMGEN's engine (mmgen-pgx)", "PharmCAT", "A group of people and a protocol's medicines (mmgen-pgx)"],
                              value="MMGEN's engine (mmgen-pgx)", inline=True, label="**Engine:**")
     pgx_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -4682,7 +4777,7 @@ def pgx_page_ui(get_page, human_notice, mo, set_page):
             "engine writes from a BAM, or a laboratory's."), kind="info"),
         mo.md(f"Java (for PharmCAT): {'found at `' + _java + '`' if _java else '**not found**: install Java 17 or newer (adoptium.net; on Colab: `!apt-get install -y openjdk-21-jre-headless`)'}"),
         pgx_folder,
-        mo.hstack([pgx_engine, btn_refresh_pgx], justify="space-between", align="center"),
+        mo.hstack([pgx_engine, btn_refresh_pgx], justify="space-between", align="center", wrap=True),
         mo.hstack([btn_get_pgx_tables, btn_get_hla, btn_get_pharmcat], justify="start", wrap=True),
     ])
     _ui
@@ -4702,7 +4797,7 @@ def pgx_page_download(btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, error_p
     PGX_TABLES_VERSION = "cpic-v1.61.0"
     PGX_TABLES_DIR = f"mmgen_tools/pgx/{PGX_TABLES_VERSION}"
     PGX_TABLES_ZIP = f"mmgen_pgx_tables_{PGX_TABLES_VERSION}.zip"
-    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/" + PGX_TABLES_ZIP
+    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/" + PGX_TABLES_ZIP
     PGX_TABLES_SHA256 = "e329b8ec6e8567dc2570cd3823a96401e54135b3a5545305fb05c7265caa1f85"
     PGX_HLA_FILES = ("A_gen.fasta", "B_gen.fasta", "C_gen.fasta")
     # The IPD-IMGT/HLA release the tables pin in bam_genes.json (the engine uses no other):
@@ -4812,7 +4907,7 @@ def pgx_page_example(example_picker, get_page, mo, pgx_engine):
 
 
 @app.cell
-def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_under, get_page, label_of, make_form, mo, os, pgx_downloaded, pgx_engine, pgx_example, pgx_folder):
+def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, os, pgx_downloaded, pgx_engine, pgx_example, pgx_folder, PHARMCAT_DIR):
     mo.stop(get_page() != "pgx")
     btn_refresh_pgx, pgx_downloaded  # re-list the folder after a refresh or a download
     _mine = pgx_engine.value.startswith("MMGEN")
@@ -4894,7 +4989,7 @@ def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_und
         _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <VCF name>_{'pgx' if _mine else 'pharmcat'}/ next to the VCF",
                                        label="Output folder:", full_width=True)
         form_pgx = make_form(_fields, _submit)
-    mo.vstack([_x for _x in (_about, form_pgx) if _x is not None])
+    form_with_note(form_pgx, _about)
     return (form_pgx,)
 
 
@@ -5178,11 +5273,11 @@ async def pgx_group_backend(asyncio, bed_next_to, beside, chosen, code_panel, er
 
 
 @app.cell
-def lookup_page_ui(get_page, human_notice, mo, set_page):
+def lookup_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "lookup")
     btn_back_lookup = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_lookup = mo.ui.button(label="🔄 Refresh the file list")
-    lookup_task = mo.ui.radio(options=["Look up variants in relatives (cascade testing)", "Allele counts at a position (BAM)"],
+    lookup_task = task_tabs(options=["Look up variants in relatives (cascade testing)", "Allele counts at a position (BAM)"],
                               value="Look up variants in relatives (cascade testing)", inline=True, label="**What to do:**")
     lookup_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -5191,7 +5286,7 @@ def lookup_page_ui(get_page, human_notice, mo, set_page):
         human_notice(),
         mo.callout(mo.md("Once a variant is known in a family, relatives are tested for that one variant (**cascade testing**), usually by Sanger sequencing or qPCR. Here: the genotype of each person at given variants, from their VCFs; and, from a BAM, **the bases the reads show at one position** (depth and allele fractions) — what one looks at to confirm a variant."), kind="info"),
         lookup_folder,
-        mo.hstack([lookup_task, btn_refresh_lookup], justify="space-between", align="center"),
+        mo.hstack([lookup_task, btn_refresh_lookup], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_lookup, btn_refresh_lookup, lookup_folder, lookup_task
@@ -5206,7 +5301,7 @@ def lookup_page_example(example_picker, get_page, lookup_task, mo):
 
 
 @app.cell
-def lookup_page_form(NO_FILE, btn_refresh_lookup, example_for, files_under, get_page, label_of, lookup_example, lookup_folder, lookup_task, make_form, mo):
+def lookup_page_form(btn_refresh_lookup, example_for, files_under, form_with_note, get_page, label_of, lookup_example, lookup_folder, lookup_task, make_form, mo, NO_FILE):
     mo.stop(get_page() != "lookup")
     btn_refresh_lookup  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("lookup", lookup_task.value, lookup_example.value)
@@ -5242,7 +5337,7 @@ def lookup_page_form(NO_FILE, btn_refresh_lookup, example_for, files_under, get_
                                                         _ex.get("annotation", "none"), "(none)"),
                                          label="Genes (GFF/GTF), drawn above the reads:", full_width=True),
         }, "🧮 Count")
-    mo.vstack([_x for _x in (_about, form_lookup) if _x is not None])
+    form_with_note(form_lookup, _about)
     return (form_lookup,)
 
 
@@ -5379,11 +5474,11 @@ async def lookup_page_backend(asyncio, bed_next_to, chosen, code_panel, error_pa
 
 
 @app.cell
-def assoc_page_ui(get_page, human_notice, mo, set_page):
+def assoc_page_ui(get_page, human_notice, mo, set_page, task_tabs):
     mo.stop(get_page() != "assoc")
     btn_back_assoc = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_assoc = mo.ui.button(label="🔄 Refresh the file list")
-    assoc_task = mo.ui.radio(options=["Test variants against an outcome", "Study power: how many people?"],
+    assoc_task = task_tabs(options=["Test variants against an outcome", "Study power: how many people?"],
                              value="Test variants against an outcome", inline=True, label="**What to do:**")
     assoc_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -5401,7 +5496,7 @@ def assoc_page_ui(get_page, human_notice, mo, set_page):
             "population structure is the classic source of false hits (screen 17 gives the ancestry proportions to "
             "use as covariates)."), kind="info"),
         assoc_folder,
-        mo.hstack([assoc_task, btn_refresh_assoc], justify="space-between", align="center"),
+        mo.hstack([assoc_task, btn_refresh_assoc], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return assoc_folder, assoc_task, btn_back_assoc, btn_refresh_assoc
@@ -5416,7 +5511,7 @@ def assoc_page_example(assoc_task, example_picker, get_page, mo):
 
 
 @app.cell
-def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, example_for, files_under, get_page, label_of, make_form, mo):
+def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, example_for, files_under, form_with_note, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "assoc")
     btn_refresh_assoc  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("assoc", assoc_task.value, assoc_example.value)
@@ -5476,7 +5571,7 @@ def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, 
             "simulations": mo.ui.number(start=0, stop=20000, step=500, value=_ex.get("simulations", 0),
                                         label="Simulated studies (0: the formula only; 2,000 checks it in small studies):"),
         }, "🧮 Compute the power")
-    mo.vstack([_x for _x in (_about, form_assoc) if _x is not None])
+    form_with_note(form_assoc, _about)
     return (form_assoc,)
 
 
@@ -5685,11 +5780,11 @@ async def assoc_page_backend(asyncio, assoc_task, chosen, code_panel, error_pane
 
 
 @app.cell
-def rnaseq_page_ui(get_page, mo, set_page):
+def rnaseq_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "rnaseq")
     btn_back_rnaseq = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_rnaseq = mo.ui.button(label="🔄 Refresh the file list")
-    rnaseq_task = mo.ui.radio(options=["Quantify from FASTQ (pseudoalignment)", "Build a transcript index", "See how one read is pseudoaligned",
+    rnaseq_task = task_tabs(options=["Quantify from FASTQ (pseudoalignment)", "Build a transcript index", "See how one read is pseudoaligned",
                                        "Count reads per gene", "Differential expression", "Test gene sets"], value="Count reads per gene",
                               inline=True, label="**What to do:**")
     rnaseq_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
@@ -5710,7 +5805,7 @@ def rnaseq_page_ui(get_page, mo, set_page):
             "(glial scar, inflammation, axon regeneration, myelin, laminin receptors...), is tested against the result table, "
             "as limma's wilcoxGST does. Experimental, for teaching and research."), kind="info"),
         rnaseq_folder,
-        mo.hstack([rnaseq_task, btn_refresh_rnaseq], justify="space-between", align="center"),
+        mo.hstack([rnaseq_task, btn_refresh_rnaseq], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_rnaseq, btn_refresh_rnaseq, rnaseq_folder, rnaseq_task
@@ -5725,7 +5820,7 @@ def rnaseq_page_example(example_picker, get_page, mo, rnaseq_task):
 
 
 @app.cell
-def rnaseq_page_form(NO_FILE, btn_refresh_rnaseq, example_for, files_under, get_page, label_of, make_form, mo, rnaseq_example, rnaseq_folder, rnaseq_task):
+def rnaseq_page_form(btn_refresh_rnaseq, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, rnaseq_example, rnaseq_folder, rnaseq_task):
     mo.stop(get_page() != "rnaseq")
     btn_refresh_rnaseq  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("rnaseq", rnaseq_task.value, rnaseq_example.value)
@@ -5806,7 +5901,7 @@ def rnaseq_page_form(NO_FILE, btn_refresh_rnaseq, example_for, files_under, get_
             "names": mo.ui.dropdown(options=_names, value=label_of(_names, _ex.get("names", "none"), "(none: gene IDs only)"), label="Gene names (gene_info or a two-column table):", full_width=True),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <counts>.de.tsv next to it", label="Result table:", full_width=True),
         }, "📊 Compare")
-    mo.vstack([_x for _x in (_about, form_rnaseq) if _x is not None])
+    form_with_note(form_rnaseq, _about)
     return (form_rnaseq,)
 
 
@@ -6169,11 +6264,11 @@ async def rnaseq_fastq_backend(asyncio, beside, chosen, code_panel, error_panel,
 
 
 @app.cell
-def crispr_page_ui(get_page, mo, set_page):
+def crispr_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "crispr")
     btn_back_crispr = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_crispr = mo.ui.button(label="🔄 Refresh the file list")
-    crispr_task = mo.ui.radio(options=["Count guides in reads", "Rank genes (MAGeCK RRA)"], value="Count guides in reads", inline=True, label="**What to do:**")
+    crispr_task = task_tabs(options=["Count guides in reads", "Rank genes (MAGeCK RRA)"], value="Count guides in reads", inline=True, label="**What to do:**")
     crispr_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
         btn_back_crispr,
@@ -6187,7 +6282,7 @@ def crispr_page_ui(get_page, mo, set_page):
             "rank aggregation (RRA), as `mageck test` does — here with the same results, line by line. Experimental, for "
             "teaching and research."), kind="info"),
         crispr_folder,
-        mo.hstack([crispr_task, btn_refresh_crispr], justify="space-between", align="center"),
+        mo.hstack([crispr_task, btn_refresh_crispr], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_crispr, btn_refresh_crispr, crispr_folder, crispr_task
@@ -6202,7 +6297,7 @@ def crispr_page_example(crispr_task, example_picker, get_page, mo):
 
 
 @app.cell
-def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_task, example_for, files_under, get_page, label_of, make_form, mo):
+def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "crispr")
     btn_refresh_crispr  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("crispr", crispr_task.value, crispr_example.value)
@@ -6227,7 +6322,7 @@ def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_t
             "norm": mo.ui.dropdown(options=_norms, value=label_of(_norms, _ex.get("norm", "median"), "median ratio (MAGeCK's default)"), label="Normalization:", full_width=True),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: show here only", label="Also write MAGeCK's tables, with this prefix:", full_width=True),
         }, "✂️ Rank the genes")
-    mo.vstack([_x for _x in (_about, form_crispr) if _x is not None])
+    form_with_note(form_crispr, _about)
     return (form_crispr,)
 
 
@@ -6304,11 +6399,11 @@ async def crispr_page_backend(asyncio, beside, chosen, code_panel, crispr_task, 
 
 
 @app.cell
-def meta_page_ui(get_page, mo, set_page):
+def meta_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "meta")
     btn_back_meta = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_meta = mo.ui.button(label="🔄 Refresh the file list")
-    meta_task = mo.ui.radio(options=["Which species, and how much", "Classify the reads", "Sketch reference genomes"],
+    meta_task = task_tabs(options=["Which species, and how much", "Classify the reads", "Sketch reference genomes"],
                             value="Which species, and how much", inline=True, label="**What to do:**")
     meta_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -6323,7 +6418,7 @@ def meta_page_ui(get_page, mo, set_page):
             "a species missing from them shows as unassigned. Experimental, for teaching and research: not a clinical "
             "diagnostic."), kind="info"),
         meta_folder,
-        mo.hstack([meta_task, btn_refresh_meta], justify="space-between", align="center"),
+        mo.hstack([meta_task, btn_refresh_meta], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_meta, btn_refresh_meta, meta_folder, meta_task
@@ -6338,7 +6433,7 @@ def meta_page_example(example_picker, get_page, meta_task, mo):
 
 
 @app.cell
-def meta_page_form(NO_FILE, btn_refresh_meta, example_for, files_under, get_page, label_of, make_form, meta_example, meta_folder, meta_task, mo):
+def meta_page_form(btn_refresh_meta, example_for, files_under, form_with_note, get_page, label_of, make_form, meta_example, meta_folder, meta_task, mo, NO_FILE):
     mo.stop(get_page() != "meta")
     btn_refresh_meta  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("meta", meta_task.value, meta_example.value)
@@ -6368,7 +6463,7 @@ def meta_page_form(NO_FILE, btn_refresh_meta, example_for, files_under, get_page
             "scaled": mo.ui.number(start=1, stop=100_000, step=10, value=_ex.get("scaled", 1000), label="Scaled (keep one k-mer hash in this many):"),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="references.sig", label="Sketch database:", full_width=True),
         }, "🦠 Sketch")
-    mo.vstack([_x for _x in (_about, form_meta) if _x is not None])
+    form_with_note(form_meta, _about)
     return (form_meta,)
 
 
@@ -6482,14 +6577,14 @@ def amr_page_ui(example_picker, get_page, mo, set_page):
             "from mutations this search does not check: **it does not replace susceptibility testing.** Experimental, for "
             "teaching and research."), kind="info"),
         amr_folder,
-        mo.hstack([amr_example, btn_refresh_amr], justify="space-between", align="center"),
+        mo.hstack([amr_example, btn_refresh_amr], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return amr_example, amr_folder, btn_back_amr, btn_refresh_amr
 
 
 @app.cell
-def amr_page_form(NO_FILE, amr_example, amr_folder, btn_refresh_amr, example_for, files_under, get_page, label_of, make_form, mo):
+def amr_page_form(amr_example, amr_folder, btn_refresh_amr, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "amr")
     btn_refresh_amr  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("amr", None, amr_example.value)
@@ -6509,7 +6604,7 @@ def amr_page_form(NO_FILE, amr_example, amr_folder, btn_refresh_amr, example_for
         "mode": mo.ui.dropdown(options=_modes, value=label_of(_modes, _ex.get("mode", "auto"), "automatic: FASTA = assembly, FASTQ = reads"), label="Input:", full_width=True),
         "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save the table (TSV):", full_width=True),
     }, "💉 Search")
-    mo.vstack([_x for _x in (_about, form_amr) if _x is not None])
+    form_with_note(form_amr, _about)
     return (form_amr,)
 
 
@@ -6563,11 +6658,11 @@ async def amr_page_backend(asyncio, chosen, code_panel, error_panel, facts, form
 
 
 @app.cell
-def outbreak_page_ui(get_page, mo, set_page):
+def outbreak_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "outbreak")
     btn_back_outbreak = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_outbreak = mo.ui.button(label="🔄 Refresh the file list")
-    outbreak_task = mo.ui.radio(options=["Distances and a tree", "Mutations of viral genomes", "In-silico PCR"],
+    outbreak_task = task_tabs(options=["Distances and a tree", "Mutations of viral genomes", "In-silico PCR"],
                                 value="Distances and a tree", inline=True, label="**What to do:**")
     outbreak_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -6583,7 +6678,7 @@ def outbreak_page_ui(get_page, mo, set_page):
             "escape it. A k-mer tree is a quick look, not a SNP phylogeny: transmission chains need a core-genome SNP "
             "analysis. Experimental, for teaching and research: not a clinical or public-health report."), kind="info"),
         outbreak_folder,
-        mo.hstack([outbreak_task, btn_refresh_outbreak], justify="space-between", align="center"),
+        mo.hstack([outbreak_task, btn_refresh_outbreak], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_outbreak, btn_refresh_outbreak, outbreak_folder, outbreak_task
@@ -6598,8 +6693,7 @@ def outbreak_page_example(example_picker, get_page, mo, outbreak_task):
 
 
 @app.cell
-def outbreak_page_form(NO_FILE, btn_refresh_outbreak, example_for, files_under, get_page, label_of, make_form, mo,
-                       outbreak_example, outbreak_folder, outbreak_task):
+def outbreak_page_form(btn_refresh_outbreak, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, outbreak_example, outbreak_folder, outbreak_task):
     mo.stop(get_page() != "outbreak")
     btn_refresh_outbreak  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("outbreak", outbreak_task.value, outbreak_example.value)
@@ -6645,7 +6739,7 @@ def outbreak_page_form(NO_FILE, btn_refresh_outbreak, example_for, files_under, 
             "amplicons_output": mo.ui.text(value=_ex.get("amplicons_output", ""), placeholder="blank: shown here only",
                                            label="Also save the products (TSV):", full_width=True),
         }, "🧪 Run the PCR")
-    mo.vstack([_x for _x in (_about, form_outbreak) if _x is not None])
+    form_with_note(form_outbreak, _about)
     return (form_outbreak,)
 
 
@@ -6820,11 +6914,11 @@ async def outbreak_page_backend(asyncio, chosen, code_panel, error_panel, facts,
 
 
 @app.cell
-def amplicon_page_ui(get_page, mo, set_page):
+def amplicon_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "amplicon")
     btn_back_amplicon = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_amplicon = mo.ui.button(label="🔄 Refresh the file list")
-    amplicon_task = mo.ui.radio(options=["Amplicon variants (ASVs)", "Taxonomy", "Diversity", "Train a classifier"],
+    amplicon_task = task_tabs(options=["Amplicon variants (ASVs)", "Taxonomy", "Diversity", "Train a classifier"],
                                 value="Amplicon variants (ASVs)", inline=True, label="**What to do:**")
     amplicon_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -6839,7 +6933,7 @@ def amplicon_page_ui(get_page, mo, set_page):
             "coordinates, PERMANOVA between groups). 16S tells genera, rarely species, and counts copies of a gene, not "
             "cells. Experimental, for teaching and research."), kind="info"),
         amplicon_folder,
-        mo.hstack([amplicon_task, btn_refresh_amplicon], justify="space-between", align="center"),
+        mo.hstack([amplicon_task, btn_refresh_amplicon], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return amplicon_folder, amplicon_task, btn_back_amplicon, btn_refresh_amplicon
@@ -6854,8 +6948,7 @@ def amplicon_page_example(amplicon_task, example_picker, get_page, mo):
 
 
 @app.cell
-def amplicon_page_form(NO_FILE, amplicon_example, amplicon_folder, amplicon_task, btn_refresh_amplicon, example_for, files_under,
-                       get_page, label_of, make_form, mo):
+def amplicon_page_form(amplicon_example, amplicon_folder, amplicon_task, btn_refresh_amplicon, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "amplicon")
     btn_refresh_amplicon  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("amplicon", amplicon_task.value, amplicon_example.value)
@@ -6916,7 +7009,7 @@ def amplicon_page_form(NO_FILE, amplicon_example, amplicon_folder, amplicon_task
             "primer_r": mo.ui.text(value=_ex.get("primer_r", ""), placeholder="blank: whole sequences", label="Reverse primer:", full_width=True),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: classifier.model next to the reference", label="Model file:", full_width=True),
         }, "🌿 Train")
-    mo.vstack([_x for _x in (_about, form_amplicon) if _x is not None])
+    form_with_note(form_amplicon, _about)
     return (form_amplicon,)
 
 
@@ -7173,14 +7266,14 @@ def tmb_page_ui(example_picker, get_page, human_notice, mo, set_page):
             "genomes are not directly comparable: each test calibrates its own cut-off (the FDA approval of "
             "pembrolizumab for TMB-high tumors used 10 mutations/Mb on one panel)."), kind="info"),
         tmb_folder,
-        mo.hstack([tmb_example, btn_refresh_tmb], justify="space-between", align="end"),
+        mo.hstack([tmb_example, btn_refresh_tmb], justify="space-between", align="end", wrap=True),
     ])
     _ui
     return btn_back_tmb, btn_refresh_tmb, tmb_example, tmb_folder
 
 
 @app.cell
-def tmb_page_form(NO_FILE, btn_refresh_tmb, example_for, files_under, get_page, label_of, make_form, mo, tmb_example, tmb_folder):
+def tmb_page_form(btn_refresh_tmb, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, tmb_example, tmb_folder):
     mo.stop(get_page() != "tmb")
     btn_refresh_tmb  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("tmb", None, tmb_example.value)
@@ -7201,7 +7294,7 @@ def tmb_page_form(NO_FILE, btn_refresh_tmb, example_for, files_under, get_page, 
                                     label="Genome (FASTA), to count non-synonymous variants only:", full_width=True),
         "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save every variant and whether it counted (TSV):", full_width=True),
     }, "🎯 Measure the TMB")
-    mo.vstack([_x for _x in (_about, form_tmb) if _x is not None])
+    form_with_note(form_tmb, _about)
     return (form_tmb,)
 
 
@@ -7261,11 +7354,11 @@ async def tmb_page_backend(asyncio, chosen, code_panel, error_panel, facts, form
 
 
 @app.cell
-def contam_page_ui(get_page, mo, set_page):
+def contam_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "contam")
     btn_back_contam = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_contam = mo.ui.button(label="🔄 Refresh the file list")
-    contam_task = mo.ui.radio(options=["Screen samples for adventitious agents", "Build a screening database"],
+    contam_task = task_tabs(options=["Screen samples for adventitious agents", "Build a screening database"],
                               value="Screen samples for adventitious agents", inline=True, label="**What to do:**")
     contam_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
     _ui = mo.vstack([
@@ -7287,7 +7380,7 @@ def contam_page_ui(get_page, mo, set_page):
             "above it. **Spike-ins** give the recovery and the limit of detection. The report records the SHA-256 of every "
             "file and of the database, every parameter, the date and the engine version."), kind="info"),
         contam_folder,
-        mo.hstack([contam_task, btn_refresh_contam], justify="space-between", align="center"),
+        mo.hstack([contam_task, btn_refresh_contam], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return btn_back_contam, btn_refresh_contam, contam_folder, contam_task
@@ -7302,7 +7395,7 @@ def contam_page_example(contam_task, example_picker, get_page, mo):
 
 
 @app.cell
-def contam_page_form(NO_FILE, btn_refresh_contam, contam_example, contam_folder, contam_task, example_for, files_under, get_page, label_of, make_form, mo):
+def contam_page_form(btn_refresh_contam, contam_example, contam_folder, contam_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "contam")
     btn_refresh_contam  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("contam", contam_task.value, contam_example.value)
@@ -7337,7 +7430,7 @@ def contam_page_form(NO_FILE, btn_refresh_contam, contam_example, contam_folder,
                                       label="Memory for the host index, MB (less memory: more passes, never a failure):"),
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <table>.mmgscreen next to it", label="Database file:", full_width=True),
         }, "🧱 Build the database")
-    mo.vstack([_x for _x in (_about, form_contam) if _x is not None])
+    form_with_note(form_contam, _about)
     return (form_contam,)
 
 
@@ -7608,11 +7701,11 @@ def ai_helpers(error_panel, mo, os, warn):
 
 
 @app.cell
-def ai_page_ui(get_page, mo, set_page):
+def ai_page_ui(get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "ai")
     btn_back_ai = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_ai = mo.ui.button(label="🔄 Refresh")
-    ai_task = mo.ui.radio(
+    ai_task = task_tabs(
         options=["Describe your problem", "Let the AI run a task", "Settings and the session record"],
         value="Describe your problem", inline=True, label="**What to do:**",
     )
@@ -7630,7 +7723,7 @@ def ai_page_ui(get_page, mo, set_page):
         mo.callout(mo.md(
             "**The AI can be wrong.** It is a teaching aid: check what it says against the results, the README and a "
             "teacher or a colleague. On human genomes it never replaces a physician or a genetic counselor."), kind="warn"),
-        mo.hstack([ai_task, btn_refresh_ai], justify="space-between", align="center"),
+        mo.hstack([ai_task, btn_refresh_ai], justify="space-between", align="center", wrap=True),
     ])
     _ui
     return ai_task, btn_back_ai, btn_refresh_ai
@@ -7670,7 +7763,7 @@ def ai_page_example(ai_task, example_picker, get_page, mo):
 
 
 @app.cell
-def ai_page_form(AI_EFFORTS, AI_LEVELS, AI_MODELS, AI_SENT, ai_example, ai_settings, ai_task, example_for, get_page, label_of, make_form, mo):
+def ai_page_form(AI_EFFORTS, ai_example, AI_LEVELS, AI_MODELS, AI_SENT, ai_settings, ai_task, example_for, form_with_note, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "ai")
     _ex, _about = example_for("ai", ai_task.value, ai_example.value)
     _s = ai_settings
@@ -7707,7 +7800,7 @@ def ai_page_form(AI_EFFORTS, AI_LEVELS, AI_MODELS, AI_SENT, ai_example, ai_setti
             "consent": mo.ui.checkbox(value=_s["consent"], label="I agree to send result summaries and my questions to Anthropic to get answers"),
             "human": mo.ui.checkbox(value=_s["human"], label="Also summaries of human-genome results (screens 16-21 and 28), only of people who agreed to it"),
         }, "💾 Save the settings")
-    mo.vstack([_x for _x in (_about, _note, form_ai) if _x is not None])
+    form_with_note(form_ai, _about, _note)
     return (form_ai,)
 
 

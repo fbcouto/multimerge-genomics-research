@@ -1,0 +1,64 @@
+/* MMGEN workbench theme, injected by marimo (App(css_file=...)).
+   A rail of tool groups on the left, the tool's page on the right. The page
+   keeps marimo's own light/dark theme; the rail is always dark. */
+:root {
+  --mmg-rail: #1d2230; --mmg-rail-fg: #e7eaf0; --mmg-rail-fg-2: #9aa3b5; --mmg-rail-line: rgba(255, 255, 255, .1);
+  --mmg-accent: #2a78d6; --mmg-accent-soft: #e2edfb; --mmg-line: #d8dbe2; --mmg-fg-3: #7a8294; --mmg-surface-2: #eceef2;
+  --mmg-rail-w: 240px;
+}
+.dark, [data-theme="dark"], :root:where(.dark) {
+  --mmg-rail: #0f1116; --mmg-accent: #3987e5; --mmg-accent-soft: #1b3150; --mmg-line: #343a46; --mmg-fg-3: #7f889a; --mmg-surface-2: #252a33;
+}
+/* the app's page gets room for the rail; on a phone the rail is a drawer */
+@media (min-width: 900px) {
+  #App #root, #root > div:first-child, .mmg-has-rail body { --mmg-pad: var(--mmg-rail-w); }
+  #App { padding-left: var(--mmg-rail-w) !important; }
+}
+.mmg-rail {
+  position: fixed; top: 0; left: 0; bottom: 0; width: var(--mmg-rail-w); overflow-y: auto; z-index: 40;
+  background: var(--mmg-rail); color: var(--mmg-rail-fg); padding: 14px 10px 20px; box-sizing: border-box;
+  font: 13px/1.4 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+@media (max-width: 899px) {
+  #App { padding-top: 48px !important; }   /* room for the "Tools" button */
+  .mmg-rail .mmg-brand { padding-left: 90px; }   /* the "Tools" button sits over the brand when the drawer is open */
+  .mmg-rail { transform: translateX(-100%); transition: transform .18s ease; }
+  .mmg-rail.open { transform: none; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35); }
+  .mmg-rail-toggle { display: inline-flex !important; }
+}
+.mmg-brand { display: flex; align-items: center; gap: 8px; padding: 2px 8px 12px; font-weight: 600; letter-spacing: .02em; font-size: 14px; }
+.mmg-brand .logo { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #3987e5, #1baf7a); flex: none; }
+.mmg-brand small { color: var(--mmg-rail-fg-2); font-weight: 400; margin-left: auto; font: 11px ui-monospace, Consolas, monospace; }
+.mmg-group { margin: 10px 0 4px; }
+.mmg-group h4 { margin: 0; padding: 6px 8px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--mmg-rail-fg-2); display: flex; align-items: center; gap: 6px; }
+.mmg-group h4 .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+/* Each rail entry is a plain link (ui_head.html hands the click to a hidden marimo button, which
+   sets the page); the hidden buttons live in .mmg-rail-bridge. */
+.mmg-rail a.mmg-item { display: flex; align-items: center; gap: 8px; margin: 1px 0; padding: 5px 8px; border-radius: 5px;
+  color: var(--mmg-rail-fg); text-decoration: none; white-space: nowrap; overflow: hidden; cursor: pointer; }
+.mmg-rail a.mmg-item:hover { background: rgba(255, 255, 255, .07); color: var(--mmg-rail-fg); }
+.mmg-rail a.mmg-item.active { background: var(--mmg-accent); color: #fff; }
+.mmg-rail a.mmg-item:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+.mmg-rail .mmg-item .n { font: 11px ui-monospace, Consolas, monospace; opacity: .7; width: 18px; flex: none; text-align: right; }
+.mmg-rail .mmg-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.mmg-rail .mmg-item .tag { font-size: 9.5px; padding: 1px 5px; border-radius: 3px; background: rgba(255, 255, 255, .14); opacity: .85; flex: none; }
+.mmg-rail-bridge { display: none; }
+.mmg-rail-toggle { display: none; position: fixed; left: 12px; top: 12px; z-index: 41; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--mmg-line);
+  background: var(--mmg-rail); color: var(--mmg-rail-fg); font: 13px "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+.mmg-rail-foot { margin-top: 14px; padding: 10px 8px 0; border-top: 1px solid var(--mmg-rail-line); color: var(--mmg-rail-fg-2); font: 11px/1.6 ui-monospace, Consolas, monospace; }
+.mmg-rail-foot .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0ca30c; margin-right: 5px; }
+/* the form with the example's note beside it (form_with_note); one column on a phone */
+.mmg-form-note { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.mmg-form-note > .f, .mmg-form-note > .n { min-width: 0; }
+@media (max-width: 899px) { .mmg-form-note { grid-template-columns: minmax(0, 1fr); } }
+/* the tasks of a screen are tabs: on a narrow screen the strip scrolls sideways instead of overflowing */
+marimo-tabs { display: block; max-width: 100%; overflow-x: auto; }
+/* the header strip above each tool: breadcrumb and context chips */
+.mmg-top { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 6px 0 10px; border-bottom: 1px solid var(--mmg-line); margin-bottom: 8px; font-size: 13px; }
+.mmg-top .crumb { color: var(--mmg-fg-3); flex: 1 1 240px; min-width: 0; }
+@media (max-width: 899px) { .mmg-top { flex-direction: column; align-items: flex-start; gap: 6px; } .mmg-top .crumb { flex: none; } }
+.mmg-top .crumb b { font-weight: 500; color: inherit; opacity: 1; }
+.mmg-top .crumb .sep { margin: 0 4px; }
+.mmg-top .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mmg-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--mmg-line); border-radius: 999px; background: var(--mmg-surface-2); font: 12px ui-monospace, Consolas, monospace; }
+.mmg-chip.ctx { border-color: var(--mmg-accent); background: var(--mmg-accent-soft); }

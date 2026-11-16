@@ -17,7 +17,7 @@ from .. import _native
 # The screens of the web interface: number, page key, title, area, what it does.
 SCREENS = [
     (1, "qc", "QC & Ingestion", "K-mer modules", "extract the k-mers of FASTA/FASTQ files into an .arrow file"),
-    (2, "cluster", "Taxonomic Clustering", "K-mer modules", "cluster 31-mers by MinHash signatures (experimental)"),
+    (2, "cluster", "Taxonomic Clustering", "K-mer modules", "group sequences by tetranucleotide composition (PCA + HDBSCAN), as metagenome binning does (experimental)"),
     (3, "assembly", "Genome Assembly (De Bruijn)", "K-mer modules", "assemble contigs from k-mers"),
     (4, "variant", "Variant Calling (SNPs)", "K-mer modules", "k-mers of a patient absent from a reference, through a Bloom filter"),
     (5, "annotation", "Functional Annotation", "K-mer modules", "translate DNA into protein"),
@@ -37,18 +37,18 @@ SCREENS = [
     (19, "pgx", "Pharmacogenomics", "Human genetics", "Star alleles, phenotypes and guideline texts from a person's VCF (and BAM, for CYP2D6 and HLA), by MMGEN's engine or PharmCAT"),
     (20, "chrom", "Sex Chromosomes & Homozygosity", "Human genetics", "genetic sex; runs of homozygosity"),
     (21, "lookup", "Variant Lookup & Allele Counts", "Human genetics", "a known variant in relatives; allele counts in a BAM"),
-    (22, "rnaseq", "RNA-seq: Gene Counts & Differential Expression", "Research and microbiology", "reads per gene; DESeq2-style differential expression"),
-    (23, "crispr", "CRISPR Screens (MAGeCK)", "Research and microbiology", "guide counts; gene ranking by RRA"),
-    (24, "meta", "Metagenomics: Species & Abundance", "Research and microbiology", "species and abundance by sketches; read classification; host reads apart"),
-    (25, "amr", "Antimicrobial Resistance Genes", "Research and microbiology", "AMRFinderPlus resistance genes in assemblies or reads"),
-    (26, "outbreak", "Outbreaks: Trees, Viral Mutations & PCR", "Research and microbiology", "genome distances and trees; viral mutations named as Nextclade; in-silico PCR"),
-    (27, "amplicon", "16S Amplicons: Taxonomy & Diversity", "Research and microbiology", "ASVs, RDP classifier, alpha/beta diversity, PCoA, PERMANOVA"),
-    (28, "tmb", "Tumor Mutational Burden (TMB)", "Research and microbiology", "somatic variants per megabase of the sequenced region"),
+    (22, "rnaseq", "RNA-seq: Gene Counts & Differential Expression", "Research, microbiology and oncology", "quantification from FASTQ (kallisto-style pseudoalignment); reads per gene from BAM; DESeq2-style differential expression; gene-set tests"),
+    (23, "crispr", "CRISPR Screens (MAGeCK)", "Research, microbiology and oncology", "guide counts; gene ranking by RRA"),
+    (24, "meta", "Metagenomics: Species & Abundance", "Research, microbiology and oncology", "species and abundance by sketches; read classification; host reads apart"),
+    (25, "amr", "Antimicrobial Resistance Genes", "Research, microbiology and oncology", "AMRFinderPlus resistance genes in assemblies or reads"),
+    (26, "outbreak", "Outbreaks: Trees, Viral Mutations & PCR", "Research, microbiology and oncology", "genome distances and trees; viral mutations named as Nextclade; in-silico PCR"),
+    (27, "amplicon", "16S Amplicons: Taxonomy & Diversity", "Research, microbiology and oncology", "ASVs, RDP classifier, alpha/beta diversity, PCoA, PERMANOVA"),
+    (28, "tmb", "Tumor Mutational Burden (TMB)", "Research, microbiology and oncology", "somatic variants per megabase of the sequenced region"),
     (29, "ai", "AI Assistant", "AI assistant", "describe a problem and get a path through the tools with a script; an agent that "
      "runs the tools with the person's approval; the session saved as a Python script"),
     (30, "assoc", "Genotype & Outcome: Association and Power", "Human genetics",
      "test variants against an outcome in a cohort (linear, logistic, Firth; covariates, FDR, permutations); study power"),
-    (31, "contam", "Contaminant Screening: Adventitious Agents", "Research and microbiology",
+    (31, "contam", "Contaminant Screening: Adventitious Agents", "Research, microbiology and oncology",
      "viruses, bacteria, mycoplasmas and fungi in the reads of a biological material, with the host set aside, blanks, "
      "spike-ins, breadth of coverage and a traceable report"),
 ]

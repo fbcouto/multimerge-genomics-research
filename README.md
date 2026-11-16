@@ -4,11 +4,13 @@
 
 ![MMGEN main menu](assets/menu.png)
 
-MMGEN is a free, open-source genomics toolkit written in **Rust**, with optional **CUDA** acceleration and a **Python** API. It has three families of tools:
+MMGEN is a free, open-source genomics toolkit written in **Rust**, with optional **CUDA** acceleration and a **Python** API. It has four families of tools, plus an optional AI assistant:
 
 * **Everyday file tools that work at any size** — validate a file and say what is wrong with it, fix `chr1` versus `1`, tell GRCh37 from GRCh38; sort, index and query by region; merge, intersect, subtract, complement, find the closest and measure the coverage of intervals; count, filter and normalize variants; measure the quality of FASTQ reads (with an HTML report) and trim them; count k-mers. On VCF, BED, GFF/GTF, SAM/BAM, FASTA and FASTQ files that do not fit in memory, read and written as plain text, gzip (BGZF), BAM or Parquet.
 * **K-mer modules** — ingestion and quality filtering, De Bruijn assembly, mutation detection with Bloom filters, translation and scaffolding, running on an NVIDIA GPU when there is one and on the CPU when there is not.
-* **Human genetics, research and microbiology** *(experimental, for teaching and research)* — relatedness, trios and paternity; ancestry and polygenic scores; ClinVar findings and gene panels; pharmacogenomics (MMGEN's own engine, or PharmCAT); the association of genotypes with an outcome in a cohort, and the power of a study; RNA-seq from the FASTQ reads to differential expression and gene sets; CRISPR screens; metagenomics; screening a biological material for adventitious agents; antimicrobial resistance genes; outbreak trees and viral mutations; 16S amplicons; tumor mutational burden.
+* **Human genetics** *(experimental, for teaching and research)* — relatedness, trios and paternity; ancestry and polygenic scores; ClinVar findings and gene panels; pharmacogenomics (MMGEN's own engine, or PharmCAT); sex chromosomes and runs of homozygosity; a known variant looked up in relatives, and the reads over a position; the association of genotypes with an outcome in a cohort, and the power of a study.
+* **Research, microbiology and oncology** *(experimental, for teaching and research)* — RNA-seq from the FASTQ reads to differential expression and gene sets; CRISPR screens; metagenomics; antimicrobial resistance genes; outbreak trees and viral mutations; 16S amplicons; tumor mutational burden; screening a biological material for adventitious agents.
+* **An AI assistant** *(optional; uses the Claude API)* — describes a path through the tools for a problem, explains a result, and runs the tools with your approval; the session is saved as a Python script.
 
 You can use it from Python or from a web interface with 31 screens, **on your own computer or on Google Colab** (free or paid) with nothing installed on your machine: see [Two ways to run it](#-two-ways-to-run-it).
 
@@ -46,9 +48,9 @@ examples/with_defects.vcf: VCF with 8007 lines and 8000 records -- 4 error(s), 1
 
 ## 🚀 The Modules
 
-Every module has a screen in the web interface, and every function is also available from Python. On screens 9–14, each result ends with the Python call that does the same thing, ready to paste into a script. The Colab notebook covers modules 9 and 10.
+Every module has a screen in the web interface, and every function is also available from Python. On every file, human-genetics and research screen (9–28, 30 and 31), each result ends with the Python call that does the same thing, ready to paste into a script. The Colab notebook covers modules 9 and 10.
 
-### 🔬 1. Data Ingestion & Quality Control
+### 🔬 1. QC & Ingestion (FASTQ / FASTA)
 * **Batch reading, gzip included:** reads several `.fastq`, `.fasta`, `.fastq.gz` or `.fasta.gz` files in parallel and decompresses them on the fly.
 * **128-bit k-mers:** k-mers of up to `k=63` packed into 16 bytes each. The output is the sorted set of distinct k-mers.
 * **Quality filter:** FASTQ reads whose mean Phred quality is below the threshold are dropped before their k-mers are extracted.
@@ -57,36 +59,36 @@ Every module has a screen in the web interface, and every function is also avail
 * Groups DNA by its composition, as metagenome binning tools (MetaBAT, CONCOCT) do: sequences (genomes, contigs, long reads) are cut into windows, each window is described by the frequencies of its 136 tetranucleotides (both strands together), and the windows are projected with PCA and grouped with HDBSCAN, with a table of where each group's windows came from and a scatter of the first two components.
 * Composition separates species, not strains: on four bacterial isolates (two *Klebsiella pneumoniae*, two *Staphylococcus aureus*, 10 kb windows) it gives two groups, one per species (57% and 33% GC), with the two strains of each together; three simulated genomes of equal GC but different 4-base word preferences come out as three groups of 20 windows each.
 
-### 🧩 3. *De Novo* Assembly (De Bruijn Graph)
+### 🧩 3. Genome Assembly (De Bruijn)
 * Builds the De Bruijn graph of the k-mers in memory and walks its unbranched paths to produce contigs (unitigs), written to a FASTA file.
 * Collapses the simplest bubbles (two one-node branches that reconverge). Longer bubbles, tips and coverage are not handled yet.
 
-### ⚠️ 4. Variant Detection by K-mer Difference
+### ⚠️ 4. Variant Calling (SNPs), by k-mer difference
 * Builds a Bloom filter from the reference k-mers and reports the sample k-mers that are not in it — the k-mers that carry a difference. A single SNP shows up as `k` mutated k-mers.
 * Runs on the GPU or on the CPU, with the same result.
 
-### 📘 5. Translation
+### 📘 5. Functional Annotation (Translation)
 * Translates DNA into protein with the standard genetic code (reading frame 1), in parallel across sequences. Stop codons are marked.
 
 ### 🔍 6. Bloom Filters
 * **GPU:** a CUDA kernel sets the bits with `atomicOr`, so thousands of threads can write the same filter safely.
 * **CPU:** the same filter, bit for bit, on a machine with no NVIDIA card.
 
-### 🖇️ 7. Scaffolding & Circularization
+### 🖇️ 7. Genome Scaffolding
 * Joins contigs whose ends overlap exactly by a fixed number of bases, using hash maps of the ends.
 * Detects sequences that close on themselves (plasmids, circular chromosomes) without looping forever.
 
 ### 🗄️ 8. VCF Multimerge & Sorting
 * Select any number of `.vcf` / `.vcf.gz` files: the engine merges them into a single output sorted by position or by quality — stable, and out of core when the data does not fit in memory.
 
-### 📏 9. Sorting, Indexing & Interval Operations at Any Size
+### 📏 9. Sort, Index & Intervals, at any size
 * **`sort_genomic`** sorts VCF, BED, GFF/GTF and SAM/BAM. What fits the memory budget is sorted in memory; what does not is cut into sorted runs on disk (LZ4) and joined by a k-way merge.
 * **The chromosome order you choose:** lexical (`bedtools sort`), natural (`chr2` before `chr10`), the order of the header's `##contig` / `@SQ` lines (`bcftools sort`, `samtools sort`), or the order of a `.fai` file.
 * **Index and query by region:** `index_file` writes the `.tbi` of a VCF, BED or GFF and the `.bai` of a BAM — the same indexes tabix, samtools and IGV use — and `query_region` reads only the part of the file a region needs (`"chr1:1000000-2000000"`).
 * **Interval operations** on inputs that need not be sorted and need not fit in memory: `bed_merge` (`bedtools merge -d`), `bed_intersect` (`bedtools intersect`, with `-u` and `-v`), `bed_subtract` (with `-A`), `bed_complement`, `bed_closest` (`-d`, every tie), `bed_coverage` and `bed_slop`.
 * Malformed lines are skipped and counted, never silently sorted as zero.
 
-### 🩺 10. File Validation & Naming Sanity
+### 🩺 10. Validation & Chromosome Names
 * **`validate_file`** reads a VCF, BED, GFF/GTF, SAM, FASTA or FASTQ of any size and reports each kind of problem with the **line** of its first occurrence, how many times it repeats and how to fix it.
 * **`normalize_chromosomes`** rewrites a whole file, header included, in a single naming convention: UCSC (`chr1`, `chrM`) or Ensembl/NCBI (`1`, `MT`).
 * **`compare_references`** compares the sequence lengths two files declare and tells GRCh37 (hg19) from GRCh38 (hg38) before the coordinates of one are used on the other.
@@ -136,7 +138,7 @@ They read any VCF, sorted in natural chromosome order; with a **callable-regions
 * **28. Tumor mutational burden** — `tumor_mutational_burden` (somatic variants per megabase of the panel's or exome's region, with depth, allele-fraction and PASS filters, optionally coding or non-synonymous only).
 * **31. Contaminant screening (adventitious agents)** — `build_screen_database` (the genomes to look for — viruses, bacteria, mycoplasmas, fungi — the process controls and the host, indexed by minimizers with their genome windows; a human host fits in under 1 GB, built in passes within the memory given; the SHA-256 of every file kept) and `contaminant_screen` (the reads of a biological material: host reads set aside, each other read given to its best match, and for each organism its own and shared reads, reads per million, the **breadth** of its genome covered and whether the reads are spread as an infection would spread them, so that reads piled on one region — a vector element, a shared gene — are not a detection; organisms also in a **negative control** reported as background; **spike-ins** with their recovery and the limit of detection; a report in HTML, TSV and JSON with the SHA-256 of every input and of the database, the parameters, the date and the engine version). On simulated spike-in series (1 million read pairs of human host per sample) the limit of detection was 3–10 reads per million, with no call in host-only samples or blanks; on the ZymoBIOMICS mock communities it calls the members present at a detectable level and nothing else. **For research and teaching: releasing a GMP batch requires a validated method and validated software** (ICH Q5A(R2) admits sequencing for adventitious viruses, but the validation is the laboratory's).
 
-The examples of screens 22 (from FASTQ) and 31 use small simulated data sets that come with the package (`multimerge_genomics.demos`); the others a 64 MB demo pack (`trials/python/make_research_demo.py`): the airway counts, the MAGeCK demos, sketches of 43 reference genomes, reads of the ZymoBIOMICS mock communities, the AMRFinderPlus catalog, four bacterial isolates, 20 SARS-CoV-2 lineages, sketches of 13 *K. pneumoniae* and 4 *S. aureus*, a PCR panel with its sources, the mothur MiSeq SOP reads with an RDP classifier, and the SEQC2 somatic calls of a breast-cancer cell line (chromosome 17).
+The examples of screens 22 (from FASTQ) and 31 use small simulated data sets that come with the package (`multimerge_genomics.demos`); the others a 46 MB demo pack (`mmgen_demo_research_v4.zip`, built by `trials/python/make_research_demo.py`): the airway counts, the MAGeCK demos, sketches of 43 reference genomes, reads of the ZymoBIOMICS mock communities, the AMRFinderPlus catalog, four bacterial isolates, 20 SARS-CoV-2 lineages, sketches of 13 *K. pneumoniae* and 4 *S. aureus*, a PCR panel with its sources, and the SEQC2 somatic calls of a breast-cancer cell line (chromosome 17).
 
 
 ### 🤖 29. AI Assistant *(optional; uses the Claude API)*
@@ -152,7 +154,7 @@ An assistant built on Claude, Anthropic's AI, for students who know the question
 
 **What it needs.** `pip install "multimerge-genomics[ai]"` (or `pip install anthropic`) and an Anthropic API key from [console.anthropic.com](https://console.anthropic.com) (the API is paid by the owner of the key), typed on screen 29 (kept in memory for the session, never written to disk) or set in `ANTHROPIC_API_KEY`. The model is Claude Opus 5.5 by default; Claude Sonnet 5.5 and Claude Haiku 5.5 are cheaper and faster, and the *effort* setting trades care for speed and cost. On Opus and Sonnet the requests allow the API's server-side fallback: if the model's safety classifiers decline a request, the API may answer it with another model in the same call, and the answer says so. The rules, a glossary, the catalog of every tool and this README go with every request as one cached prompt.
 
-**MMGEN's tools in Claude, or in any MCP client.** `pip install "multimerge-genomics[mcp]"` installs `mmgen-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io) server that offers every tool that takes plain arguments (61 of them, with their documentation and a JSON schema, plus a catalog of the screens) to Claude Desktop, Claude Code or any other MCP client. Paths are relative to a working folder, and no path outside it is accepted, for reading or for writing. For Claude Desktop, in `claude_desktop_config.json`:
+**MMGEN's tools in Claude, or in any MCP client.** `pip install "multimerge-genomics[mcp]"` installs `mmgen-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io) server that offers every tool that takes plain arguments (79 of them, the human-genome tools included, with their documentation and a JSON schema, plus a catalog of the screens) to Claude Desktop, Claude Code or any other MCP client. Paths are relative to a working folder, and no path outside it is accepted, for reading or for writing. For Claude Desktop, in `claude_desktop_config.json`:
 
 ```json
 {"mcpServers": {"mmgen": {"command": "mmgen-mcp", "args": ["--root", "C:/path/to/your/data"]}}}
@@ -207,21 +209,21 @@ python -m venv mmgen
 mmgen\Scripts\activate           # Windows   (macOS, Linux: source mmgen/bin/activate)
 
 # Windows, without an NVIDIA GPU (or with one: the CUDA build below)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-win_amd64.whl"
 # Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-1cuda-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-1cuda-cp310-abi3-win_amd64.whl"
 # Linux (CUDA build; also runs without a GPU; glibc 2.28 or newer)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 # macOS, Apple Silicon (M1 and later)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-macosx_11_0_arm64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-macosx_11_0_arm64.whl"
 # macOS, Intel
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-macosx_10_12_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-macosx_10_12_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.3.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.3.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.4.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
 
 ### On Google Colab: free or paid, your choice
 
@@ -242,7 +244,7 @@ Either way, the files you write on Colab are gone when the session ends: downloa
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Ready-made packages of the release v2.3.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
+Ready-made packages of the release v2.4.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -275,7 +277,7 @@ To build a wheel instead: `maturin build --release --locked -o dist`, then `pip 
 import multimerge_genomics as mmg
 
 print(mmg.engine_info())
-# {'version': '2.3.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
+# {'version': '2.4.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
 
 # What is wrong with this file?
 report = mmg.validate_file("sample.vcf.gz")
@@ -318,9 +320,9 @@ pip install "multimerge-genomics[ui]"     # or, after maturin develop: pip insta
 mmgen-ui                                 # or: marimo run python/multimerge_genomics/ui_main.py
 ```
 
-The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21 and 30), research, microbiology and oncology (22–28 and 31), and the optional AI assistant (29). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
+The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21 and 30), research, microbiology and oncology (22–28 and 31), and the optional AI assistant (29). The same groups are always at hand in the rail on the left (a drawer, on a phone), so you can go from one tool to another without passing through the menu; a strip above each screen says where you are, which folder the files come from and where the engine runs. The address keeps the screen (`#sort`, `#pgx`...): bookmark it, reload, or share it with someone on the same machine. On most screens you pick a task (the tabs under the title), fill in a form and get the result with a look at the first records of the output; when you pick an example, its note (what it shows, what to expect) sits beside the form; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
 
-**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 119 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, a tumor cell line): demo packs, `mmgen_demo_human_v3.zip` (49 MB), `mmgen_demo_research_v4.zip` (46 MB) and, for the CYP2D6 and HLA example of screen 19, `mmgen_demo_pgx_v1.zip` (32 MB of HG002 reads), downloaded from the release the first time an example needs them (or taken from the folder the interface runs in) and unpacked into `mmgen_examples/`. The 16S examples of screen 27 use a third pack, `mmgen_demo_16s_v2.zip` (17 MB): the mothur MiSeq SOP reads (Kozich et al. 2013), redistributed with the permission of Patrick D. Schloss, and an RDP classifier.
+**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 138 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, a tumor cell line): demo packs, `mmgen_demo_human_v3.zip` (49 MB), `mmgen_demo_research_v4.zip` (46 MB) and, for the CYP2D6 and HLA example of screen 19, `mmgen_demo_pgx_v1.zip` (32 MB of HG002 reads), downloaded from the release the first time an example needs them (or taken from the folder the interface runs in) and unpacked into `mmgen_examples/`. The 16S examples of screen 27 use a third pack, `mmgen_demo_16s_v2.zip` (17 MB): the mothur MiSeq SOP reads (Kozich et al. 2013), redistributed with the permission of Patrick D. Schloss, and an RDP classifier.
 
 ![Variant detection screen](assets/variant_calling.png)
 
@@ -393,9 +395,9 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 | `build_panel(...)` / `panel_from_frequencies(...)` | Population frequency panels, from genotypes or from a sites VCF |
 | `estimate_ancestry(panel, vcfs, ...)` | Admixture proportions against the panel's groups, with bootstrap errors *(experimental)* |
 | `polygenic_score(scoring_file, vcfs, panel=None, ...)` | A PGS Catalog score, its coverage and its percentile in each panel group *(experimental; not a diagnosis)* |
-| `clinvar_findings(vcf, clinvar, classes="plp", min_stars=1, genes=None, ...)` | The person's variants that ClinVar lists *(experimental; not a diagnosis)* |
-| `gene_regions(gff, genes, output=None, padding=0)` | The coordinates of named genes (a panel) from a GFF |
-| `variant_lookup(variants, vcfs, ...)` / `pileup(bam, position, alt=None)` | A variant in each relative's VCF / the allele counts at a position of a BAM |
+| `clinvar_findings(vcf, clinvar, classes=None, min_stars=1, genes=None, ...)` | The person's variants that ClinVar lists *(experimental; not a diagnosis)* |
+| `gene_regions(gff, genes, output=None, padding=0, naming=None)` | The coordinates of named genes (a panel) from a GFF |
+| `variant_lookup(variants, vcfs, ...)` / `pileup(path, position, alt=None, min_mapq=0, min_baseq=13)` | A variant in each relative's VCF / the allele counts at a position of a BAM |
 | `pgx_run(vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, engine="mmgen-pgx", tables=None, jar=None, ..., ancestry=None, ancestry_panel=None)` | Star alleles, phenotypes, activity scores, CYP2D6 copy number and HLA types (with `bam`), guideline recommendations, and the positions behind each call; `ancestry` (e.g. `{"EUR": 0.6, "AFR": 0.4}`) or `ancestry_panel` weights the population frequencies NAT2 is chosen by; the same dictionary for `engine="mmgen-pgx"` and `engine="pharmcat"` (`mmgen_pgx_run` = MMGEN's engine alone) *(experimental; not medical advice)* |
 | `pgx_cohort(vcfs, output_dir, callable_beds=None, samples=None, drugs=None, ...)` | MMGEN's engine for a group of people and the medicines of a protocol: for each person and medicine, the recommendation or why there is none (gene not called, or no CPIC guideline); `cohort_genes.tsv` and `cohort_medicines.tsv` *(experimental; not medical advice)* |
 | `ancestry_pca(panel, vcfs, samples=None, callable_beds=None, max_sites=5000, per_group=100, components=4, seed=1, ...)` | The people projected on a PCA of the panel's groups (each group a cloud simulated from its frequencies), with each person's closest group *(experimental)* |
@@ -405,7 +407,7 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 | `build_transcript_index(fasta, output, k=31, gene_map=None, ...)` / `transcript_index_info(index)` | The pseudoalignment index of a transcriptome (cDNA FASTA; genes from the headers, a GTF/GFF3 or a table) / what an index holds |
 | `quantify_samples(index, samples, output_dir, fragment_length=None, fragment_sd=None, ...)` | RNA-seq quantification from FASTQ (pseudoalignment and EM, as kallisto): counts and TPM per transcript and per gene, and `gene_counts.tsv` for `differential_expression` |
 | `explain_pseudoalignment(index, read, read2=None)` | How one read (or pair) is pseudoaligned, k-mer by k-mer: for teaching |
-| `region_reads(alignments, region, reference=None, max_reads=500, min_mapq=0, min_baseq=13, flank=60)` | The reads of a stretch of a BAM ready to draw as a genome browser does (blocks, mismatches, clips, insertions, deletions, rows) and the coverage of every position, counted as `pileup` counts it |
+| `region_reads(alignments, region, reference=None, max_reads=500, min_mapq=0, min_baseq=13, exclude_flags=3844, flank=60)` | The reads of a stretch of a BAM ready to draw as a genome browser does (blocks, mismatches, clips, insertions, deletions, rows) and the coverage of every position, counted as `pileup` counts it |
 | `depth_profile(alignments, regions, bin=1000, min_mapq=0)` / `fetch_sequence(fasta, region)` | Mean depth in bins over regions (copy-number plots) / the reference bases of a region |
 | `unitig_graph(kmer_bytes, k, max_nodes=2000)` / `overlap_graph(sequences, min_overlap, max_nodes=2000)` | The assembly graph (unitigs and their overlaps, with tips, bubbles, repeats and a layout) / the graph of contigs joined by their ends, as `build_scaffolds` joins them |
 | `count_reads(bams, annotation, output=None, feature_type="exon", attribute=None, strandedness="unstranded", ...)` | Reads per gene from BAM files and a GFF/GTF |
@@ -424,7 +426,7 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 | `alpha_diversity(table, ...)` / `beta_diversity(table, metric="braycurtis", metadata=None, group_column=None, ...)` / `taxa_composition(table, taxonomy, rank="Phylum", top=0)` | Diversity within and between samples, principal coordinates, PERMANOVA; composition per sample |
 | `tumor_mutational_burden(vcf, bed, output=None, tumor_sample=None, min_depth=10, min_vaf=0.05, annotation=None, coding_only=False, ...)` | Somatic variants per megabase of the sequenced region *(experimental; not a clinical report)* |
 | `build_screen_database(references, output, kinds, names=None, k=31, memory_mb=1024, ...)` / `describe_screen_database(path)` | The database of a contaminant screen: agents (virus, bacterium, mycoplasma, fungus, other), process controls (spike) and host |
-| `contaminant_screen(samples, database, negative_controls=None, spike_ins=None, output_html=None, output_tsv=None, output_json=None, min_reads=3, min_windows=2, min_dispersion=0.5, ...)` | Adventitious agents in the reads of a material: evidence, breadth, blanks, spike-in recovery and limit of detection, a traceable report *(research and teaching; not a validated GMP method)* |
+| `contaminant_screen(samples, database, negative_controls=None, spike_ins=None, output_tsv=None, output_json=None, output_html=None, min_reads=3, min_windows=2, min_dispersion=0.5, ...)` | Adventitious agents in the reads of a material: evidence, breadth, blanks, spike-in recovery and limit of detection, a traceable report *(research and teaching; not a validated GMP method)* |
 
 * `by`: `"position"` (every format), `"quality"` (VCF, descending) or `"name"` (SAM, QNAME in natural order).
 * `chrom_order`: `"lexical"`, `"natural"`, `"header"`, or the path of a `.fai` file. Default: the header for VCF and SAM, lexical for BED and GFF.
@@ -432,7 +434,7 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 * Inputs and outputs: plain text, `.gz` (gzip or BGZF; written as BGZF), `.lz4`, `.bam` and `.parquet`, by extension. A file name such as `x.vcf.parquet` or `x.bed.gz` also tells the format.
 * `regions`: `"chr1"`, `"chr1:1000"` or `"chr1:1000-2000"`, 1-based with the end included, as in samtools and tabix.
 * The GIL is released during file operations, so a user interface stays responsive.
-* Four more functions serve the legacy 64-bit path of module 2: `sort_merge_bytes`, `read_and_merge_kmer_files`, `minhash_signatures` and `decode_kmers`.
+* Four more functions serve the legacy 64-bit path of module 2: `sort_merge_bytes`, `read_and_merge_kmer_files`, `minhash_signatures` and `decode_kmers`; `test_giant_kmer(dna_sequence)` is a one-line self-test of the 128-bit encoding.
 * The AI layer (optional) lives in `multimerge_genomics.ai`, and the MCP server in `mmgen-mcp`: see [29. AI Assistant](#-29-ai-assistant-optional-uses-the-claude-api).
 
 ---
@@ -495,6 +497,7 @@ cargo run --release --bin crispr      # 237 tests: guide counting, MAGeCK's gene
 cargo run --release --bin microbio    # 192 tests: sketches, species abundance, read classification, resistance genes
 cargo run --release --bin surto       # 184 tests: genome distances and trees, viral mutations, in-silico PCR
 cargo run --release --bin amplicon    # 178 tests: 16S ASVs, RDP classifier, diversity, tumor mutational burden
+# some suites run extra checks on real data when MMG_HUMAN_GENOMES, MMG_HUMAN_DEMO, PGX_V2_BAM, MMGEN_HLA_DIR or NAV_REAL_BAM point to it
 # with CUTADAPT=<path of cutadapt> the FASTQ tests also compare every read with cutadapt
 
 # Python, with the extension installed
@@ -513,7 +516,7 @@ Every Rust test compares the output with an independent reference written in the
 
 ## 🚧 Status and known limitations
 
-MMGEN 2.3.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
+MMGEN 2.4.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
 
 * **The k-mer modules 1–7 work in memory, and their k-mers are strand-specific.** Assembly and variant detection suit same-strand input, such as an assembled reference against a mutated copy of it. `count_kmers` (module 13) is the exception: any size, canonical.
 * **Variant detection reports k-mers**, not VCF records.
@@ -556,7 +559,7 @@ The course name and the student's name are the seed: the same pair always gives 
 
 If MMGEN helps your research or your teaching, please cite it (GitHub's *Cite this repository* button gives the same, from [CITATION.cff](CITATION.cff)):
 
-> Couto F. *MMGEN: MultiMerge Genomics* (version 2.3.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
+> Couto F. *MMGEN: MultiMerge Genomics* (version 2.4.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
 
 The DOI always resolves to the latest version on Zenodo, where each version has its own DOI too. Please also cite the methods a tool reproduces (DESeq2, KING, MAGeCK, sourmash, Nextclade, cutadapt...), named in the sections above.
 

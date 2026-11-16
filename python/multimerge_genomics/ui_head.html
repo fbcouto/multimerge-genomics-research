@@ -1,0 +1,53 @@
+<!-- MMGEN workbench: the rail of tools. marimo injects this file into the page head
+     (App(html_head_file=...)) when the app is served with `marimo run` / `mmgen-ui`.
+     The rail is plain HTML (so the theme's CSS reaches it); each entry is a link
+     whose click is handed to a hidden marimo button that sets the page in Python.
+     The address keeps the screen (#sort, #pgx...): a bookmark, a reload or the
+     browser's back button opens it again. -->
+<script>
+(() => {
+  const bridgeButton = (page) => {
+    const wrap = document.querySelector('.mmg-rail-bridge [data-page="' + page + '"]');
+    const host = wrap && wrap.querySelector('marimo-button');
+    return host && host.shadowRoot && host.shadowRoot.querySelector('button');
+  };
+  const go = (page) => { const b = bridgeButton(page); if (b) { b.click(); return true; } return false; };
+  const rail = () => document.querySelector('.mmg-rail');
+  const activePage = () => { const a = document.querySelector('.mmg-rail a.mmg-item.active'); return a ? a.dataset.page : 'home'; };
+
+  document.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target.closest('.mmg-rail-toggle, .mmg-rail a[data-page]') : null;
+    if (!t) {   // a tap outside the open drawer closes it
+      const r = rail();
+      if (r && r.classList.contains('open') && !(e.target.closest && e.target.closest('.mmg-rail'))) r.classList.remove('open');
+      return;
+    }
+    e.preventDefault();
+    if (t.classList.contains('mmg-rail-toggle')) { const r = rail(); if (r) r.classList.toggle('open'); return; }
+    const r = rail(); if (r) r.classList.remove('open');
+    if (go(t.dataset.page)) history.replaceState(null, '', location.pathname + location.search + (t.dataset.page === 'home' ? '' : '#' + t.dataset.page));
+  });
+
+  // A screen named in the address: open it once the rail exists (the app renders after the page loads).
+  let pending = null, tries = 0;
+  const tick = () => {
+    if (!pending) return;
+    if (go(pending) || ++tries > 600) { pending = null; return; }
+    setTimeout(tick, 250);
+  };
+  const fromHash = () => {
+    const p = location.hash.replace(/^#/, '') || 'home';
+    if (!/^[a-z]+$/.test(p) || p === activePage()) return;
+    pending = p; tries = 0; tick();
+  };
+  window.addEventListener('hashchange', fromHash);
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', fromHash); else fromHash();
+
+  // When Python changes the page (Back to Menu, the menu's buttons), keep the address in step.
+  new MutationObserver(() => {
+    if (pending) return;
+    const want = activePage() === 'home' ? '' : '#' + activePage();
+    if (location.hash !== want && document.querySelector('.mmg-rail')) history.replaceState(null, '', location.pathname + location.search + want);
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+})();
+</script>

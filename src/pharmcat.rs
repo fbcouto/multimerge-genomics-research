@@ -754,4 +754,247 @@ impl Rodada {
             comando.join(","),
         )
     }
+
+    /// A rodada no esquema comum da farmacogenetica (`pgx_result.schema.json`,
+    /// versao 1), o mesmo do motor `mmgen-pgx`: e o que `pgx_run(engine="pharmcat")`
+    /// devolve. A rodada inteira (preparo, arquivos, tempos) vai em `x_pharmcat`.
+    pub fn esquema_comum(&self) -> Result<String, String> {
+        let arquivo = |k: &str| self.arquivos.iter().find(|(c, _)| c == k).map(|(_, v)| v.clone());
+        let relatorio = arquivo("report_json").ok_or("PharmCAT wrote no report.json (its -reporterJson output)")?;
+        let extras: serde_json::Value =
+            serde_json::from_str(&self.json()).map_err(|e| format!("Internal error reading the PharmCAT run: {e}"))?;
+        esquema_comum(
+            &relatorio,
+            &self.preparo.amostra,
+            &self.preparo.sequencias_ausentes,
+            extras,
+            arquivo("report_html").as_deref(),
+            self.avisos_de_posicao,
+        )
+    }
+}
+
+/// Le o `<base>.report.json` do PharmCAT e escreve o resultado no esquema comum.
+/// Um gene sem chamada sai com `called: false` e o motivo (sequencia ausente do
+/// arquivo, gene que o PharmCAT so recebe de fora, nenhuma posicao lida, ou
+/// nenhuma combinacao de alelos que sirva). As recomendacoes saem de cada fonte
+/// (CPIC, DPWG, bula da FDA) com o texto e a forca da recomendacao.
+pub fn esquema_comum(
+    report_json: &str,
+    amostra: &str,
+    ausentes: &[String],
+    extras: serde_json::Value,
+    report_html: Option<&str>,
+    avisos_de_posicao: usize,
+) -> Result<String, String> {
+    use serde_json::{json, Value};
+    let texto = std::fs::read_to_string(report_json).map_err(|e| format!("Error reading {report_json}: {e}"))?;
+    let r: Value = serde_json::from_str(&texto).map_err(|e| format!("{report_json} is not a PharmCAT JSON report: {e}"))?;
+    let palavra = |v: Option<&Value>| -> Option<String> {
+        v.and_then(|x| x.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "null" && s != "n/a")
+    };
+    let numero = |v: Option<&Value>| -> Option<f64> {
+        match v {
+            Some(Value::Number(n)) => n.as_f64(),
+            Some(Value::String(s)) => s.trim().parse().ok(),
+            _ => None,
+        }
+    };
+    let versao = palavra(r.get("pharmcatVersion")).unwrap_or_else(|| "unknown".into());
+    let dados = palavra(r.get("dataVersion")).map(|d| format!("PharmCAT data {d}")).unwrap_or_else(|| format!("PharmCAT {versao} data"));
+    let vazio = serde_json::Map::new();
+    let genes_r = r.get("genes").and_then(|g| g.as_object()).unwrap_or(&vazio);
+    // Os genes com recomendacao ficam em `genes`; os outros que o PharmCAT chama
+    // (F2, F5...) em `unannotatedGeneCalls`.
+    let mut lista: Vec<(String, &Value)> = genes_r.iter().map(|(k, v)| (k.clone(), v)).collect();
+    for g in r.get("unannotatedGeneCalls").and_then(|u| u.as_array()).into_iter().flatten() {
+        if let Some(n) = palavra(g.get("geneSymbol")) {
+            if !lista.iter().any(|(k, _)| *k == n) {
+                lista.push((n, g));
+            }
+        }
+    }
+    let mut genes = Vec::new();
+    let mut chamados = 0usize;
+    for (nome, g) in &lista {
+        let g: &Value = g;
+        let nome_alelo = |a: Option<&Value>| palavra(a.and_then(|x| x.get("name")));
+        let dips: Vec<&Value> = g.get("sourceDiplotypes").and_then(|d| d.as_array()).map(|a| a.iter().collect()).unwrap_or_default();
+        let rotulo = |d: &Value| -> Option<String> {
+            palavra(d.get("label")).or_else(|| match (nome_alelo(d.get("allele1")), nome_alelo(d.get("allele2"))) {
+                (Some(a), Some(b)) => Some(format!("{a}/{b}")),
+                (Some(a), None) => Some(a),
+                _ => None,
+            })
+        };
+        let desconhecido = |d: &Value| {
+            [d.get("allele1"), d.get("allele2")].iter().any(|a| nome_alelo(*a).as_deref() == Some("Unknown"))
+                || nome_alelo(d.get("allele1")).is_none()
+        };
+        let rotulos: Vec<String> = dips.iter().filter(|d| !desconhecido(d)).filter_map(|d| rotulo(d)).collect();
+        let chamado = !dips.is_empty() && rotulos.len() == dips.len();
+        let mut fenotipos: Vec<String> = Vec::new();
+        for d in &dips {
+            for f in d.get("phenotypes").and_then(|p| p.as_array()).into_iter().flatten() {
+                if let Some(f) = palavra(Some(f)) {
+                    if f != "No Result" && !fenotipos.contains(&f) {
+                        fenotipos.push(f);
+                    }
+                }
+            }
+        }
+        let variantes: Vec<&Value> = g.get("variants").and_then(|v| v.as_array()).map(|a| a.iter().collect()).unwrap_or_default();
+        let cromossomo = palavra(g.get("chr"));
+        let evidencias: Vec<Value> = variantes
+            .iter()
+            .filter_map(|v| {
+                let pos = v.get("position").and_then(|p| p.as_u64())?;
+                Some(json!({
+                    "chrom": palavra(v.get("chromosome")).or_else(|| cromossomo.clone()).unwrap_or_else(|| "?".into()),
+                    "pos": pos,
+                    "rsid": palavra(v.get("dbSnpId")),
+                    "genotype": palavra(v.get("call")).unwrap_or_else(|| "./.".into()),
+                    "in_callable": Value::Null,
+                }))
+            })
+            .collect();
+        let lidas = variantes.iter().filter(|v| palavra(v.get("call")).is_some()).count();
+        let faltando = variantes.len() - lidas;
+        let mut notas: Vec<String> = g
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|m| palavra(m.get("message")))
+            .collect();
+        if chamado && faltando > 0 {
+            notas.push(format!("{faltando} of {} positions could not be read; PharmCAT called the gene from the others.", variantes.len()));
+        }
+        let fonte = if palavra(g.get("callSource")).as_deref() == Some("OUTSIDE") { "outside" } else { "vcf" };
+        let motivo = if chamado {
+            None
+        } else if let Some(c) = cromossomo.as_ref().filter(|c| ausentes.iter().any(|a| a == *c)) {
+            Some(format!("Sequence {c} is not in the file, so no position of {nome} could be read."))
+        } else if variantes.is_empty() && palavra(g.get("callSource")).as_deref() == Some("NONE") {
+            Some(format!(
+                "PharmCAT does not call {nome} from a VCF: give it as an outside call (from a laboratory or a BAM-based caller)."
+            ))
+        } else if lidas == 0 {
+            Some(format!(
+                "None of the {} positions of {nome} could be read (missing from the file or outside the callable regions).",
+                variantes.len()
+            ))
+        } else {
+            Some(format!("PharmCAT found no combination of {nome} alleles that fits the {lidas} positions read."))
+        };
+        if chamado {
+            chamados += 1;
+        }
+        let alelos: Vec<String> = if chamado {
+            dips.first().map(|d| [d.get("allele1"), d.get("allele2")].iter().filter_map(|a| nome_alelo(*a)).collect()).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        genes.push(json!({
+            "gene": nome,
+            "called": chamado,
+            "diplotype": if chamado { Value::String(rotulos.join(" OR ")) } else { Value::Null },
+            "alleles": alelos,
+            "phenotype": if chamado && !fenotipos.is_empty() { Value::String(fenotipos.join(" / ")) } else { Value::Null },
+            "activity_score": if chamado && dips.len() == 1 { numero(dips[0].get("activityScore")).map_or(Value::Null, |x| json!(x)) } else { Value::Null },
+            "source": fonte,
+            "positions_read": lidas,
+            "positions_missing": faltando,
+            "evidence": evidencias,
+            "not_called_reason": motivo,
+            "notes": notas,
+        }));
+    }
+
+    let mut remedios: Vec<Value> = Vec::new();
+    let mut vistos = HashSet::new();
+    for (origem, mapa) in r.get("drugs").and_then(|d| d.as_object()).unwrap_or(&vazio) {
+        let fonte = if origem.starts_with("CPIC") {
+            "CPIC"
+        } else if origem.starts_with("DPWG") {
+            "DPWG"
+        } else if origem.starts_with("FDA Label") {
+            "FDA label"
+        } else if origem.starts_with("FDA") {
+            "FDA association"
+        } else {
+            origem.as_str()
+        };
+        for (chave, remedio) in mapa.as_object().unwrap_or(&vazio) {
+            let nome = palavra(remedio.get("name")).unwrap_or_else(|| chave.clone());
+            for diretriz in remedio.get("guidelines").and_then(|g| g.as_array()).into_iter().flatten() {
+                for anot in diretriz.get("annotations").and_then(|a| a.as_array()).into_iter().flatten() {
+                    let Some(texto) = palavra(anot.get("drugRecommendation")) else { continue };
+                    let mut genes_d: Vec<String> = Vec::new();
+                    for k in anot.get("lookupKey").and_then(|l| l.as_array()).into_iter().flatten() {
+                        for g in k.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+                            if !genes_d.contains(&g) {
+                                genes_d.push(g);
+                            }
+                        }
+                    }
+                    if genes_d.is_empty() {
+                        for gt in anot.get("genotypes").and_then(|g| g.as_array()).into_iter().flatten() {
+                            for d in gt.get("diplotypes").and_then(|d| d.as_array()).into_iter().flatten() {
+                                if let Some(g) = palavra(d.get("gene")) {
+                                    if !genes_d.contains(&g) {
+                                        genes_d.push(g);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if genes_d.is_empty() {
+                        genes_d.push("(not stated)".into());
+                    }
+                    if !vistos.insert((nome.clone(), fonte.to_string(), texto.clone())) {
+                        continue;
+                    }
+                    remedios.push(json!({
+                        "drug": nome,
+                        "genes": genes_d,
+                        "source": fonte,
+                        "recommendation": texto,
+                        "strength": palavra(anot.get("classification")),
+                        "url": palavra(diretriz.get("url")),
+                    }));
+                }
+            }
+        }
+    }
+
+    let mut avisos: Vec<String> = ausentes
+        .iter()
+        .map(|s| format!("The file has no {s}: PharmCAT read no position there, so the genes on it were not called."))
+        .collect();
+    if avisos_de_posicao > 0 {
+        avisos.push(format!("{avisos_de_posicao} positions had warnings in PharmCAT's matcher (see its match_warnings.txt)."));
+    }
+    let resumo = format!(
+        "PharmCAT {versao}: {chamados} of {} genes called; {} drug recommendations (CPIC, DPWG, FDA).",
+        genes.len(),
+        remedios.len()
+    );
+    let saida = json!({
+        "schema_version": "1",
+        "engine": "pharmcat",
+        "engine_version": versao,
+        "data_version": dados,
+        "sample": if amostra.is_empty() { "(first sample)" } else { amostra },
+        "genes": genes,
+        "drugs": remedios,
+        "traits": [],
+        "warnings": avisos,
+        "report_html": report_html,
+        "text": resumo,
+        "x_pharmcat": extras,
+    });
+    serde_json::to_string(&saida).map_err(|e| format!("Internal error writing the result: {e}"))
 }

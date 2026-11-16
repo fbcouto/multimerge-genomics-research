@@ -1,0 +1,513 @@
+{
+  "assembly": "GRCh38",
+  "data_version": "synth-v1.0.0",
+  "genes": [
+    {
+      "gene": "SYNG_STAR",
+      "chrom": "chr1",
+      "model": "star_allele",
+      "ploidy": "diploid",
+      "lookup_method": "ACTIVITY_SCORE",
+      "reference_allele": "*1",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chr1",
+          "pos": 100,
+          "cpic_pos": 100,
+          "rsid": "rs1000",
+          "hgvs": "NC_000001.11:g.100A>G",
+          "ref_cpic": "A",
+          "grch38_ref": "A",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "A",
+              "vcf_pos": 100,
+              "vcf_ref": "A",
+              "vcf_alt": "A",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 100,
+              "vcf_ref": "A",
+              "vcf_alt": "G",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "chrom": "chr1",
+          "pos": 120,
+          "cpic_pos": 120,
+          "rsid": "rs1001",
+          "hgvs": "NC_000001.11:g.120C>W",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 120,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 120,
+              "vcf_ref": "C",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 120,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        }
+      ],
+      "alleles": [
+        {
+          "name": "*1",
+          "is_reference": true,
+          "clinical_function": "Normal function",
+          "activity_value": 1.0,
+          "activity_label": "1.0",
+          "variants": []
+        },
+        {
+          "name": "*2",
+          "is_reference": false,
+          "clinical_function": "No function",
+          "activity_value": 0.0,
+          "activity_label": "0.0",
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "G"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "*3",
+          "is_reference": false,
+          "clinical_function": "Decreased function",
+          "activity_value": 0.5,
+          "activity_label": "0.5",
+          "variants": [
+            {
+              "pos_id": 1,
+              "accepted": [
+                "A",
+                "T"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "*4",
+          "is_reference": false,
+          "clinical_function": "No function",
+          "activity_value": 0.0,
+          "activity_label": "0.0",
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "G"
+              ]
+            },
+            {
+              "pos_id": 1,
+              "accepted": [
+                "T"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "gene": "SYNG_VG",
+      "chrom": "chr2",
+      "model": "variant_genotype",
+      "ploidy": "diploid",
+      "lookup_method": "PHENOTYPE",
+      "reference_allele": "rs2000 reference (C)",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chr2",
+          "pos": 200,
+          "cpic_pos": 200,
+          "rsid": "rs2000",
+          "hgvs": "NC_000002.12:g.200C>T",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 200,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 200,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        }
+      ],
+      "alleles": [
+        {
+          "name": "rs2000 reference (C)",
+          "is_reference": true,
+          "clinical_function": "Normal function",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": []
+        },
+        {
+          "name": "rs2000 variant (T)",
+          "is_reference": false,
+          "clinical_function": "Decreased function",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "T"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "gene": "SYNG_ACT",
+      "chrom": "chr3",
+      "model": "variant_activity",
+      "ploidy": "diploid",
+      "lookup_method": "ACTIVITY_SCORE",
+      "reference_allele": "Reference",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chr3",
+          "pos": 300,
+          "cpic_pos": 300,
+          "rsid": "rs3000",
+          "hgvs": "NC_000003.12:g.300G>A",
+          "ref_cpic": "G",
+          "grch38_ref": "G",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "G",
+              "vcf_pos": 300,
+              "vcf_ref": "G",
+              "vcf_alt": "G",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 300,
+              "vcf_ref": "G",
+              "vcf_alt": "A",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "chrom": "chr3",
+          "pos": 320,
+          "cpic_pos": 320,
+          "rsid": "rs3001",
+          "hgvs": "NC_000003.12:g.320T>C",
+          "ref_cpic": "T",
+          "grch38_ref": "T",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "T",
+              "vcf_pos": 320,
+              "vcf_ref": "T",
+              "vcf_alt": "T",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "C",
+              "vcf_pos": 320,
+              "vcf_ref": "T",
+              "vcf_alt": "C",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "chrom": "chr3",
+          "pos": 350,
+          "cpic_pos": 350,
+          "rsid": "rs3002",
+          "hgvs": "NC_000003.12:g.351del",
+          "ref_cpic": "CA",
+          "grch38_ref": "CA",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "CA",
+              "vcf_pos": 350,
+              "vcf_ref": "CA",
+              "vcf_alt": "CA",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "del",
+              "vcf_pos": 350,
+              "vcf_ref": "CA",
+              "vcf_alt": "C",
+              "is_ref": false
+            }
+          ]
+        }
+      ],
+      "alleles": [
+        {
+          "name": "Reference",
+          "is_reference": true,
+          "clinical_function": "Normal function",
+          "activity_value": 1.0,
+          "activity_label": "1.0",
+          "variants": []
+        },
+        {
+          "name": "varA",
+          "is_reference": false,
+          "clinical_function": "Decreased function",
+          "activity_value": 0.5,
+          "activity_label": "0.5",
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "A"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "varB",
+          "is_reference": false,
+          "clinical_function": "No function",
+          "activity_value": 0.0,
+          "activity_label": "0.0",
+          "variants": [
+            {
+              "pos_id": 1,
+              "accepted": [
+                "C"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "varDel",
+          "is_reference": false,
+          "clinical_function": "No function",
+          "activity_value": 0.0,
+          "activity_label": "0.0",
+          "variants": [
+            {
+              "pos_id": 2,
+              "accepted": [
+                "del"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "gene": "SYNG_X",
+      "chrom": "chrX",
+      "model": "star_allele",
+      "ploidy": "sex_x",
+      "lookup_method": "PHENOTYPE",
+      "reference_allele": "B (reference)",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chrX",
+          "pos": 400,
+          "cpic_pos": 400,
+          "rsid": "rs4000",
+          "hgvs": "NC_000023.11:g.400G>A",
+          "ref_cpic": "G",
+          "grch38_ref": "G",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "G",
+              "vcf_pos": 400,
+              "vcf_ref": "G",
+              "vcf_alt": "G",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 400,
+              "vcf_ref": "G",
+              "vcf_alt": "A",
+              "is_ref": false
+            }
+          ]
+        }
+      ],
+      "alleles": [
+        {
+          "name": "B (reference)",
+          "is_reference": true,
+          "clinical_function": "Normal function",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": []
+        },
+        {
+          "name": "A-",
+          "is_reference": false,
+          "clinical_function": "Deficient",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "A"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "gene": "SYNG_MITO",
+      "chrom": "chrM",
+      "model": "star_allele",
+      "ploidy": "haploid",
+      "lookup_method": "PHENOTYPE",
+      "reference_allele": "Reference",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chrM",
+          "pos": 500,
+          "cpic_pos": 500,
+          "rsid": "rs5000",
+          "hgvs": "NC_012920.1:m.500A>G",
+          "ref_cpic": "A",
+          "grch38_ref": "A",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "A",
+              "vcf_pos": 500,
+              "vcf_ref": "A",
+              "vcf_alt": "A",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 500,
+              "vcf_ref": "A",
+              "vcf_alt": "G",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "chrom": "chrM",
+          "pos": 520,
+          "cpic_pos": 520,
+          "rsid": null,
+          "hgvs": "NC_012920.1:m.520insC",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 520,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "CC",
+              "vcf_pos": 520,
+              "vcf_ref": "C",
+              "vcf_alt": "CC",
+              "is_ref": false
+            }
+          ]
+        }
+      ],
+      "alleles": [
+        {
+          "name": "Reference",
+          "is_reference": true,
+          "clinical_function": "Normal",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": []
+        },
+        {
+          "name": "500A>G",
+          "is_reference": false,
+          "clinical_function": "Risk of aminoglycoside-induced hearing loss",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": [
+            {
+              "pos_id": 0,
+              "accepted": [
+                "G"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "520insC",
+          "is_reference": false,
+          "clinical_function": "Uncertain risk",
+          "activity_value": null,
+          "activity_label": null,
+          "variants": [
+            {
+              "pos_id": 1,
+              "accepted": [
+                "CC"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

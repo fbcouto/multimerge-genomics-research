@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "multimerge_genomics"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "cc",
  "flate2",
@@ -777,6 +777,8 @@ dependencies = [
  "polars-parquet",
  "pyo3",
  "rayon",
+ "serde",
+ "serde_json",
  "sysinfo 0.34.2",
 ]
 

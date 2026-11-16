@@ -1,0 +1,40 @@
+{
+  "bundle_format_version": 1,
+  "engine": "mmgen-pgx",
+  "engine_version": "1.0.0",
+  "version": "synth-v1.0.0",
+  "data_version": "synth-v1.0.0",
+  "assembly": "GRCh38",
+  "files": {
+    "genes.json": {
+      "sha256": "3df984566de7ebae40b88a37c45fcce2c182e3617588d45ee5421ddc039d39e8",
+      "bytes": 12412,
+      "version": "synth-v1.0.0",
+      "license": "CC0-1.0"
+    },
+    "bam_genes.json": {
+      "sha256": "207835980b9324f94d5f22888822b4d446b2a213d5842a94815d4c1dbeb98f43",
+      "bytes": 13245,
+      "version": "synth-v1.0.0",
+      "license": "CC0-1.0"
+    },
+    "phenotypes.json": {
+      "sha256": "a1e2d40d4d9fd13412c17729dff440c2b8d66a8b3e3b9fdbf786e7496d00c2be",
+      "bytes": 6861,
+      "version": "synth-v1.0.0",
+      "license": "CC0-1.0"
+    },
+    "guidelines.json": {
+      "sha256": "62386c1660739679b1827c9e3da04dd8186148e86934618817dd3a77189e82af",
+      "bytes": 4912,
+      "version": "synth-v1.0.0",
+      "license": "CC0-1.0"
+    },
+    "traits.json": {
+      "sha256": "0d4e79f72547ffb5795eb0f5b802ea6c8f457e65ef7ffe9d38cf012fe203f153",
+      "bytes": 9234,
+      "version": "synth-v1.0.0",
+      "license": "CC0-1.0"
+    }
+  }
+}

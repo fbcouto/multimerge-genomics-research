@@ -69,4 +69,9 @@ CLAUDE.md
 # Written by the web interface: the example files (made again on demand) and
 # the FASTQ report pages
 mmgen_examples/
+mmgen_tools/
 *.report.html
+
+# Written by local runs: PharmCAT's log where it runs, and the Windows debug symbols of `maturin develop`
+pharmcat.log
+*.pdb

@@ -1,3 +1,63 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Smoke test of the installed extension: no external data, no numpy, any
 # system, a few seconds. The CI runs it on every wheel, and it is the quick way
 # to check an installation:
@@ -363,6 +423,187 @@ tvcf = write("tumor.vcf", ["##fileformat=VCFv4.2", "##contig=<ID=chr1,length=248
 tbed = write("panel.bed", ["chr1\t1000000\t2000000"])
 tm = mmg.tumor_mutational_burden(tvcf, tbed)
 check("tumor_mutational_burden: 40 per Mb", tm["counted"] == 40 and abs(tm["tmb"] - 40.0) < 1e-9, str(tm)[:200])
+
+# Pharmacogenetics (mmgen-pgx v1): native Rust engine using external JSON bundle fixture.
+import json as _pgx_json
+
+_fx_tables = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fixtures", "pgx_tables")
+_pgx_vcf = write("pgx_phased.vcf", [
+    "##fileformat=VCFv4.2",
+    "##contig=<ID=chr1,length=248956422>",
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">',
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNA_SYN",
+    "chr1\t100\trs1000\tA\tG\t50\tPASS\t.\tGT:PS\t1|0:10",
+    "chr1\t120\trs1001\tC\tA\t50\tPASS\t.\tGT:PS\t0|1:10",
+    "chr2\t200\trs2000\tC\tT\t50\tPASS\t.\tGT\t0/0",
+    "chr3\t300\trs3000\tG\tA\t50\tPASS\t.\tGT:PS\t1|0:30",
+    "chr3\t320\trs3001\tT\tC\t50\tPASS\t.\tGT:PS\t0|1:30",
+    "chrX\t400\trs4000\tG\tA\t50\tPASS\t.\tGT\t1",
+    "chrM\t500\trs5000\tA\t.\t50\tPASS\t.\tGT\t0",
+    "chrM\t520\t.\tC\tCC\t50\tPASS\t.\tGT\t1",
+])
+_pgx_res = mmg.mmgen_pgx_run(_pgx_vcf, p("pgx_out_1"), tables=_fx_tables)
+_pgx_res2 = mmg.pgx_run(_pgx_vcf, p("pgx_out_2"), engine="mmgen-pgx", tables=_fx_tables)
+_by_g = {g["gene"]: g for g in _pgx_res["genes"]}
+check("mmgen_pgx_run: calls phased star allele, variant_activity, haploid chrX and chrM indel",
+      _pgx_res["engine"] == "mmgen-pgx"
+      and _pgx_res["schema_version"] == "1"
+      and _by_g["SYNG_STAR"]["diplotype"] == "*2/*3"
+      and _by_g["SYNG_ACT"]["diplotype"] == "varA/varB"
+      and _by_g["SYNG_X"]["diplotype"] == "A-"
+      and _by_g["SYNG_MITO"]["diplotype"] == "520insC"
+      and _by_g["SYNG_MITO"]["called"] is True,
+      str(_by_g)[:300])
+_pgx_disk = _pgx_json.load(open(_pgx_res["x_files"]["result_json"], encoding="utf-8"))
+check("mmgen_pgx_run: returns notice on Python dict without leaking notice into result.json",
+      "no responsibility" in _pgx_res.get("notice", "")
+      and "notice" not in _pgx_disk
+      and all(k in _pgx_disk for k in ("schema_version", "engine", "engine_version", "data_version", "sample", "genes", "drugs", "traits", "warnings", "report_html", "text"))
+      and len(_pgx_disk["traits"]) == 2
+      and os.path.exists(_pgx_res["report_html"]))
+check("pgx_run: engine='mmgen-pgx' agrees with mmgen_pgx_run and omits file-specific differences",
+      _pgx_res2["genes"] == _pgx_res["genes"] and _pgx_res2["drugs"] == _pgx_res["drugs"])
+# The contract of both engines ships with the package (validated against it in
+# test_ui and validate_pgx; here, without jsonschema, its required keys).
+with open(mmg.PGX_SCHEMA_PATH, encoding="utf-8") as _fh:
+    _pgx_schema = _pgx_json.load(_fh)
+check("pgx_result.schema.json ships with the package, and the result has every key it requires",
+      _pgx_schema.get("properties", {}).get("schema_version", {}).get("const") == "1"
+      and all(k in _pgx_disk for k in _pgx_schema["required"])
+      and all(k in g for g in _pgx_disk["genes"] for k in _pgx_schema["$defs"]["gene"]["required"]))
+try:
+    _b37 = write("pgx_grch37.vcf", ["##fileformat=VCFv4.2", "##contig=<ID=chr1,length=249250621>",
+                                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1"])
+    mmg.mmgen_pgx_run(_b37, p("pgx_out_err"), tables=_fx_tables)
+    check("mmgen_pgx_run: GRCh37 VCF raises error", False, "no error raised")
+except RuntimeError as _e:
+    check("mmgen_pgx_run: GRCh37 VCF raises clear error", "GRCh37" in str(_e) and "GRCh38" in str(_e), str(_e))
+
+# Pharmacogenetics v2 (BAM+VCF CYP2D6 + Class I HLA + outside_calls.tsv)
+def _synth_hla_dna(seed, length=240):
+    x = seed ^ 0x9E3779B97F4A7C15
+    bases = "ACGT"
+    out = []
+    for _ in range(length):
+        x = (x * 6364136223846793005 + 1442695040888963407) & ((1 << 64) - 1)
+        out.append(bases[(x >> 32) & 3])
+    return "".join(out)
+
+_hla_py_dir = p("pgx_v2_hla")
+os.makedirs(_hla_py_dir, exist_ok=True)
+_hla_specs = {
+    "A_gen.fasta": [("A*01:01:01:01", 101), ("A*31:01:02:01", 202), ("A*02:01:01:01", 303)],
+    "B_gen.fasta": [("B*07:02:01:01", 404), ("B*57:01:01:01", 505), ("B*35:01:01:01", 606)],
+    "C_gen.fasta": [("C*04:01:01:01", 707), ("C*12:03:01:01", 808), ("C*07:01:01:01", 909)],
+}
+_hla_seqs = {}
+for _fn, _als in _hla_specs.items():
+    _lines = []
+    _hla_seqs[_fn] = []
+    for _i, (_al, _sd) in enumerate(_als):
+        _s = _synth_hla_dna(_sd, 240)
+        _hla_seqs[_fn].append(_s)
+        _lines.append(f">HLA:HLA_PY_{_fn[0]}{_i} {_al} 240 bp\n{_s}\n")
+    with open(os.path.join(_hla_py_dir, _fn), "w", encoding="utf-8") as _fh:
+        _fh.writelines(_lines)
+
+_v2_sam_lines = [
+    "@HD\tVN:1.6\tSO:unsorted",
+    "@SQ\tSN:chr4\tLN:190214555",
+    "@SQ\tSN:chr6\tLN:170805979",
+    "@SQ\tSN:chr22\tLN:50818468",
+]
+for _cpos in range(73404287, 73420484, 1000):
+    _clen = min(1000, 73421482 - _cpos + 1)
+    _cseq = "A" * _clen
+    _cqual = "I" * _clen
+    for _cp in range(20):
+        _v2_sam_lines.append(f"ctrl_{_cpos}_{_cp}\t0\tchr4\t{_cpos}\t60\t{_clen}M\t*\t0\t0\t{_cseq}\t{_cqual}")
+
+for _tag, _bpos, _s1, _s2 in [
+    ("hlaA", 29936100, _hla_seqs["A_gen.fasta"][0], _hla_seqs["A_gen.fasta"][1]),
+    ("hlaC", 31265100, _hla_seqs["C_gen.fasta"][0], _hla_seqs["C_gen.fasta"][1]),
+    ("hlaB", 31350100, _hla_seqs["B_gen.fasta"][0], _hla_seqs["B_gen.fasta"][1]),
+]:
+    for _hi, _seq in enumerate((_s1, _s2), start=1):
+        for _p in range(4):
+            _qn = f"{_tag}_{_hi}_{_p}"
+            _v2_sam_lines.append(f"{_qn}\t65\tchr6\t{_bpos + _p}\t60\t100M\t*\t0\t0\t{_seq[:100]}\t{'I'*100}")
+            _v2_sam_lines.append(f"{_qn}\t129\tchr6\t{_bpos + 140 + _p}\t60\t100M\t*\t0\t0\t{_seq[140:240]}\t{'I'*100}")
+
+_s2 = [b"G", b"A", b"C", b"C", b"T", b"G", b"G"]
+_s4 = [b"C", b"G", b"T", b"C", b"T", b"G", b"A"]
+for _htag, _hb in (("h1", _s2), ("h2", _s4)):
+    for _r in range(10):
+        _ex9 = bytearray(b"A" * 301)
+        _ex9[42126611 - 42126500] = _hb[0][0]
+        _mid = bytearray(b"A" * 1199)
+        _mid[42127941 - 42126801] = _hb[1][0]
+        _fivep = bytearray(b"A" * 2811)
+        _fivep[42128945 - 42128000] = _hb[2][0]
+        _fivep[42129130 - 42128000] = _hb[3][0]
+        _fivep[42129809 - 42128000] = _hb[4][0]
+        _fivep[42129819 - 42128000] = _hb[5][0]
+        _fivep[42130692 - 42128000] = _hb[6][0]
+        _qn = f"{_htag}_{_r}"
+        _v2_sam_lines.append(f"{_qn}_e\t65\tchr22\t42126500\t60\t301M\t*\t0\t0\t{_ex9.decode()}\t{'I'*301}")
+        _v2_sam_lines.append(f"{_qn}_b\t65\tchr22\t42126801\t60\t1199M\t*\t0\t0\t{_mid.decode()}\t{'I'*1199}")
+        _v2_sam_lines.append(f"{_qn}_b\t129\tchr22\t42128000\t60\t2811M\t*\t0\t0\t{_fivep.decode()}\t{'I'*2811}")
+
+_v2_sam = write("pgx_v2.sam", _v2_sam_lines)
+_v2_bam = p("pgx_v2.bam")
+mmg.sort_genomic([_v2_sam], _v2_bam, index=True)
+_v2_vcf = write("pgx_v2.vcf", [
+    "##fileformat=VCFv4.2",
+    "##contig=<ID=chr22,length=50818468>",
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNA_V2",
+    "chr22\t42126611\t.\tC\tG\t50\tPASS\t.\tGT\t0/1",
+    "chr22\t42127941\t.\tG\tA\t50\tPASS\t.\tGT\t0/1",
+    "chr22\t42128945\t.\tC\tT\t50\tPASS\t.\tGT\t0/1",
+    "chr22\t42130692\t.\tG\tA\t50\tPASS\t.\tGT\t0/1",
+])
+
+_old_hla_dir = os.environ.get("MMGEN_HLA_DIR")
+_old_hla_off = os.environ.get("MMGEN_HLA_OFFLINE")
+os.environ["MMGEN_HLA_DIR"] = _hla_py_dir
+os.environ["MMGEN_HLA_OFFLINE"] = "1"
+try:
+    _v2_res = mmg.mmgen_pgx_run(_v2_vcf, p("pgx_v2_out"), tables=_fx_tables, bam=_v2_bam)
+    _v2_wrap = mmg.pgx_run(_v2_vcf, p("pgx_v2_wrap"), engine="mmgen-pgx", tables=_fx_tables, bam=_v2_bam)
+finally:
+    if _old_hla_dir is None:
+        os.environ.pop("MMGEN_HLA_DIR", None)
+    else:
+        os.environ["MMGEN_HLA_DIR"] = _old_hla_dir
+    if _old_hla_off is None:
+        os.environ.pop("MMGEN_HLA_OFFLINE", None)
+    else:
+        os.environ["MMGEN_HLA_OFFLINE"] = _old_hla_off
+
+_v2_by_g = {g["gene"]: g for g in _v2_res["genes"]}
+_v2_oc = _v2_res["x_files"].get("pharmcat_outside_calls", "")
+_v2_oc_txt = open(_v2_oc, encoding="utf-8").read() if _v2_oc and os.path.exists(_v2_oc) else ""
+_v2_drugs = {d["drug"] for d in _v2_res["drugs"]}
+check(
+    "mmgen_pgx_run v2 BAM: calls CYP2D6 *2/*4 CN=2, HLA-A/B/C, drug guidelines & outside_calls.tsv",
+    _v2_by_g.get("CYP2D6", {}).get("diplotype") == "*2/*4"
+    and _v2_by_g.get("CYP2D6", {}).get("copy_number") == 2
+    and _v2_by_g.get("CYP2D6", {}).get("source") == "vcf+bam"
+    and _v2_by_g.get("CYP2D6", {}).get("x_phased") is True
+    and _v2_by_g.get("HLA-A", {}).get("diplotype") == "*01:01/*31:01"
+    and _v2_by_g.get("HLA-B", {}).get("diplotype") == "*07:02/*57:01"
+    and _v2_by_g.get("HLA-C", {}).get("diplotype") == "*04:01/*12:03"
+    and {"abacavir", "carbamazepine"}.issubset(_v2_drugs)
+    and "CYP2D6\t*2/*4\n" in _v2_oc_txt
+    and "HLA-A\t*01:01/*31:01\n" in _v2_oc_txt
+    and "HLA-B\t*07:02/*57:01\n" in _v2_oc_txt
+    and "HLA-C" not in _v2_oc_txt
+    and _v2_wrap["genes"] == _v2_res["genes"]
+    and "pharmcat_outside_calls" not in _pgx_res["x_files"],
+    str(_v2_by_g.get("CYP2D6"))[:200] + " | " + repr(_v2_oc_txt),
+)
 
 print()
 print(f"{done - len(failures)} of {done} checks passed")

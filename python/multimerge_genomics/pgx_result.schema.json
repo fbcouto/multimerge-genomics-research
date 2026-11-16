@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fbcouto/multimerge-genomics-research/pgx_result.schema.json",
+  "title": "MMGEN pharmacogenomics result",
+  "description": "What a pharmacogenomics engine returns to MMGEN (screen 19, pgx_run). Version 1 of the contract. Keys starting with x_ are free for engine-specific extras; any other unknown key is an error.",
+  "type": "object",
+  "required": ["schema_version", "engine", "engine_version", "data_version", "sample", "genes", "drugs", "traits", "warnings", "report_html", "text"],
+  "additionalProperties": false,
+  "patternProperties": {"^x_": {}},
+  "properties": {
+    "schema_version": {"const": "1"},
+    "engine": {"type": "string", "minLength": 1},
+    "engine_version": {"type": "string", "minLength": 1},
+    "data_version": {"type": "string", "minLength": 1, "description": "Version of every table used, e.g. 'CPIC 2026-10; PharmVar 6.2'"},
+    "sample": {"type": "string", "minLength": 1},
+    "genes": {"type": "array", "items": {"$ref": "#/$defs/gene"}},
+    "drugs": {"type": "array", "items": {"$ref": "#/$defs/drug"}},
+    "traits": {"type": "array", "items": {"$ref": "#/$defs/trait"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "report_html": {"type": ["string", "null"], "description": "Path of an HTML report inside output_dir, or null"},
+    "text": {"type": "string", "description": "A short readable summary, in English"},
+    "notice": {"type": "string", "description": "Added by MMGEN (the fixed disclaimer); an engine does not need to write it"}
+  },
+  "$defs": {
+    "gene": {
+      "type": "object",
+      "required": ["gene", "called", "diplotype", "alleles", "phenotype", "activity_score", "source", "positions_read", "positions_missing", "evidence", "not_called_reason", "notes"],
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}},
+      "properties": {
+        "gene": {"type": "string", "minLength": 1},
+        "called": {"type": "boolean"},
+        "diplotype": {"type": ["string", "null"]},
+        "alleles": {"type": "array", "items": {"type": "string"}},
+        "phenotype": {"type": ["string", "null"]},
+        "activity_score": {"type": ["number", "null"]},
+        "copy_number": {"type": ["number", "null"], "description": "Optional; for genes called with copy number (CYP2D6)"},
+        "source": {"enum": ["vcf", "bam", "vcf+bam", "outside"]},
+        "positions_read": {"type": "integer", "minimum": 0},
+        "positions_missing": {"type": "integer", "minimum": 0},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "not_called_reason": {"type": ["string", "null"]},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      },
+      "if": {"properties": {"called": {"const": false}}},
+      "then": {"properties": {"not_called_reason": {"type": "string", "minLength": 1}, "diplotype": {"type": "null"}}},
+      "else": {"properties": {"not_called_reason": {"type": "null"}, "diplotype": {"type": "string", "minLength": 1}}}
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["chrom", "pos", "rsid", "genotype", "in_callable"],
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}},
+      "properties": {
+        "chrom": {"type": "string", "minLength": 1},
+        "pos": {"type": "integer", "minimum": 1, "description": "1-based, GRCh38"},
+        "rsid": {"type": ["string", "null"]},
+        "genotype": {"type": "string", "minLength": 1, "description": "As read, e.g. 'G/A'; './.' when missing"},
+        "in_callable": {"type": ["boolean", "null"], "description": "null when no callable BED was given"},
+        "origin": {"enum": ["vcf", "bam", "absent_in_callable", "missing"], "description": "Optional: where the genotype came from"}
+      }
+    },
+    "drug": {
+      "type": "object",
+      "required": ["drug", "genes", "source", "recommendation", "strength", "url"],
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}},
+      "properties": {
+        "drug": {"type": "string", "minLength": 1},
+        "genes": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "source": {"type": "string", "minLength": 1, "description": "CPIC, DPWG, ..."},
+        "recommendation": {"type": "string", "minLength": 1},
+        "strength": {"type": ["string", "null"]},
+        "url": {"type": ["string", "null"]}
+      }
+    },
+    "trait": {
+      "type": "object",
+      "required": ["trait", "genotype", "interpretation", "evidence", "source"],
+      "additionalProperties": false,
+      "patternProperties": {"^x_": {}},
+      "properties": {
+        "trait": {"type": "string", "minLength": 1},
+        "genotype": {"type": "string", "minLength": 1},
+        "interpretation": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1, "description": "Level of evidence"},
+        "source": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -44,6 +44,7 @@ pub mod vcf_tools;
 // variantes em parentes, pileup; e a entrada do PharmCAT, que chama os alelos
 // de farmacogenetica (o MMGEN so prepara o VCF e le o resultado dele).
 pub mod clinico;
+pub mod farmacogenetica;
 pub mod pharmcat;
 // Parentesco (KING), trio (Mendel, de novo, paternidade), regioes de
 // homozigose e sexo genetico.
@@ -1589,6 +1590,117 @@ fn pharmcat_run(
     Ok(d)
 }
 
+/// Calls pharmacogenetic star alleles, diplotypes, phenotypes, activity scores,
+/// and CPIC drug recommendations directly from a GRCh38 VCF using MMGEN's
+/// native `mmgen-pgx` engine and external CC0 JSON tables.
+///
+/// When several diplotypes fit the positions read, the highest-scoring one is
+/// called, as PharmCAT's Named Allele Matcher does (each allele counts the
+/// positions read that define it; ties are joined with " OR "; for NAT2, as PharmCAT
+/// also does, the most common one in CPIC's population frequencies); the others are in
+/// the gene's `notes` and `x_alternatives`, and a warning names those that would
+/// change the phenotype or a recommendation. A gene is left uncalled only when
+/// nothing could be read or no definition fits. With `bam=`, the HLA genes use the
+/// IPD-IMGT/HLA release the tables pin (its SHA-256 is checked).
+///
+/// Writes `result.json` (matching `pgx_result.schema.json` v1) and `report.html`
+/// inside `output_dir`, and returns the parsed result dictionary with `notice`.
+#[pyfunction]
+#[pyo3(signature = (vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, tables=None))]
+fn mmgen_pgx_run(
+    py: Python<'_>,
+    vcf: &str,
+    output_dir: &str,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    bam: Option<String>,
+    reference: Option<String>,
+    tables: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let op = farmacogenetica::PgxOptions { sample, callable_bed, bam, reference, tables };
+    let r = py.allow_threads(|| farmacogenetica::run(vcf, output_dir, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json_text)?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// Unified pharmacogenetics entry point: `engine="mmgen-pgx"` (default, MMGEN's own
+/// engine, no Java needed; with `bam=` it also calls CYP2D6 with copy number and
+/// HLA-A/B/C) or `engine="pharmcat"` (PharmCAT, Java 17+; `jar=` or PHARMCAT_JAR).
+/// Both return the same dictionary (`pgx_result.schema.json`, version 1): `genes`
+/// (with `called`, `diplotype`, `phenotype`, `evidence`, and `not_called_reason`
+/// when a gene could not be called), `drugs`, `traits`, `warnings`, `report_html`,
+/// `text` and `notice`. PharmCAT's own run details are under `x_pharmcat`.
+#[pyfunction]
+#[pyo3(signature = (
+    vcf,
+    output_dir,
+    sample=None,
+    callable_bed=None,
+    bam=None,
+    reference=None,
+    engine="mmgen-pgx",
+    tables=None,
+    jar=None,
+    positions=None,
+    absent_is_ref=false,
+    java="java",
+    outside_calls=None,
+    base_name=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn pgx_run(
+    py: Python<'_>,
+    vcf: &str,
+    output_dir: &str,
+    sample: Option<String>,
+    callable_bed: Option<String>,
+    bam: Option<String>,
+    reference: Option<String>,
+    engine: &str,
+    tables: Option<String>,
+    jar: Option<String>,
+    positions: Option<String>,
+    absent_is_ref: bool,
+    java: &str,
+    outside_calls: Option<String>,
+    base_name: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    match engine {
+        "mmgen-pgx" => mmgen_pgx_run(py, vcf, output_dir, sample, callable_bed, bam, reference, tables),
+        "pharmcat" => {
+            let jar_path = jar
+                .or_else(|| std::env::var("PHARMCAT_JAR").ok().filter(|s| !s.trim().is_empty()))
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "engine=\"pharmcat\" requires `jar=<path/to/pharmcat-*-all.jar>` (or PHARMCAT_JAR set in environment).",
+                    )
+                })?;
+            let op = pharmcat::Opcoes { amostra: sample, chamavel: callable_bed, ausente_e_ref: absent_is_ref };
+            let r = py
+                .allow_threads(|| {
+                    pharmcat::rodar(
+                        vcf,
+                        output_dir,
+                        &jar_path,
+                        positions.as_deref(),
+                        &op,
+                        java,
+                        outside_calls.as_deref(),
+                        base_name.as_deref(),
+                    )
+                })
+                .map_err(erro_py)?;
+            let d = json_para_py(py, &r.esquema_comum().map_err(erro_py)?)?;
+            d.bind(py).set_item("notice", AVISO)?;
+            Ok(d)
+        }
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unknown PGx engine {other:?}; choose \"mmgen-pgx\" or \"pharmcat\"."
+        ))),
+    }
+}
+
 fn pessoa(path: &str, sample: Option<String>, bed: Option<String>, label: Option<String>) -> parentesco::Person {
     parentesco::Person { path: path.to_string(), sample, callable_bed: bed, label }
 }
@@ -2784,6 +2896,8 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pileup, m)?)?;
     m.add_function(wrap_pyfunction!(pharmcat_prepare, m)?)?;
     m.add_function(wrap_pyfunction!(pharmcat_run, m)?)?;
+    m.add_function(wrap_pyfunction!(mmgen_pgx_run, m)?)?;
+    m.add_function(wrap_pyfunction!(pgx_run, m)?)?;
     m.add_function(wrap_pyfunction!(relatedness, m)?)?;
     m.add_function(wrap_pyfunction!(trio_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(runs_of_homozygosity, m)?)?;

@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "assembly": "GRCh38",
+  "data_version": "Open Traits v1.0.0",
+  "traits": [
+    {
+      "id": "lactase_persistence",
+      "trait": "Lactase persistence",
+      "model": "lactase_mcm6",
+      "source": "Enattah et al. 2002 (Nat Genet 30:233); OMIM 223100",
+      "evidence_level": "Strong (OMIM 223100)",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chr2",
+          "pos": 135851076,
+          "cpic_pos": 135851076,
+          "rsid": "rs4988235",
+          "hgvs": "chr2:g.135851076G>A",
+          "ref_cpic": "G",
+          "grch38_ref": "G",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "G",
+              "vcf_pos": 135851076,
+              "vcf_ref": "G",
+              "vcf_alt": "G",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 135851076,
+              "vcf_ref": "G",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "C",
+              "vcf_pos": 135851076,
+              "vcf_ref": "G",
+              "vcf_alt": "C",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 135851076,
+              "vcf_ref": "G",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "chrom": "chr2",
+          "pos": 135859184,
+          "cpic_pos": 135859184,
+          "rsid": "rs182549",
+          "hgvs": "chr2:g.135859184C>T",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 135859184,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 135859184,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 135859184,
+              "vcf_ref": "C",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 135859184,
+              "vcf_ref": "C",
+              "vcf_alt": "G",
+              "is_ref": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "eye_color",
+      "trait": "Eye color (HERC2 + 6-SNP panel)",
+      "model": "eye_color_6snp",
+      "source": "Eiberg et al. 2008; Sturm et al. 2008 (Am J Hum Genet 82:424); Liu et al. 2009",
+      "evidence_level": "Strong (HERC2 rs12913832) + Moderate (5 modifiers)",
+      "positions": [
+        {
+          "id": 0,
+          "chrom": "chr15",
+          "pos": 28120472,
+          "cpic_pos": 28120472,
+          "rsid": "rs12913832",
+          "hgvs": "chr15:g.28120472A>G",
+          "ref_cpic": "A",
+          "grch38_ref": "A",
+          "is_key": true,
+          "alt_variants": [
+            {
+              "cpic_value": "A",
+              "vcf_pos": 28120472,
+              "vcf_ref": "A",
+              "vcf_alt": "A",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 28120472,
+              "vcf_ref": "A",
+              "vcf_alt": "G",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "C",
+              "vcf_pos": 28120472,
+              "vcf_ref": "A",
+              "vcf_alt": "C",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 28120472,
+              "vcf_ref": "A",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "chrom": "chr15",
+          "pos": 27985172,
+          "cpic_pos": 27985172,
+          "rsid": "rs1800407",
+          "hgvs": "chr15:g.27985172C>T",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 27985172,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 27985172,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 27985172,
+              "vcf_ref": "C",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 27985172,
+              "vcf_ref": "C",
+              "vcf_alt": "G",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "chrom": "chr14",
+          "pos": 92307319,
+          "cpic_pos": 92307319,
+          "rsid": "rs12896399",
+          "hgvs": "chr14:g.92307319G>T",
+          "ref_cpic": "G",
+          "grch38_ref": "G",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "G",
+              "vcf_pos": 92307319,
+              "vcf_ref": "G",
+              "vcf_alt": "G",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 92307319,
+              "vcf_ref": "G",
+              "vcf_alt": "T",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 92307319,
+              "vcf_ref": "G",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "C",
+              "vcf_pos": 92307319,
+              "vcf_ref": "G",
+              "vcf_alt": "C",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "chrom": "chr5",
+          "pos": 33951588,
+          "cpic_pos": 33951588,
+          "rsid": "rs16891982",
+          "hgvs": "chr5:g.33951588C>G",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 33951588,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 33951588,
+              "vcf_ref": "C",
+              "vcf_alt": "G",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 33951588,
+              "vcf_ref": "C",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 33951588,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "chrom": "chr11",
+          "pos": 89277878,
+          "cpic_pos": 89277878,
+          "rsid": "rs1393350",
+          "hgvs": "chr11:g.89277878G>A",
+          "ref_cpic": "G",
+          "grch38_ref": "G",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "G",
+              "vcf_pos": 89277878,
+              "vcf_ref": "G",
+              "vcf_alt": "G",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 89277878,
+              "vcf_ref": "G",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "C",
+              "vcf_pos": 89277878,
+              "vcf_ref": "G",
+              "vcf_alt": "C",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 89277878,
+              "vcf_ref": "G",
+              "vcf_alt": "T",
+              "is_ref": false
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "chrom": "chr6",
+          "pos": 396321,
+          "cpic_pos": 396321,
+          "rsid": "rs12203592",
+          "hgvs": "chr6:g.396321C>T",
+          "ref_cpic": "C",
+          "grch38_ref": "C",
+          "is_key": false,
+          "alt_variants": [
+            {
+              "cpic_value": "C",
+              "vcf_pos": 396321,
+              "vcf_ref": "C",
+              "vcf_alt": "C",
+              "is_ref": true
+            },
+            {
+              "cpic_value": "T",
+              "vcf_pos": 396321,
+              "vcf_ref": "C",
+              "vcf_alt": "T",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "A",
+              "vcf_pos": 396321,
+              "vcf_ref": "C",
+              "vcf_alt": "A",
+              "is_ref": false
+            },
+            {
+              "cpic_value": "G",
+              "vcf_pos": 396321,
+              "vcf_ref": "C",
+              "vcf_alt": "G",
+              "is_ref": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -195,6 +195,82 @@ CYP2C19\t*1/*2\tIntermediate Metabolizer\t\nDPYD\tReference/Reference\tNormal Me
     let found = pharmcat::posicoes_junto_do_jar(&dir.join("pc").join("pharmcat-3.4.0-all.jar").to_string_lossy()).unwrap_or_default();
     check("the positions of the same version are found next to the jar", found.ends_with("pharmcat_positions_3.4.0.vcf"), &found);
 
+    println!("== PharmCAT's report in the common schema (pgx_result.schema.json, version 1)");
+    write(&p("x.report.json"), r#"{"pharmcatVersion":"3.4.0","dataVersion":"2026-07-13",
+ "genes":{
+  "CYP2C19":{"chr":"chr10","callSource":"MATCHER","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"*1"},"allele2":{"name":"*2"},"label":"*1/*2","phenotypes":["Intermediate Metabolizer"],"activityScore":null}],
+   "variants":[{"chromosome":"chr10","position":94781859,"dbSnpId":"rs4244285","call":"G/A"},
+               {"chromosome":"chr10","position":94761900,"dbSnpId":"rs12248560","call":null}]},
+  "CYP2C9":{"chr":"chr10","callSource":"MATCHER","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"*1"},"allele2":{"name":"*1"},"phenotypes":["Normal Metabolizer"],"activityScore":"2.0"}],
+   "variants":[{"chromosome":"chr10","position":94942290,"dbSnpId":"rs1799853","call":"C/C"}]},
+  "SLCO1B1":{"chr":"chr12","callSource":"MATCHER","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"*1"},"allele2":{"name":"*15"},"phenotypes":["Decreased Function"]},
+                       {"allele1":{"name":"*1"},"allele2":{"name":"*45"},"phenotypes":["Decreased Function"]}],
+   "variants":[{"chromosome":"chr12","position":21178615,"dbSnpId":"rs2306283","call":"A/G"}]},
+  "G6PD":{"chr":"chrX","callSource":"MATCHER","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"Unknown"},"allele2":null,"phenotypes":["No Result"]}],
+   "variants":[{"chromosome":"chrX","position":154532046,"dbSnpId":null,"call":null}]},
+  "CYP2D6":{"chr":null,"callSource":"NONE","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"Unknown"},"allele2":{"name":"Unknown"},"phenotypes":["No Result"]}],"variants":[]},
+  "TPMT":{"chr":"chr6","callSource":"OUTSIDE","messages":[{"message":"Called outside PharmCAT."}],
+   "sourceDiplotypes":[{"allele1":{"name":"*1"},"allele2":{"name":"*3A"},"phenotypes":["Intermediate Metabolizer"]}],"variants":[]}},
+ "unannotatedGeneCalls":[{"geneSymbol":"F5","chr":"chr1","callSource":"MATCHER","messages":[],
+   "sourceDiplotypes":[{"allele1":{"name":"rs6025 reference (C)"},"allele2":{"name":"rs6025 reference (C)"},"phenotypes":[]}],
+   "variants":[{"chromosome":"chr1","position":169549811,"dbSnpId":"rs6025","call":"C/C"}]}],
+ "drugs":{
+  "CPIC Guideline Annotation":{"clopidogrel":{"name":"clopidogrel","guidelines":[{"url":"https://example.org/g1","annotations":[
+     {"drugRecommendation":"Use an alternative","classification":"Strong","lookupKey":[{"CYP2C19":"Intermediate Metabolizer"}]}]}]},
+   "abacavir":{"name":"abacavir","guidelines":[{"url":"https://example.org/g2","annotations":[]}]}},
+  "DPWG Guideline Annotation":{"clopidogrel":{"name":"clopidogrel","guidelines":[{"url":null,"annotations":[
+     {"drugRecommendation":"Choose another drug","classification":null,"lookupKey":[],
+      "genotypes":[{"diplotypes":[{"gene":"CYP2C19"}]}]}]}]}}}}"#);
+    let extras = serde_json::json!({"prepared": {"positions": 6}});
+    let common = pharmcat::esquema_comum(&p("x.report.json"), "S1", &["chrX".to_string()], extras, Some("x.report.html"), 2)
+        .unwrap_or_else(|e| e);
+    let v: serde_json::Value = serde_json::from_str(&common).unwrap_or(serde_json::Value::Null);
+    let gene = |g: &str| v["genes"].as_array().and_then(|a| a.iter().find(|x| x["gene"] == g)).cloned().unwrap_or_default();
+    check("schema version 1, engine pharmcat, its versions and the sample",
+          v["schema_version"] == "1" && v["engine"] == "pharmcat" && v["engine_version"] == "3.4.0"
+          && v["data_version"] == "PharmCAT data 2026-07-13" && v["sample"] == "S1", &common);
+    let c19 = gene("CYP2C19");
+    check("CYP2C19 called: diplotype, alleles, phenotype, one position read and one not",
+          c19["called"] == true && c19["diplotype"] == "*1/*2" && c19["alleles"] == serde_json::json!(["*1", "*2"])
+          && c19["phenotype"] == "Intermediate Metabolizer" && c19["positions_read"] == 1 && c19["positions_missing"] == 1
+          && c19["not_called_reason"].is_null() && c19["source"] == "vcf", &c19.to_string());
+    check("the evidence keeps each position, its rsID and the genotype ('./.' when not read)",
+          c19["evidence"][0]["pos"] == 94781859 && c19["evidence"][0]["rsid"] == "rs4244285" && c19["evidence"][0]["genotype"] == "G/A"
+          && c19["evidence"][1]["genotype"] == "./." && c19["evidence"][0]["in_callable"].is_null(), &c19.to_string());
+    check("the label is composed when PharmCAT gives none; the activity score is read from text",
+          gene("CYP2C9")["diplotype"] == "*1/*1" && gene("CYP2C9")["activity_score"] == 2.0, &gene("CYP2C9").to_string());
+    check("two possible diplotypes: both, joined by OR, and the phenotype said once",
+          gene("SLCO1B1")["diplotype"] == "*1/*15 OR *1/*45" && gene("SLCO1B1")["phenotype"] == "Decreased Function"
+          && gene("SLCO1B1")["activity_score"].is_null(), &gene("SLCO1B1").to_string());
+    check("a gene on a sequence missing from the file: not called, and the reason names the sequence",
+          gene("G6PD")["called"] == false && gene("G6PD")["diplotype"].is_null()
+          && gene("G6PD")["not_called_reason"].as_str().unwrap_or("").contains("chrX"), &gene("G6PD").to_string());
+    check("CYP2D6: not called, and the reason says PharmCAT needs it as an outside call",
+          gene("CYP2D6")["called"] == false && gene("CYP2D6")["not_called_reason"].as_str().unwrap_or("").contains("outside call"),
+          &gene("CYP2D6").to_string());
+    check("an outside call keeps its source and PharmCAT's message",
+          gene("TPMT")["source"] == "outside" && gene("TPMT")["notes"] == serde_json::json!(["Called outside PharmCAT."]), &gene("TPMT").to_string());
+    check("a gene PharmCAT calls without a guideline (F5, kept apart in its report) is there too, without a phenotype",
+          gene("F5")["called"] == true && gene("F5")["diplotype"] == "rs6025 reference (C)/rs6025 reference (C)"
+          && gene("F5")["phenotype"].is_null(), &gene("F5").to_string());
+    let drugs = v["drugs"].as_array().cloned().unwrap_or_default();
+    check("drug recommendations: CPIC with its strength and link, DPWG with the gene from the genotypes; none without a text",
+          drugs.len() == 2 && drugs[0]["drug"] == "clopidogrel" && drugs[0]["source"] == "CPIC" && drugs[0]["strength"] == "Strong"
+          && drugs[0]["url"] == "https://example.org/g1" && drugs[0]["genes"] == serde_json::json!(["CYP2C19"])
+          && drugs[1]["source"] == "DPWG" && drugs[1]["genes"] == serde_json::json!(["CYP2C19"]) && drugs[1]["strength"].is_null(),
+          &v["drugs"].to_string());
+    check("warnings for the missing sequence and the matcher; report path, summary, and the run under x_pharmcat",
+          v["warnings"].as_array().map_or(0, |a| a.len()) == 2 && v["report_html"] == "x.report.html"
+          && v["text"].as_str().unwrap_or("").contains("5 of 7 genes called") && v["x_pharmcat"]["prepared"]["positions"] == 6
+          && v["traits"] == serde_json::json!([]), &common);
+    let e = pharmcat::esquema_comum(&p("x.report.tsv"), "S1", &[], serde_json::json!({}), None, 0).err().unwrap_or_default();
+    check("a file that is not a PharmCAT JSON report: a clear error", e.contains("is not a PharmCAT JSON report"), &e);
+
     // PharmCAT itself, when available: on the synthetic person (whose positions
     // are not the real ones, so nothing is called) and, with PHARMCAT_PERSON
     // (+ PHARMCAT_BED), on a real genome.
@@ -225,6 +301,14 @@ CYP2C19\t*1/*2\tIntermediate Metabolizer\t\nDPYD\tReference/Reference\tNormal Me
                              rr.chamadas.len(), gene("CYP2C19"), gene("CYP2C9"), gene("DPYD"), gene("SLCO1B1"),
                              rr.preparo.lidas(), rr.preparo.posicoes);
                     check("a real genome: PharmCAT calls the genes (CYP2C19 among them)", rr.chamadas.len() >= 15 && gene("CYP2C19").is_some(), "");
+                    let common: serde_json::Value = rr.esquema_comum().ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                    let called = common["genes"].as_array().map_or(0, |a| a.iter().filter(|g| g["called"] == true).count());
+                    let c19 = common["genes"].as_array().and_then(|a| a.iter().find(|g| g["gene"] == "CYP2C19")).cloned().unwrap_or_default();
+                    println!("        common schema: {called} genes called, {} drug recommendations",
+                             common["drugs"].as_array().map_or(0, |a| a.len()));
+                    check("a real genome in the common schema: the called genes and CYP2C19 agree with the calls table",
+                          called == rr.chamadas.len() && c19["diplotype"].as_str() == gene("CYP2C19").as_deref()
+                          && common["drugs"].as_array().map_or(0, |a| a.len()) > 10, "");
                 }
                 Err(e) => check("PharmCAT on the real genome", false, &e),
             }

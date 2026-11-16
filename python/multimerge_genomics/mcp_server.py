@@ -24,7 +24,7 @@ from .ai.agent import _looks_like_path
 INSTRUCTIONS = (
     "MMGEN (MultiMerge Genomics): genomics tools for files of any size - validate, sort, index and query VCF/BED/GFF/SAM/BAM, "
     "interval operations, VCF statistics/filter/normalization, FASTQ quality and trimming, k-mer counting, human genetics "
-    "(kinship, ancestry, ClinVar findings, pharmacogenomics via PharmCAT, ROH), RNA-seq, CRISPR screens, metagenomics, "
+    "(kinship, ancestry, ClinVar findings, pharmacogenomics (MMGEN's engine or PharmCAT), ROH), RNA-seq, CRISPR screens, metagenomics, "
     "resistance genes, outbreak trees, viral mutations, in-silico PCR, 16S amplicons, tumor mutational burden. "
     "Call mmgen_catalog first to see the screens and tools. Paths are relative to the server's working folder. "
     "Human-genome results are experimental, for teaching and research: not a diagnosis nor advice on any treatment."

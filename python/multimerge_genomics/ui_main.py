@@ -86,6 +86,7 @@ def file_helpers(mmg, mo, os):
         # Human-genome screens.
         "bed_any": (".bed", ".bed.gz"),
         "jar": (".jar",),
+        "bam": (".bam",),
         "table": (".tsv", ".tsv.gz", ".txt", ".txt.gz", ".csv", ".csv.gz"),
         "sig": (".sig",),
         # Research screens.
@@ -552,7 +553,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # Downloaded from the GitHub release the first time an example needs them,
     # unless the zip is already in this folder. The 16S data (the mothur MiSeq
     # SOP) carry no explicit licence and are not published.
-    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/"
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/"
     DEMO_PACKS = {
         "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
                   "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
@@ -560,6 +561,9 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
                      "46 MB of public data: the airway RNA-seq experiment, the MAGeCK demos, reference sketches, "
                      "mock-community reads, the AMRFinderPlus catalog, four isolates, 20 SARS-CoV-2 lineages, a PCR panel "
                      "and tumor calls"),
+        "pgx": (EXAMPLES_DIR + "/pgx", "1", "mmgen_demo_pgx_v1.zip", _PACKS_URL + "mmgen_demo_pgx_v1.zip",
+                "33 MB of public data: the reads of the HG002 genome (Genome in a Bottle) over CYP2D6, the regions its copy "
+                "number is measured against, and the HLA class I genes"),
         "amplicon16s": (EXAMPLES_DIR + "/research_16s", "1", "mmgen_demo_16s_v1.zip", None,
                         "the 16S reads of the mothur MiSeq SOP. It is not published with MMGEN, because those data carry "
                         "no explicit licence; the SOP files are at https://mothur.org/wiki/miseq_sop/"),
@@ -1237,6 +1241,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # public genomes of the Genome in a Bottle project, cut to chr22, the genes
     # of the example panels and the PharmCAT positions.
     _H = HUMAN_DIR + "/"
+    _P = EXAMPLES_DIR + "/pgx/"
     _R = RESEARCH_DIR + "/"
     _R16 = EXAMPLES_DIR + "/research_16s/"
     _GIAB = ("Genome in a Bottle (GIAB) reference genomes are public data from consenting volunteers of the Personal Genome "
@@ -1276,7 +1281,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
              "The genes that drug-response tests look at, padded to include their promoters.",
              {"gff": _H + "panel_genes.gff3.gz", "panel": "Pharmacogenes", "padding": 1000}),
         ],
-        ("pgx", None): [
+        ("pgx", "PharmCAT"): [
             ("HG002 (son of the Ashkenazi trio)",
              _GIAB + " PharmCAT reads the genotype at each of its 1,226 positions; the X chromosome is not in this release of "
              "the GIAB calls, so its genes stay without a call.",
@@ -1284,6 +1289,24 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
             ("HG005 (son of the Han Chinese trio)", _GIAB,
              {"vcf": _H + "giab/HG005.vcf.gz", "callable": _H + "giab/HG005.callable.bed"}),
             ("HG001 (NA12878)", _GIAB + " NA12878 is one of the most studied human genomes.",
+             {"vcf": _H + "giab/HG001.vcf.gz", "callable": _H + "giab/HG001.callable.bed"}),
+        ],
+        ("pgx", "MMGEN's engine (mmgen-pgx)"): [
+            ("HG002 (son of the Ashkenazi trio)",
+             _GIAB + " MMGEN's engine reads its 19 genes from the VCF; chrX (G6PD) and chrM (MT-RNR1) are not in this release "
+             "of the GIAB calls, so those two stay without a call, with the reason. Run the PharmCAT engine on it too and compare.",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed"}),
+            ("HG002 with its reads: CYP2D6 and the HLA genes",
+             _GIAB + " The reads of HG002 over CYP2D6 and the HLA class I genes (a cut of its public 2x250 Illumina BAM). "
+             "Expect CYP2D6 \\*2/\\*4 with two copies, the HLA-A, -B and -C types, and an outside-call file that PharmCAT can "
+             "use. It needs the HLA reference sequences (the download button above).",
+             {"vcf": _H + "giab/HG002.vcf.gz", "callable": _H + "giab/HG002.callable.bed",
+              "bam": _P + "HG002.GRCh38.2x250.pgx_v2.bam"}),
+            ("HG001 (NA12878)",
+             _GIAB + " NA12878 is one of the most studied human genomes. Its VCF is not phased, so in CYP2C19 the positions read "
+             "fit both \\*1/\\*2 and \\*2/\\*35. The engine calls the highest-scoring diplotype, as PharmCAT does: \\*1/\\*2 "
+             "(also the GeT-RM consensus for this sample), and lists \\*2/\\*35 (poor metabolizer) as *also possible*, with a "
+             "warning. Compare the two engines here.",
              {"vcf": _H + "giab/HG001.vcf.gz", "callable": _H + "giab/HG001.callable.bed"}),
         ],
         ("lookup", "Look up variants in relatives (cascade testing)"): [
@@ -1668,7 +1691,7 @@ def main_menu(get_page, mmg, mo, set_page):
     btn_menu_kin = mo.ui.button(label="👪 16. Relatedness, Trios & Paternity", on_change=lambda _: set_page("kin"))
     btn_menu_anc = mo.ui.button(label="🌍 17. Ancestry & Polygenic Scores", on_change=lambda _: set_page("anc"))
     btn_menu_findings = mo.ui.button(label="🧾 18. Disease Findings & Gene Panels", on_change=lambda _: set_page("findings"))
-    btn_menu_pgx = mo.ui.button(label="💊 19. Pharmacogenomics (PharmCAT)", on_change=lambda _: set_page("pgx"))
+    btn_menu_pgx = mo.ui.button(label="💊 19. Pharmacogenomics", on_change=lambda _: set_page("pgx"))
     btn_menu_chrom = mo.ui.button(label="🧫 20. Sex Chromosomes & Homozygosity", on_change=lambda _: set_page("chrom"))
     btn_menu_lookup = mo.ui.button(label="🔎 21. Variant Lookup & Allele Counts", on_change=lambda _: set_page("lookup"))
     btn_menu_rnaseq = mo.ui.button(label="📊 22. RNA-seq: Gene Counts & Differential Expression", on_change=lambda _: set_page("rnaseq"))
@@ -3562,7 +3585,7 @@ def guide_page_ui(get_page, human_notice, mo, set_page):
         ("Pharmacogenomic panel (+ CYP2D6 copy number)", "Selected variants and copy number",
          "Star alleles and metabolizer phenotype (CYP2C19, CYP2C9, DPYD, TPMT...); HLA risk alleles",
          "Rare alleles not on the panel; CYP2D6 duplications and hybrids without a copy-number assay", "VCF or genotype table",
-         "Star alleles, phenotypes and guideline texts by PharmCAT (screen 19); CYP2D6 and HLA only as outside calls"),
+         "Star alleles, phenotypes and guideline texts by MMGEN's engine or PharmCAT (screen 19); from a BAM, CYP2D6 copy number and HLA-A, -B, -C"),
         ("Shotgun metagenomics (mNGS)", "All the DNA of a sample", "Bacteria, viruses, fungi and parasites at once; unknown pathogens",
          "Organisms at very low abundance under the host DNA; RNA viruses unless RNA is sequenced", "FASTQ",
          "Species and relative abundance, read classification, host reads apart (screen 24)"),
@@ -4245,38 +4268,87 @@ async def findings_page_backend(GENE_PANELS, asyncio, beside, chosen, code_panel
 def pgx_page_ui(get_page, human_notice, mo, set_page):
     mo.stop(get_page() != "pgx")
     import shutil as _shutil
+    _java = _shutil.which("java")
     btn_back_pgx = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_pgx = mo.ui.button(label="🔄 Refresh the file list")
     btn_get_pharmcat = mo.ui.button(label="⬇️ Download PharmCAT 3.4.0 (32 MB, from GitHub)", value=0, on_click=lambda v: v + 1)
+    btn_get_pgx_tables = mo.ui.button(label="⬇️ Get the mmgen-pgx tables (CPIC v1.61.0)", value=0, on_click=lambda v: v + 1)
+    btn_get_hla = mo.ui.button(label="⬇️ Download the HLA reference sequences (68 MB, IPD-IMGT/HLA)", value=0, on_click=lambda v: v + 1)
+    # PharmCAT stays the default engine until MMGEN's own passes the acceptance
+    # criterion agreed for it; without Java, only MMGEN's engine can run.
+    pgx_engine = mo.ui.radio(options=["MMGEN's engine (mmgen-pgx)", "PharmCAT"],
+                             value="PharmCAT" if _java else "MMGEN's engine (mmgen-pgx)", inline=True, label="**Engine:**")
     pgx_folder = mo.ui.text(value=".", label="Data folder (its subfolders are searched too):", full_width=True)
-    _java = _shutil.which("java")
     _ui = mo.vstack([
         btn_back_pgx,
-        mo.md("<br>\n\n# 💊 19. Pharmacogenomics (PharmCAT)"),
+        mo.md("<br>\n\n# 💊 19. Pharmacogenomics"),
         human_notice(),
         mo.callout(mo.md(
             "How a person's genes may change the response to medicines: **star alleles** (e.g. CYP2C19 \\*1/\\*2), the **metabolizer "
-            "phenotype** and the matching CPIC and DPWG guideline texts. The calls are made by **PharmCAT**, the open-source tool of "
-            "PharmGKB and CPIC (pharmcat.org, MPL-2.0): MMGEN prepares its input from the person's VCF (the genotype at each of the "
-            "positions PharmCAT reads, 0/0 where the calls are reliable and nothing was found) and shows its results. PharmCAT does "
-            "not call CYP2D6 or HLA genes from a VCF: give them as an outside-call file if a laboratory reported them. "
-            "It runs on Java 17 or newer."), kind="info"),
-        mo.md(f"Java: {'found at `' + _java + '`' if _java else '**not found**: install Java 17 or newer (adoptium.net; on Colab: `!apt-get install -y openjdk-21-jre-headless`)'}"),
+            "phenotype** and the matching guideline texts. Two engines give the same kind of result, so you can run both and "
+            "compare them:\n\n"
+            "- **MMGEN's engine (mmgen-pgx)**: no Java needed. It reads 19 genes from the VCF with the CPIC tables (v1.61.0, public "
+            "domain) and, given the person's reads (a BAM), also calls **CYP2D6 with its copy number** and the **HLA-A, -B and -C** "
+            "types. When the positions it can read allow more than one answer with different effects, it leaves the gene without a "
+            "call and says why.\n"
+            "- **PharmCAT**, the open-source tool of PharmGKB and CPIC (pharmcat.org, MPL-2.0; Java 17 or newer): MMGEN prepares its "
+            "input from the VCF. It does not call CYP2D6 or HLA from a VCF: give them as an outside-call file — the one MMGEN's "
+            "engine writes from a BAM, or a laboratory's."), kind="info"),
+        mo.md(f"Java (for PharmCAT): {'found at `' + _java + '`' if _java else '**not found**: install Java 17 or newer (adoptium.net; on Colab: `!apt-get install -y openjdk-21-jre-headless`)'}"),
         pgx_folder,
-        mo.hstack([btn_get_pharmcat, btn_refresh_pgx], justify="space-between", align="center"),
+        mo.hstack([pgx_engine, btn_refresh_pgx], justify="space-between", align="center"),
+        mo.hstack([btn_get_pgx_tables, btn_get_hla, btn_get_pharmcat], justify="start", wrap=True),
     ])
     _ui
-    return btn_back_pgx, btn_get_pharmcat, btn_refresh_pgx, pgx_folder
+    return btn_back_pgx, btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, btn_refresh_pgx, pgx_engine, pgx_folder
 
 
 @app.cell
-def pgx_page_download(btn_get_pharmcat, error_panel, get_page, mo, os):
+def pgx_page_download(btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, error_panel, get_page, mo, os):
     mo.stop(get_page() != "pgx")
-    # PharmCAT goes to mmgen_tools/pharmcat/, with the positions file of its release.
+    # What the two engines need, each in its folder under mmgen_tools/:
+    # PharmCAT with the positions file of its release; the mmgen-pgx tables
+    # (their zip, from this folder or from the release where it is published);
+    # and the IPD-IMGT/HLA sequences, used unmodified and never redistributed
+    # with MMGEN (their licence, CC BY-ND), fetched from the official mirror of
+    # IPD-IMGT/HLA on GitHub (the EBI server takes minutes for each file).
     PHARMCAT_DIR = "mmgen_tools/pharmcat"
-    pgx_downloaded = 0
+    PGX_TABLES_VERSION = "cpic-v1.61.0"
+    PGX_TABLES_DIR = f"mmgen_tools/pgx/{PGX_TABLES_VERSION}"
+    PGX_TABLES_ZIP = f"mmgen_pgx_tables_{PGX_TABLES_VERSION}.zip"
+    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/" + PGX_TABLES_ZIP
+    PGX_TABLES_SHA256 = "e329b8ec6e8567dc2570cd3823a96401e54135b3a5545305fb05c7265caa1f85"
+    PGX_HLA_FILES = ("A_gen.fasta", "B_gen.fasta", "C_gen.fasta")
+    # The IPD-IMGT/HLA release the tables pin in bam_genes.json (the engine uses no other):
+    # its branch of the official mirror, and the SHA-256 of each file. Keep equal to the tables.
+    PGX_HLA_VERSION = "3.66.0"
+    PGX_HLA_URL = "https://raw.githubusercontent.com/ANHIG/IMGTHLA/3660/fasta/"
+    PGX_HLA_SHA256 = {
+        "A_gen.fasta": "f265427f646d20da7f26f63f30620f1787c15417dfd731a39e8818026455d931",
+        "B_gen.fasta": "3748309e4aa560f8a0c31a8dfd6f24ddce2f3c9a52bd66db193de5b2f1bcd8f8",
+        "C_gen.fasta": "edec46685befd8d0f47871a6e4f916f4195a8b3d5930ec55ae3fa207e117893a",
+    }
+
+    def pgx_tables_dir():
+        """The folder of the mmgen-pgx tables (MMGEN_PGX_TABLES, or the one the button fills), or None."""
+        for _d in (os.environ.get("MMGEN_PGX_TABLES"), PGX_TABLES_DIR):
+            if _d and os.path.exists(os.path.join(_d, "manifest.json")):
+                return os.path.abspath(_d)
+        return None
+
+    def pgx_hla_dir():
+        """The HLA folder (MMGEN_HLA_DIR, or mmgen_tools/hla) when the three files are in it or in
+        its <release>/ subfolder, or None. The engine checks their SHA-256 when it reads them."""
+        _d = os.environ.get("MMGEN_HLA_DIR") or "mmgen_tools/hla"
+        for _sub in (os.path.join(_d, PGX_HLA_VERSION), _d):
+            if all(os.path.exists(os.path.join(_sub, _f)) for _f in PGX_HLA_FILES):
+                return os.path.abspath(_d)
+        return None
+
+    import hashlib as _hashlib
+    import urllib.request as _url
+    _out = []
     if btn_get_pharmcat.value:
-        import urllib.request as _url
         _base = "https://github.com/PharmGKB/PharmCAT/releases/download/v3.4.0/"
         try:
             os.makedirs(PHARMCAT_DIR, exist_ok=True)
@@ -4285,106 +4357,239 @@ def pgx_page_download(btn_get_pharmcat, error_panel, get_page, mo, os):
                     if not os.path.exists(os.path.join(PHARMCAT_DIR, _f)):
                         _url.urlretrieve(_base + _f, os.path.join(PHARMCAT_DIR, _f) + ".part")
                         os.replace(os.path.join(PHARMCAT_DIR, _f) + ".part", os.path.join(PHARMCAT_DIR, _f))
-            pgx_downloaded = btn_get_pharmcat.value
-            _out = mo.callout(mo.md(f"✅ PharmCAT 3.4.0 is in `{os.path.abspath(PHARMCAT_DIR)}`."), kind="success")
+            _out.append(mo.callout(mo.md(f"✅ PharmCAT 3.4.0 is in `{os.path.abspath(PHARMCAT_DIR)}`."), kind="success"))
         except Exception as _err:
-            _out = error_panel(f"the download failed ({_err}). Download pharmcat-3.4.0-all.jar and pharmcat_positions_3.4.0.vcf "
-                               f"from https://github.com/PharmGKB/PharmCAT/releases into `{PHARMCAT_DIR}/` by hand.")
-    else:
-        _out = None
-    _out
-    return PHARMCAT_DIR, pgx_downloaded
+            _out.append(error_panel(f"the download failed ({_err}). Download pharmcat-3.4.0-all.jar and pharmcat_positions_3.4.0.vcf "
+                                    f"from https://github.com/PharmGKB/PharmCAT/releases into `{PHARMCAT_DIR}/` by hand."))
+    if btn_get_pgx_tables.value:
+        import zipfile as _zipfile
+        try:
+            _zip = next((_c for _c in (PGX_TABLES_ZIP, os.path.join("mmgen_tools", "pgx", PGX_TABLES_ZIP)) if os.path.exists(_c)), None)
+            if _zip is None and PGX_TABLES_URL:
+                os.makedirs(os.path.join("mmgen_tools", "pgx"), exist_ok=True)
+                _zip = os.path.join("mmgen_tools", "pgx", PGX_TABLES_ZIP)
+                with mo.status.spinner("Downloading the mmgen-pgx tables..."):
+                    _url.urlretrieve(PGX_TABLES_URL, _zip + ".part")
+                with open(_zip + ".part", "rb") as _fh:
+                    _got = _hashlib.sha256(_fh.read()).hexdigest()
+                if _got != PGX_TABLES_SHA256:
+                    os.remove(_zip + ".part")
+                    raise RuntimeError(f"the downloaded `{PGX_TABLES_ZIP}` is not the published one (SHA-256 {_got[:12]}..., "
+                                       f"expected {PGX_TABLES_SHA256[:12]}...): try again, or download it by hand from {PGX_TABLES_URL}")
+                os.replace(_zip + ".part", _zip)
+            if _zip is None:
+                raise RuntimeError(f"`{PGX_TABLES_ZIP}` is not in this folder: put it here, or set MMGEN_PGX_TABLES to the "
+                                   "folder of the tables")
+            with _zipfile.ZipFile(_zip) as _z:
+                if "manifest.json" not in _z.namelist():
+                    raise RuntimeError(f"`{_zip}` has no manifest.json: it is not an mmgen-pgx table bundle")
+                _z.extractall(PGX_TABLES_DIR)
+            # The engine checks the size and the SHA-256 of every table against the manifest before each run.
+            _out.append(mo.callout(mo.md(f"✅ The mmgen-pgx tables ({PGX_TABLES_VERSION}) are in `{os.path.abspath(PGX_TABLES_DIR)}`."), kind="success"))
+        except Exception as _err:
+            _out.append(error_panel(_err))
+    if btn_get_hla.value:
+        _dir = os.path.join(os.environ.get("MMGEN_HLA_DIR") or "mmgen_tools/hla", PGX_HLA_VERSION)
+        try:
+            os.makedirs(_dir, exist_ok=True)
+            with mo.status.spinner(f"Downloading A_gen.fasta, B_gen.fasta and C_gen.fasta of IPD-IMGT/HLA {PGX_HLA_VERSION} (68 MB)..."):
+                for _f in PGX_HLA_FILES:
+                    _p = os.path.join(_dir, _f)
+                    if not os.path.exists(_p):
+                        _url.urlretrieve(PGX_HLA_URL + _f, _p + ".part")
+                        with open(_p + ".part", "rb") as _fh:
+                            _got = _hashlib.sha256(_fh.read()).hexdigest()
+                        if _got != PGX_HLA_SHA256[_f]:
+                            os.remove(_p + ".part")
+                            raise RuntimeError(f"the downloaded `{_f}` is not the one of IPD-IMGT/HLA {PGX_HLA_VERSION} "
+                                               f"(SHA-256 {_got[:12]}..., expected {PGX_HLA_SHA256[_f][:12]}...)")
+                        os.replace(_p + ".part", _p)
+            _out.append(mo.callout(mo.md(
+                f"✅ The HLA reference sequences of IPD-IMGT/HLA {PGX_HLA_VERSION} are in `{os.path.abspath(_dir)}`. They are the "
+                "IPD-IMGT/HLA Database's files (Barker et al., Nucleic Acids Research 2023), licensed CC BY-ND: used as they are, "
+                "never changed or shared by MMGEN."),
+                kind="success"))
+        except Exception as _err:
+            _out.append(error_panel(f"the download failed ({_err}). Download {', '.join(PGX_HLA_FILES)} from {PGX_HLA_URL} "
+                                    f"(IPD-IMGT/HLA {PGX_HLA_VERSION}) into `{_dir}/` by hand."))
+    pgx_downloaded = btn_get_pharmcat.value + btn_get_pgx_tables.value + btn_get_hla.value
+    mo.vstack(_out) if _out else None
+    return PHARMCAT_DIR, pgx_downloaded, pgx_hla_dir, pgx_tables_dir
 
 
 @app.cell
-def pgx_page_example(example_picker, get_page, mo):
+def pgx_page_example(example_picker, get_page, mo, pgx_engine):
     mo.stop(get_page() != "pgx")
-    pgx_example = example_picker("pgx")
+    pgx_example = example_picker("pgx", pgx_engine.value)
     pgx_example
     return (pgx_example,)
 
 
 @app.cell
-def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_under, get_page, label_of, make_form, mo, os, pgx_downloaded, pgx_example, pgx_folder):
+def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_under, get_page, label_of, make_form, mo, os, pgx_downloaded, pgx_engine, pgx_example, pgx_folder):
     mo.stop(get_page() != "pgx")
     btn_refresh_pgx, pgx_downloaded  # re-list the folder after a refresh or a download
-    _ex, _about = example_for("pgx", None, pgx_example.value)
+    _mine = pgx_engine.value.startswith("MMGEN")
+    _ex, _about = example_for("pgx", pgx_engine.value, pgx_example.value)
     _folder = pgx_folder.value
     _vcfs = files_under(_folder, "vcf")
-    _beds = {"(none: a position without a record counts as reference)": "none"}
+    _none_bed = ("(none: positions without a record are not read)" if _mine
+                 else "(none: a position without a record counts as reference)")
+    _beds = {_none_bed: "none"}
     for _b in files_under(_folder, "bed_any"):
         if _b != NO_FILE:
             _beds[_b] = _b
-    _jars = [_j for _j in files_under(_folder, "jar") if "pharmcat" in _j.lower()]
-    if os.path.isdir(PHARMCAT_DIR):
-        _jars += [f"{PHARMCAT_DIR}/{_n}" for _n in sorted(os.listdir(PHARMCAT_DIR)) if _n.endswith("-all.jar")]
-    _jars = list(dict.fromkeys(_jars)) or ["(PharmCAT not found: download it above)"]
-    _outside = {"(none)": "none"}
-    for _t in files_under(_folder, "table"):
-        if _t != NO_FILE:
-            _outside[_t] = _t
-    form_pgx = make_form({
+    _fields = {
         "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF (GRCh38):", full_width=True),
         "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the first sample", label="Sample, in a multi-sample VCF:"),
-        "callable": mo.ui.dropdown(options=_beds, value=label_of(_beds, _ex.get("callable", "none"), "(none: a position without a record counts as reference)"),
-                                   label="Callable regions (BED): outside them, a position without a record is 'not read':", full_width=True),
-        "jar": mo.ui.dropdown(options=_jars, value=_jars[-1], label="PharmCAT (pharmcat-<version>-all.jar, with its positions file next to it):", full_width=True),
-        "outside": mo.ui.dropdown(options=_outside, value="(none)", label="Outside calls (TSV), e.g. CYP2D6 or HLA-B from a laboratory:", full_width=True),
-        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <VCF name>_pharmcat/ next to the VCF", label="Output folder:", full_width=True),
-    }, "💊 Run PharmCAT")
+        "callable": mo.ui.dropdown(options=_beds, value=label_of(_beds, _ex.get("callable", "none"), _none_bed),
+                                   label="Callable regions (BED): inside them, a position without a record is the reference:", full_width=True),
+    }
+    if _mine:
+        _bams = {"(none: only the genes read from the VCF)": "none"}
+        for _b in files_under(_folder, "bam"):
+            if _b != NO_FILE:
+                _bams[_b] = _b
+        _refs = {"(none)": "none"}
+        for _f in files_under(_folder, "fasta"):
+            if _f != NO_FILE:
+                _refs[_f] = _f
+        _fields["bam"] = mo.ui.dropdown(options=_bams, value=label_of(_bams, _ex.get("bam", "none"), "(none: only the genes read from the VCF)"),
+                                        label="The person's reads (BAM with its .bai, GRCh38) for CYP2D6 and HLA:", full_width=True)
+        _fields["reference"] = mo.ui.dropdown(options=_refs, value="(none)",
+                                              label="GRCh38 genome (FASTA), to left-align the indels of the VCF (optional):", full_width=True)
+        _submit = "💊 Call the pharmacogenes"
+    else:
+        _jars = [_j for _j in files_under(_folder, "jar") if "pharmcat" in _j.lower()]
+        if os.path.isdir(PHARMCAT_DIR):
+            _jars += [f"{PHARMCAT_DIR}/{_n}" for _n in sorted(os.listdir(PHARMCAT_DIR)) if _n.endswith("-all.jar")]
+        _jars = list(dict.fromkeys(_jars)) or ["(PharmCAT not found: download it above)"]
+        _outside = {"(none)": "none"}
+        for _t in files_under(_folder, "table"):
+            if _t != NO_FILE:
+                _outside[_t] = _t
+        _fields["jar"] = mo.ui.dropdown(options=_jars, value=_jars[-1], label="PharmCAT (pharmcat-<version>-all.jar, with its positions file next to it):", full_width=True)
+        _fields["outside"] = mo.ui.dropdown(options=_outside, value=label_of(_outside, _ex.get("outside", "none"), "(none)"),
+                                            label="Outside calls (TSV), e.g. CYP2D6 or HLA-B from MMGEN's engine or a laboratory:", full_width=True)
+        _submit = "💊 Run PharmCAT"
+    _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <VCF name>_{'pgx' if _mine else 'pharmcat'}/ next to the VCF",
+                                   label="Output folder:", full_width=True)
+    form_pgx = make_form(_fields, _submit)
     mo.vstack([_x for _x in (_about, form_pgx) if _x is not None])
     return (form_pgx,)
 
 
 @app.cell
-async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_pgx, get_page, mmg, mo, os, python_call, split_name, warn):
+async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_pgx, get_page, mmg, mo, os, pgx_engine, pgx_hla_dir, pgx_tables_dir, python_call, split_name, warn):
     mo.stop(get_page() != "pgx")
     mo.stop(form_pgx.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_pgx.value
+    _mine = pgx_engine.value.startswith("MMGEN")
     mo.stop(not chosen(_v["vcf"]), warn("Select the person's VCF."))
-    mo.stop(not _v["jar"].endswith(".jar"), warn("PharmCAT is needed: click **Download PharmCAT** above, or put pharmcat-<version>-all.jar and its positions file in the data folder."))
-    _out = (_v["output"] or "").strip() or beside(_v["vcf"], split_name(_v["vcf"])[0] + "_pharmcat")
     _kw = {}
     if (_v["sample"] or "").strip():
         _kw["sample"] = _v["sample"].strip()
     if _v["callable"] != "none":
         _kw["callable_bed"] = _v["callable"]
-    if _v["outside"] != "none":
-        _kw["outside_calls"] = _v["outside"]
+    if _mine:
+        mo.stop("bam" not in _v, warn("The form is for the other engine: submit it again."))
+        _tables = pgx_tables_dir()
+        mo.stop(_tables is None, warn("MMGEN's engine needs its tables: click **Get the mmgen-pgx tables** above."))
+        _kw["engine"] = "mmgen-pgx"
+        _kw["tables"] = _tables
+        if _v["bam"] != "none":
+            _hla = pgx_hla_dir()
+            mo.stop(_hla is None, warn("With the reads (BAM), the HLA genes need their reference sequences: click **Download the HLA "
+                                       "reference sequences** above (68 MB, once)."))
+            os.environ["MMGEN_HLA_DIR"] = _hla  # where the engine reads them
+            _kw["bam"] = _v["bam"]
+        if _v["reference"] != "none":
+            _kw["reference"] = _v["reference"]
+        _what, _secs = "Calling the pharmacogenes", "a few seconds"
+    else:
+        mo.stop("jar" not in _v, warn("The form is for the other engine: submit it again."))
+        mo.stop(not _v["jar"].endswith(".jar"), warn("PharmCAT is needed: click **Download PharmCAT** above, or put pharmcat-<version>-all.jar and its positions file in the data folder."))
+        _kw["engine"] = "pharmcat"
+        _kw["jar"] = _v["jar"]
+        if _v["callable"] == "none":
+            _kw["absent_is_ref"] = True
+        if _v["outside"] != "none":
+            _kw["outside_calls"] = _v["outside"]
+        _what, _secs = "Preparing the input and running PharmCAT", "about 15 seconds"
+    _out = (_v["output"] or "").strip() or beside(_v["vcf"], split_name(_v["vcf"])[0] + ("_pgx" if _mine else "_pharmcat"))
     try:
-        with mo.status.spinner("Preparing the input and running PharmCAT (about 15 seconds)..."):
-            _r = await asyncio.to_thread(mmg.pharmcat_run, _v["vcf"], _out, _v["jar"], **_kw)
-        _p = _r["prepared"]
-        _read = _p["with_variant"] + _p["reference_record"] + _p["reference_filled"]
-        _missing = _p["missing_outside_callable"] + _p["missing_no_sequence"] + _p["missing_in_record"] + _p["ref_mismatch"]
+        with mo.status.spinner(f"{_what} ({_secs})..."):
+            _r = await asyncio.to_thread(mmg.pgx_run, _v["vcf"], _out, **_kw)
+        _genes = _r["genes"]
+        _called = [_g for _g in _genes if _g["called"]]
         _rows = [
-            ("PharmCAT", f"{_r['pharmcat_version']}, in {_r['seconds_pharmcat']:.0f} s"),
-            ("Sample", f"`{_p['sample']}`"),
-            ("Positions read", f"`{_read:,}` of `{_p['positions']:,}` (`{_p['with_variant']:,}` with a variant)"),
-            ("Positions not read", f"`{_missing:,}`" + (f"; sequences not in the file: {', '.join(_p['absent_sequences'])}" if _p["absent_sequences"] else "")),
-            ("Genes in the report", f"`{len(_r['calls'])}`"),
-            ("Reports", f"`{os.path.abspath(_r['files'].get('report_html', _out))}` (HTML, with the guideline texts) and JSON"),
+            ("Engine", f"{_r['engine']} {_r['engine_version']}; tables: {_r['data_version']}"),
+            ("Sample", f"`{_r['sample']}`"),
+            ("Genes called", f"`{len(_called)}` of `{len(_genes)}`"),
+            ("Drug recommendations", f"`{len(_r['drugs'])}`"),
         ]
-        _items = [mo.callout(mo.md("### 💊 PharmCAT results\n" + facts(_rows)), kind="success")]
-        _items.append(mo.ui.table([{
-            "gene": _c.get("gene", ""),
-            "diplotype": _c.get("source_diplotype", ""),
-            "phenotype": _c.get("phenotype", ""),
-            "activity score": _c.get("activity_score", ""),
-            "missing positions": _c.get("missing_positions", ""),
-        } for _c in _r["calls"]], selection=None, pagination=True, page_size=25, label="Calls per gene"))
-        if _p["absent_sequences"]:
-            _items.append(warn(f"The file has no {', '.join(_p['absent_sequences'])}: the genes there (e.g. G6PD on chrX) were not called."))
+        _p = (_r.get("x_pharmcat") or {}).get("prepared")
+        if _p:
+            _read = _p["with_variant"] + _p["reference_record"] + _p["reference_filled"]
+            _rows.insert(2, ("Positions read", f"`{_read:,}` of `{_p['positions']:,}` (`{_p['with_variant']:,}` with a variant)"))
+        _items = [mo.callout(mo.md("### 💊 Pharmacogenomics results\n" + facts(_rows)), kind="success")]
+        _has_cn = any(_g.get("copy_number") is not None for _g in _genes)
+        # mmgen-pgx picks the highest-scoring diplotype (as PharmCAT's Named Allele Matcher) and
+        # lists the others that fit the positions read; a warning names the ones that would
+        # change the phenotype or a recommendation.
+        _has_alt = any(_g.get("x_alternatives") for _g in _called)
+        _table = []
+        for _g in _called:
+            _row = {"gene": _g["gene"], "diplotype": _g["diplotype"], "phenotype": _g["phenotype"] or "",
+                    "activity score": "" if _g["activity_score"] is None else f"{_g['activity_score']:g}"}
+            if _has_cn:
+                _row["copy number"] = "" if _g.get("copy_number") is None else f"{_g['copy_number']:g}"
+            if _has_alt:
+                _alts = _g.get("x_alternatives") or []
+                _row["also possible"] = "; ".join(f"{_a['diplotype']} ({_a['phenotype'] or '-'})" for _a in _alts[:3]) + (
+                    f"; and {len(_alts) - 3} more" if len(_alts) > 3 else "")
+            _row["from"] = _g["source"]
+            _row["positions read"] = _g["positions_read"]
+            _table.append(_row)
+        _items.append(mo.ui.table(_table, selection=None, pagination=True, page_size=25, label="Genes called"))
+        _uncalled = [_g for _g in _genes if not _g["called"]]
+        if _uncalled:
+            _items.append(mo.ui.table([{"gene": _g["gene"], "why it was not called": _g["not_called_reason"]} for _g in _uncalled],
+                                      selection=None, pagination=True, page_size=10, label="Genes not called, and why"))
+        if _r["traits"]:
+            _items.append(mo.ui.table([{"trait": _t["trait"], "genotype": _t["genotype"], "what it suggests": _t["interpretation"],
+                                        "evidence": _t["evidence"]} for _t in _r["traits"]],
+                                      selection=None, label="Traits (for teaching)"))
+        if _r["drugs"]:
+            _items.append(mo.ui.table([{"drug": _d["drug"], "genes": ", ".join(_d["genes"]), "source": _d["source"],
+                                        "strength": _d["strength"] or "", "recommendation": _d["recommendation"]} for _d in _r["drugs"]],
+                                      selection=None, pagination=True, page_size=10, label="Guideline recommendations"))
+        for _w in _r["warnings"]:
+            _items.append(warn(_w))
+        _oc = (_r.get("x_files") or {}).get("pharmcat_outside_calls")
+        if _oc and os.path.exists(_oc):
+            _items.append(mo.callout(mo.md(
+                f"PharmCAT can use the calls this engine made from the reads: run it with the outside-call file `{_oc}` "
+                "(the **PharmCAT** engine above, field *Outside calls*)."), kind="info"))
+        _how = {}
+        for _g in _called:
+            if _g["evidence"]:
+                _how[f"{_g['gene']}: {_g['diplotype']}"] = mo.ui.table(
+                    [{"position": f"{_e['chrom']}:{_e['pos']:,}", "rsID": _e["rsid"] or "", "genotype": _e["genotype"],
+                      "in callable regions": "" if _e["in_callable"] is None else ("yes" if _e["in_callable"] else "no")}
+                     for _e in _g["evidence"]], selection=None, pagination=True, page_size=10)
+        if _how:
+            _items.append(mo.md("#### How each call was made: the positions read"))
+            _items.append(mo.accordion(_how))
         _items.append(mo.callout(mo.md(
             "**Reading the result.** A phenotype such as *poor metabolizer* says how fast an enzyme is expected to work, not what to "
-            "prescribe. The HTML report below lists the guideline texts; **any change to a treatment is a decision for the "
-            "prescriber, with a laboratory-confirmed result.**"), kind="warn"))
-        _html = _r["files"].get("report_html")
+            "prescribe. **Any change to a treatment is a decision for the prescriber, with a laboratory-confirmed result.**"), kind="warn"))
+        _html = _r.get("report_html")
         if _html and os.path.exists(_html):
             with open(_html, encoding="utf-8") as _fh:
-                _items.append(mo.accordion({"PharmCAT's full report (HTML)": mo.iframe(_fh.read(), height="900px")}))
-        _items.append(code_panel(f"r = {python_call('pharmcat_run', _v['vcf'], _out, _v['jar'], **_kw)}",
-                                 'for c in r["calls"]:\n    print(c["gene"], c["source_diplotype"], c["phenotype"])'))
+                _items.append(mo.accordion({"The engine's full report (HTML)": mo.iframe(_fh.read(), height="900px")}))
+        _items.append(code_panel(f"r = {python_call('pgx_run', _v['vcf'], _out, **_kw)}",
+                                 'for g in r["genes"]:\n    print(g["gene"], g["diplotype"] if g["called"] else "not called: " + g["not_called_reason"])'))
         _panel = mo.vstack(_items)
     except Exception as _err:
         _panel = error_panel(_err)

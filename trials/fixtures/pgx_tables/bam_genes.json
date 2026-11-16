@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "assembly": "GRCh38",
+  "data_version": "synth-v1.0.0",
+  "cyp2d6": {
+    "gene": "CYP2D6",
+    "chrom": "chr22",
+    "model": "star_allele",
+    "ploidy": "diploid",
+    "lookup_method": "ACTIVITY_SCORE",
+    "reference_allele": "*1",
+    "positions": [
+      {
+        "id": 0,
+        "chrom": "chr22",
+        "pos": 42126611,
+        "cpic_pos": 42126611,
+        "rsid": "rs1135840",
+        "hgvs": "chr22:g.42126611C>G",
+        "ref_cpic": "C",
+        "grch38_ref": "C",
+        "is_key": false,
+        "alt_variants": [
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42126611,
+            "vcf_ref": "C",
+            "vcf_alt": "C",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42126611,
+            "vcf_ref": "C",
+            "vcf_alt": "G",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42126611,
+            "vcf_ref": "C",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42126611,
+            "vcf_ref": "C",
+            "vcf_alt": "T",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 1,
+        "chrom": "chr22",
+        "pos": 42127941,
+        "cpic_pos": 42127941,
+        "rsid": "rs16947",
+        "hgvs": "chr22:g.42127941G>A",
+        "ref_cpic": "G",
+        "grch38_ref": "G",
+        "is_key": true,
+        "alt_variants": [
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42127941,
+            "vcf_ref": "G",
+            "vcf_alt": "G",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42127941,
+            "vcf_ref": "G",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42127941,
+            "vcf_ref": "G",
+            "vcf_alt": "C",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42127941,
+            "vcf_ref": "G",
+            "vcf_alt": "T",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "chrom": "chr22",
+        "pos": 42128945,
+        "cpic_pos": 42128945,
+        "rsid": "rs3892097",
+        "hgvs": "chr22:g.42128945C>T",
+        "ref_cpic": "C",
+        "grch38_ref": "C",
+        "is_key": true,
+        "alt_variants": [
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42128945,
+            "vcf_ref": "C",
+            "vcf_alt": "C",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42128945,
+            "vcf_ref": "C",
+            "vcf_alt": "T",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42128945,
+            "vcf_ref": "C",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42128945,
+            "vcf_ref": "C",
+            "vcf_alt": "G",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "chrom": "chr22",
+        "pos": 42129130,
+        "cpic_pos": 42129130,
+        "rsid": "rs1058164",
+        "hgvs": "chr22:g.42129130C>G",
+        "ref_cpic": "C",
+        "grch38_ref": "C",
+        "is_key": false,
+        "alt_variants": [
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42129130,
+            "vcf_ref": "C",
+            "vcf_alt": "C",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42129130,
+            "vcf_ref": "C",
+            "vcf_alt": "G",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42129130,
+            "vcf_ref": "C",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42129130,
+            "vcf_ref": "C",
+            "vcf_alt": "T",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "chrom": "chr22",
+        "pos": 42129809,
+        "cpic_pos": 42129809,
+        "rsid": "rs28371704",
+        "hgvs": "chr22:g.42129809T>C",
+        "ref_cpic": "T",
+        "grch38_ref": "T",
+        "is_key": false,
+        "alt_variants": [
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42129809,
+            "vcf_ref": "T",
+            "vcf_alt": "T",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42129809,
+            "vcf_ref": "T",
+            "vcf_alt": "C",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42129809,
+            "vcf_ref": "T",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42129809,
+            "vcf_ref": "T",
+            "vcf_alt": "G",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "chrom": "chr22",
+        "pos": 42129819,
+        "cpic_pos": 42129819,
+        "rsid": "rs28371703",
+        "hgvs": "chr22:g.42129819G>T",
+        "ref_cpic": "G",
+        "grch38_ref": "G",
+        "is_key": false,
+        "alt_variants": [
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42129819,
+            "vcf_ref": "G",
+            "vcf_alt": "G",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42129819,
+            "vcf_ref": "G",
+            "vcf_alt": "T",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42129819,
+            "vcf_ref": "G",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42129819,
+            "vcf_ref": "G",
+            "vcf_alt": "C",
+            "is_ref": false
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "chrom": "chr22",
+        "pos": 42130692,
+        "cpic_pos": 42130692,
+        "rsid": "rs1065852",
+        "hgvs": "chr22:g.42130692G>A",
+        "ref_cpic": "G",
+        "grch38_ref": "G",
+        "is_key": true,
+        "alt_variants": [
+          {
+            "cpic_value": "G",
+            "vcf_pos": 42130692,
+            "vcf_ref": "G",
+            "vcf_alt": "G",
+            "is_ref": true
+          },
+          {
+            "cpic_value": "A",
+            "vcf_pos": 42130692,
+            "vcf_ref": "G",
+            "vcf_alt": "A",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "C",
+            "vcf_pos": 42130692,
+            "vcf_ref": "G",
+            "vcf_alt": "C",
+            "is_ref": false
+          },
+          {
+            "cpic_value": "T",
+            "vcf_pos": 42130692,
+            "vcf_ref": "G",
+            "vcf_alt": "T",
+            "is_ref": false
+          }
+        ]
+      }
+    ],
+    "alleles": [
+      {
+        "name": "*1",
+        "is_reference": true,
+        "clinical_function": "Normal function",
+        "activity_value": 1.0,
+        "activity_label": "1.0",
+        "variants": [
+          {
+            "pos_id": 3,
+            "accepted": [
+              "C",
+              "G"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "*2",
+        "is_reference": false,
+        "clinical_function": "Normal function",
+        "activity_value": 1.0,
+        "activity_label": "1.0",
+        "variants": [
+          {
+            "pos_id": 0,
+            "accepted": [
+              "G"
+            ]
+          },
+          {
+            "pos_id": 1,
+            "accepted": [
+              "A"
+            ]
+          },
+          {
+            "pos_id": 3,
+            "accepted": [
+              "C",
+              "G"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "*4",
+        "is_reference": false,
+        "clinical_function": "No function",
+        "activity_value": 0.0,
+        "activity_label": "0.0",
+        "variants": [
+          {
+            "pos_id": 0,
+            "accepted": [
+              "C",
+              "G"
+            ]
+          },
+          {
+            "pos_id": 1,
+            "accepted": [
+              "A",
+              "G"
+            ]
+          },
+          {
+            "pos_id": 2,
+            "accepted": [
+              "T"
+            ]
+          },
+          {
+            "pos_id": 3,
+            "accepted": [
+              "C",
+              "G"
+            ]
+          },
+          {
+            "pos_id": 4,
+            "accepted": [
+              "C",
+              "T"
+            ]
+          },
+          {
+            "pos_id": 5,
+            "accepted": [
+              "G",
+              "T"
+            ]
+          },
+          {
+            "pos_id": 6,
+            "accepted": [
+              "A",
+              "G"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "*10",
+        "is_reference": false,
+        "clinical_function": "Decreased function",
+        "activity_value": 0.25,
+        "activity_label": "0.25",
+        "variants": [
+          {
+            "pos_id": 0,
+            "accepted": [
+              "G"
+            ]
+          },
+          {
+            "pos_id": 3,
+            "accepted": [
+              "G"
+            ]
+          },
+          {
+            "pos_id": 6,
+            "accepted": [
+              "A"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "*39",
+        "is_reference": false,
+        "clinical_function": "Normal function",
+        "activity_value": 1.0,
+        "activity_label": "1.0",
+        "variants": [
+          {
+            "pos_id": 0,
+            "accepted": [
+              "G"
+            ]
+          }
+        ]
+      }
+    ],
+    "sv_alleles": [
+      {
+        "name": "*5",
+        "sv_type": "deletion",
+        "clinical_function": "No function",
+        "activity_value": 0.0,
+        "activity_label": "0.0"
+      },
+      {
+        "name": "*36",
+        "sv_type": "exon9_hybrid",
+        "clinical_function": "No function",
+        "activity_value": 0.0,
+        "activity_label": "0.0"
+      },
+      {
+        "name": "*68",
+        "sv_type": "exon9_hybrid",
+        "clinical_function": "No function",
+        "activity_value": 0.0,
+        "activity_label": "0.0"
+      }
+    ],
+    "duplication_alleles": {
+      "*1x2": {
+        "name": "*1x2",
+        "clinical_function": "Increased function",
+        "activity_value": 2.0,
+        "activity_label": "2.0"
+      },
+      "*2x2": {
+        "name": "*2x2",
+        "clinical_function": "Increased function",
+        "activity_value": 2.0,
+        "activity_label": "2.0"
+      },
+      "*4x2": {
+        "name": "*4x2",
+        "clinical_function": "No function",
+        "activity_value": 0.0,
+        "activity_label": "0.0"
+      },
+      "*1x≥3": {
+        "name": "*1x≥3",
+        "clinical_function": "Increased function",
+        "activity_value": 3.0,
+        "activity_label": "≥3.0"
+      },
+      "*36+*10": {
+        "name": "*36+*10",
+        "clinical_function": "Decreased function",
+        "activity_value": 0.25,
+        "activity_label": "0.25"
+      }
+    },
+    "canonical_iupac_defaults": {
+      "42126611": "G",
+      "42127941": "G",
+      "42129809": "C",
+      "42129819": "T",
+      "42130692": "A"
+    },
+    "cnv_regions": {
+      "target_whole": {
+        "chrom": "chr22",
+        "start": 42126499,
+        "end": 42130810
+      },
+      "target_5p": {
+        "chrom": "chr22",
+        "start": 42128000,
+        "end": 42130810
+      },
+      "target_ex9": {
+        "chrom": "chr22",
+        "start": 42126500,
+        "end": 42126800
+      },
+      "paralog": {
+        "chrom": "chr22",
+        "start": 42139576,
+        "end": 42144483
+      },
+      "controls": [
+        {
+          "name": "ALB",
+          "chrom": "chr4",
+          "start": 73404287,
+          "end": 73421482
+        }
+      ]
+    }
+  },
+  "hla_genes": [
+    {
+      "gene": "HLA-A",
+      "chrom": "chr6",
+      "start": 29936000,
+      "end": 29950000,
+      "lookup_method": "ALLELE_STATUS",
+      "fasta_filename": "A_gen.fasta",
+      "fasta_url": "https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/fasta/A_gen.fasta",
+      "risk_alleles": [
+        "*31:01"
+      ]
+    },
+    {
+      "gene": "HLA-B",
+      "chrom": "chr6",
+      "start": 31350000,
+      "end": 31362000,
+      "lookup_method": "ALLELE_STATUS",
+      "fasta_filename": "B_gen.fasta",
+      "fasta_url": "https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/fasta/B_gen.fasta",
+      "risk_alleles": [
+        "*15:02",
+        "*57:01",
+        "*58:01"
+      ]
+    },
+    {
+      "gene": "HLA-C",
+      "chrom": "chr6",
+      "start": 31265000,
+      "end": 31276000,
+      "lookup_method": "NONE",
+      "fasta_filename": "C_gen.fasta",
+      "fasta_url": "https://ftp.ebi.ac.uk/pub/databases/ipd/imgt/hla/fasta/C_gen.fasta",
+      "risk_alleles": []
+    }
+  ]
+}

@@ -117,7 +117,7 @@ Every module has a screen in the web interface, and every function is also avail
 * **16. Relatedness, trios and paternity** — `relatedness` (the KING kinship of every pair, as `plink2 --make-king-table`, and the inferred relationship), `trio_analysis` (Mendelian consistency, de novo candidates, exclusions and the combined paternity index from population frequencies).
 * **17. Ancestry and polygenic scores** — `build_panel` / `panel_from_frequencies` (population frequency panels, e.g. from the 1000 Genomes Project), `estimate_ancestry` (admixture proportions with bootstrap errors, as ADMIXTURE's supervised mode), `polygenic_score` (PGS Catalog scoring files, with coverage and the place of the score among the panel's groups).
 * **18. Disease findings and gene panels** — `clinvar_findings` (a person's variants that ClinVar lists, with classification, review stars, conditions and zygosity), `gene_regions` (a panel's genes from a GFF annotation).
-* **19. Pharmacogenomics** — `pharmcat_run` prepares a person's VCF for **PharmCAT** (the open-source tool of PharmGKB and CPIC, which calls the star alleles, phenotypes and guideline texts) and runs it. MMGEN calls no allele itself. Needs Java 17+ and PharmCAT (the screen downloads it).
+* **19. Pharmacogenomics** — `pgx_run`, with two engines that give the same result (`pgx_result.schema.json`, shipped with the package): **MMGEN's own engine** (`mmgen-pgx`, no Java) calls 19 genes from a VCF with the CPIC tables (v1.61.0, public domain) and, from the person's reads (a BAM), also **CYP2D6 with its copy number** and the **HLA-A, -B and -C** types; when the positions read fit more than one diplotype, it calls the highest-scoring one, as PharmCAT's Named Allele Matcher does (for NAT2, as PharmCAT also does, the most common one, from CPIC's population frequencies), lists the others with their phenotypes, and warns when one of them would change the phenotype or a recommendation (unphased data, or positions not read). **PharmCAT** (the open-source tool of PharmGKB and CPIC; Java 17+) is the other engine, for which MMGEN prepares the input (`pharmcat_run`). Both list the CPIC and DPWG guideline texts and the positions behind each call. The screen downloads PharmCAT and the IPD-IMGT/HLA sequences of release 3.66.0, the one the tables pin, checked by SHA-256 (licensed CC BY-ND: used unmodified, never redistributed with MMGEN); the engine's tables come as a small zip, `mmgen_pgx_tables_cpic-v1.61.0.zip`, with the release.
 * **20. Sex chromosomes and homozygosity** — `genetic_sex` (XX / XY from chrX heterozygosity and chrY calls, with flags for X0 and XXY patterns), `runs_of_homozygosity` (as a SNP array shows them, by the sliding-window method of `plink --homozyg`, which tolerates a genotyping error; on HG002 the same runs as plink, coordinate for coordinate; or strictly, where any heterozygous call ends a run).
 * **21. Variant lookup and allele counts** — `variant_lookup` (a known variant tested in relatives: cascade testing), `pileup` (the bases the reads show at one position of a BAM).
 
@@ -173,21 +173,21 @@ python -m venv mmgen
 mmgen\Scripts\activate           # Windows   (macOS, Linux: source mmgen/bin/activate)
 
 # Windows, without an NVIDIA GPU (or with one: the CUDA build below)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/multimerge_genomics-2.1.0-cp310-abi3-win_amd64.whl"
 # Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-1cuda-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/multimerge_genomics-2.1.0-1cuda-cp310-abi3-win_amd64.whl"
 # Linux (CUDA build; also runs without a GPU; glibc 2.28 or newer)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/multimerge_genomics-2.1.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 # macOS, Apple Silicon (M1 and later)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-macosx_11_0_arm64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/multimerge_genomics-2.1.0-cp310-abi3-macosx_11_0_arm64.whl"
 # macOS, Intel
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.0.0/multimerge_genomics-2.0.0-cp310-abi3-macosx_10_12_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.1.0/multimerge_genomics-2.1.0-cp310-abi3-macosx_10_12_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.0.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.0.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.1.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.1.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
 
 ### On Google Colab: free or paid, your choice
 
@@ -208,7 +208,7 @@ Either way, the files you write on Colab are gone when the session ends: downloa
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Ready-made packages of the release v2.0.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
+Ready-made packages of the release v2.1.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -241,7 +241,7 @@ To build a wheel instead: `maturin build --release --locked -o dist`, then `pip 
 import multimerge_genomics as mmg
 
 print(mmg.engine_info())
-# {'version': '2.0.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
+# {'version': '2.1.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
 
 # What is wrong with this file?
 report = mmg.validate_file("sample.vcf.gz")
@@ -286,7 +286,7 @@ mmgen-ui                                 # or: marimo run python/multimerge_geno
 
 The interface lists the files of the folder it is started from, and writes its results next to their input. The menu has five groups: the k-mer modules (1–7), the file tools (8–14), human genetics (15–21), research, microbiology and oncology (22–28), and the optional AI assistant (29). On most screens you pick a task, fill in a form and get the result with a look at the first records of the output; leave an output name blank and one is made from the input name. **Refresh the file list** picks up files written since the screen was opened.
 
-**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 116 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, a tumor cell line): two demo packs, `mmgen_demo_human_v3.zip` (49 MB) and `mmgen_demo_research_v4.zip` (46 MB), downloaded from the release the first time an example needs them (or taken from the folder the interface runs in) and unpacked into `mmgen_examples/`. The 16S examples of screen 27 use the mothur MiSeq SOP reads, which carry no explicit licence: they are in a third pack that is not published.
+**Every screen has ready-made examples.** Pick one in the **Try an example** list and the form is filled in, with a note on what the example shows and what to expect; submit it as it is, or change a field first. There are 119 of them, at least one for every task (the five of screen 29 need an API key): a genome assembled into one contig, a patient's 3 SNPs found as 93 k-mers, a circular plasmid closed from 4 contigs, indels left-aligned in repeats, a VCF with planted defects for the validator, GRCh38 against GRCh37, reads with an adapter to trim, the k-mer spectrum of reads at 30× coverage, and so on. The files of screens 1–14 are small and simulated (no real person or organism), written into a `mmgen_examples/` folder the first time an example is picked, in about two seconds; nothing is downloaded. The examples of screens 16–28 use public data (the Genome in a Bottle trios, ClinVar, the 1000 Genomes Project, the airway RNA-seq experiment, the MAGeCK demos, mock microbial communities, bacterial isolates, SARS-CoV-2 lineages, a tumor cell line): demo packs, `mmgen_demo_human_v3.zip` (49 MB), `mmgen_demo_research_v4.zip` (46 MB) and, for the CYP2D6 and HLA example of screen 19, `mmgen_demo_pgx_v1.zip` (32 MB of HG002 reads), downloaded from the release the first time an example needs them (or taken from the folder the interface runs in) and unpacked into `mmgen_examples/`. The 16S examples of screen 27 use the mothur MiSeq SOP reads, which carry no explicit licence: they are in a third pack that is not published.
 
 ![Variant detection screen](assets/variant_calling.png)
 
@@ -362,6 +362,7 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 | `clinvar_findings(vcf, clinvar, classes="plp", min_stars=1, genes=None, ...)` | The person's variants that ClinVar lists *(experimental; not a diagnosis)* |
 | `gene_regions(gff, genes, output=None, padding=0)` | The coordinates of named genes (a panel) from a GFF |
 | `variant_lookup(variants, vcfs, ...)` / `pileup(bam, position, alt=None)` | A variant in each relative's VCF / the allele counts at a position of a BAM |
+| `pgx_run(vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, engine="mmgen-pgx", tables=None, jar=None, ...)` | Star alleles, phenotypes, activity scores, CYP2D6 copy number and HLA types (with `bam`), guideline recommendations, and the positions behind each call; the same dictionary for `engine="mmgen-pgx"` and `engine="pharmcat"` (`mmgen_pgx_run` = MMGEN's engine alone) *(experimental; not medical advice)* |
 | `pharmcat_prepare(vcf, output, positions, ...)` / `pharmcat_run(vcf, output_dir, jar, ...)` | PharmCAT's input from a VCF / PharmCAT run on it, with its calls per gene *(experimental; not medical advice)* |
 | `count_reads(bams, annotation, output=None, feature_type="exon", attribute=None, strandedness="unstranded", ...)` | Reads per gene from BAM files and a GFF/GTF |
 | `differential_expression(counts, samples, condition, reference, output=None, treated=None, factors=None, alpha=0.1, ...)` | Differential expression by the DESeq2 method: log2 fold change, Wald p-value, adjusted p-value |
@@ -433,7 +434,8 @@ cargo run --release --bin kmer_count  # 312 tests: k-mer counting, in memory and
 cargo run --release --bin parentesco  # 955 tests: kinship, trios and paternity, runs of homozygosity, genetic sex
 cargo run --release --bin ancestralidade  # 601 tests: frequency panels, ancestry, polygenic scores
 cargo run --release --bin clinico     # 5,789 tests: ClinVar findings, gene panels, variant lookup, pileup
-cargo run --release --bin pharmcat    # 31 tests: PharmCAT's input (with PHARMCAT_JAR, also a real PharmCAT run)
+cargo run --release --bin pharmcat    # 43 tests: PharmCAT's input and its report in the common schema (with PHARMCAT_JAR, also a real PharmCAT run)
+cargo run --release --bin farmacogenetica  # 82 tests: MMGEN's pharmacogenomics engine (VCF genes, CYP2D6 copy number, HLA; real HG002 data when present)
 cargo run --release --bin expressao   # 202 tests: read counting per gene, differential expression
 cargo run --release --bin crispr      # 237 tests: guide counting, MAGeCK's gene ranking (give MAGeCK's data folder for more)
 cargo run --release --bin microbio    # 192 tests: sketches, species abundance, read classification, resistance genes
@@ -448,6 +450,7 @@ python trials/python/crosscheck.py                 # against pyarrow, polars, bi
 python trials/python/test_ui.py                    # the interface's cells, without a browser
 python trials/python/test_ai.py                    # the AI layer and the MCP server, with a stand-in for Claude (no key, nothing sent)
 python trials/python/test_exercises.py             # the class exercises: made, solved on the screens' tools, graded
+python trials/python/validate_pgx.py               # MMGEN's PGx engine on the seven GIAB genomes, against PharmCAT and GeT-RM (data: see its header)
 python trials/python/test_browser.py python/multimerge_genomics/ui_main.py   # the interface in a real browser (needs playwright)
 python trials/python/gpu_test.py 1 10              # GPU against CPU against numpy; sizes in millions
 ```
@@ -456,7 +459,7 @@ Every Rust test compares the output with an independent reference written in the
 
 ## 🚧 Status and known limitations
 
-MMGEN 2.0.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
+MMGEN 2.1.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
 
 * **The k-mer modules 1–7 work in memory, and their k-mers are strand-specific.** Assembly and variant detection suit same-strand input, such as an assembled reference against a mutated copy of it. `count_kmers` (module 13) is the exception: any size, canonical.
 * **Variant detection reports k-mers**, not VCF records.
@@ -499,7 +502,7 @@ The course name and the student's name are the seed: the same pair always gives 
 
 If MMGEN helps your research or your teaching, please cite it (GitHub's *Cite this repository* button gives the same, from [CITATION.cff](CITATION.cff)):
 
-> Couto F. *MMGEN: MultiMerge Genomics* (version 2.0.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
+> Couto F. *MMGEN: MultiMerge Genomics* (version 2.1.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
 
 The DOI always resolves to the latest version on Zenodo, where each version has its own DOI too. Please also cite the methods a tool reproduces (DESeq2, KING, MAGeCK, sourmash, Nextclade, cutadapt...), named in the sections above.
 

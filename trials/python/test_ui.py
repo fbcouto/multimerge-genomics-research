@@ -629,7 +629,7 @@ SCREENS = {
     "kmercount": (ui.kmercount_page_form, ui.kmercount_page_backend, "form_kmercount", None),
     "convert": (ui.convert_page_form, ui.convert_page_backend, "form_convert", None),
     "findings": (ui.findings_page_form, ui.findings_page_backend, "form_findings", "findings_task"),
-    "pgx": (ui.pgx_page_form, ui.pgx_page_backend, "form_pgx", None),
+    "pgx": (ui.pgx_page_form, ui.pgx_page_backend, "form_pgx", "pgx_engine"),
     "lookup": (ui.lookup_page_form, ui.lookup_page_backend, "form_lookup", "lookup_task"),
     "kin": (ui.kin_page_form, ui.kin_page_backend, "form_kin", "kin_task"),
     "chrom": (ui.chrom_page_form, ui.chrom_page_backend, "form_chrom", "chrom_task"),
@@ -658,6 +658,33 @@ import shutil
 HUMAN_DEMO = os.environ.get("MMG_HUMAN_DEMO")
 if HUMAN_DEMO and os.path.exists(HUMAN_DEMO):
     shutil.copy(HUMAN_DEMO, os.path.basename(HUMAN_DEMO))
+# MMGEN's own engine (screen 19) needs its tables (MMGEN_PGX_TABLES = their
+# folder), and its BAM example the pgx demo pack (MMG_PGX_DEMO) and the
+# IPD-IMGT/HLA sequences (MMGEN_HLA_DIR = the folder with A_gen.fasta...).
+PGX_TABLES = os.environ.get("MMGEN_PGX_TABLES")
+PGX_DEMO = os.environ.get("MMG_PGX_DEMO")
+if PGX_DEMO and os.path.exists(PGX_DEMO):
+    shutil.copy(PGX_DEMO, os.path.basename(PGX_DEMO))
+HLA_DIR = os.environ.get("MMGEN_HLA_DIR")
+_dl = cell_run(ui.pgx_page_download, get_page=lambda: "pgx", btn_get_hla=Choice(0), btn_get_pgx_tables=Choice(0),
+               btn_get_pharmcat=Choice(0))
+POOL.update(pgx_tables_dir=_dl[1]["pgx_tables_dir"], pgx_hla_dir=_dl[1]["pgx_hla_dir"])
+if PGX_TABLES and os.path.exists(os.path.join(PGX_TABLES, "bam_genes.json")):
+    # The screen downloads the IPD-IMGT/HLA release and the table zip by their SHA-256: the
+    # constants in ui_main.py must be those of the tables (bam_genes.json pins the release).
+    import hashlib, json, re
+    _src = open(ui.__file__, encoding="utf-8").read()
+    _ver = re.search(r'PGX_HLA_VERSION = "([^"]+)"', _src).group(1)
+    _shas = dict(re.findall(r'"([ABC]_gen\.fasta)": "([0-9a-f]{64})"', _src))
+    _hg = json.load(open(os.path.join(PGX_TABLES, "bam_genes.json"), encoding="utf-8"))["hla_genes"]
+    _pins = {g["fasta_filename"]: (g.get("imgt_hla_version"), g.get("fasta_sha256")) for g in _hg}
+    check("screen 19: the HLA release and SHA-256 sums in the screen are the ones the tables pin",
+          _pins == {f: (_ver, s) for f, s in _shas.items()}, f"screen {_ver} {_shas} / tables {_pins}")
+    _zip = os.path.join(os.path.dirname(os.path.abspath(PGX_TABLES)), "mmgen_pgx_tables_cpic-v1.61.0.zip")
+    if os.path.exists(_zip):
+        _want = re.search(r'PGX_TABLES_SHA256 = "([0-9a-f]{64})"', _src).group(1)
+        _got = hashlib.sha256(open(_zip, "rb").read()).hexdigest()
+        check("screen 19: PGX_TABLES_SHA256 is the SHA-256 of the table zip next to the tables", _got == _want, f"{_got} != {_want}")
 JAR = os.environ.get("PHARMCAT_JAR")
 if JAR and os.path.exists(JAR):
     os.makedirs("mmgen_tools/pharmcat", exist_ok=True)
@@ -699,7 +726,12 @@ EXPECT = {
     ("convert", None, 1): ['parquet_options(numbers="text")'],
     ("findings", "ClinVar findings", 0): ["F11", "Pathogenic", "1 in one copy"],
     ("findings", "Gene panel from an annotation", 0): ["BRCA1", "Genes found: 13 of 13"],
-    ("pgx", None, 0): ["CYP2C19", "Positions read", "PharmCAT 3."],
+    ("pgx", "PharmCAT", 0): ["CYP2C19", "Positions read", "PharmCAT data", "Genes called"],
+    ("pgx", "MMGEN's engine (mmgen-pgx)", 0): ["CYP2C19", "mmgen-pgx", "Genes called", "G6PD", "absent from the VCF"],
+    ("pgx", "MMGEN's engine (mmgen-pgx)", 1): ["CYP2D6", "*2/*4", "copy number", "*35:08/*38:01", "outside-call file",
+                                                "IPD-IMGT/HLA 3.66.0"],
+    ("pgx", "MMGEN's engine (mmgen-pgx)", 2): ["CYP2C19", "*1/*2", "also possible", "*2/*35 (Poor Metabolizer)",
+                                                "was chosen as the highest-scoring diplotype"],
     ("lookup", "Look up variants in relatives (cascade testing)", 0): ["carries it", "does not carry it"],
     ("lookup", "Allele counts at a position (BAM)", 0): ["Depth"],
     ("kin", "Relatedness of several people", 0): ["parent and child", "HG002"],
@@ -765,8 +797,14 @@ for (page, task), items in EXAMPLES.items():
         if research and not (RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO)):
             print(f"  skip  {page}: {label} (set MMG_RESEARCH_DEMO to the research demo zip)")
             continue
-        if page == "pgx" and not (JAR and os.path.exists(JAR)):
+        if page == "pgx" and task == "PharmCAT" and not (JAR and os.path.exists(JAR)):
             print(f"  skip  {page}: {label} (set PHARMCAT_JAR)")
+            continue
+        if page == "pgx" and task != "PharmCAT" and not (PGX_TABLES and os.path.isdir(PGX_TABLES)):
+            print(f"  skip  {page}: {label} (set MMGEN_PGX_TABLES to the mmgen-pgx tables)")
+            continue
+        if any(isinstance(x, str) and x.startswith("mmgen_examples/pgx/") for x in flat)                 and not (PGX_DEMO and os.path.exists(PGX_DEMO) and HLA_DIR and os.path.isdir(HLA_DIR)):
+            print(f"  skip  {page}: {label} (set MMG_PGX_DEMO to the pgx demo zip and MMGEN_HLA_DIR to the HLA sequences)")
             continue
         given = {"get_page": lambda p=page: p, picker: Choice(str(i)), "interval_op": Choice(task if task in OPS else "merge")}
         if task_var:
@@ -781,8 +819,8 @@ for (page, task), items in EXAMPLES.items():
         rb = cell_run(backend_cell, **{k: v for k, v in given.items() if k in backend_cell.refs})
         page_text = shown(rb)
         missing = [e for e in EXPECT.get((page, task, i), []) if e not in page_text]
-        # PharmCAT's own HTML report is embedded at the end: its texts are not the screen's warnings.
-        hit = [s for s in STOPS if s in page_text.split("PharmCAT's full report")[0]]
+        # The engine's own HTML report is embedded at the end: its texts are not the screen's warnings.
+        hit = [s for s in STOPS if s in page_text.split("The engine's full report")[0]]
         check(name, about_shown and not isinstance(rb, BaseException) and "ERROR" not in page_text and not hit and not missing,
               f"about shown: {about_shown}; stops: {hit}; missing: {missing}; {page_text[:400]}")
 check("the examples write only inside mmgen_examples/", set(os.listdir(".")) - before <= {"mmgen_examples"},

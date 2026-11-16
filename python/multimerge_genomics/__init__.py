@@ -19,7 +19,12 @@ Optional parts, written in Python:
 from . import _native
 from ._native import *  # noqa: F401,F403  (the engine's functions)
 
-__all__ = [name for name in dir(_native) if not name.startswith("_")]
+__all__ = [name for name in dir(_native) if not name.startswith("_")] + ["PGX_SCHEMA_PATH"]
+
+# The JSON Schema every pharmacogenomics result follows (pgx_run, either engine).
+import os as _os
+
+PGX_SCHEMA_PATH = _os.path.join(_os.path.dirname(__file__), "pgx_result.schema.json")
 
 
 def __getattr__(name):

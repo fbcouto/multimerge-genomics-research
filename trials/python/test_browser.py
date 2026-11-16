@@ -144,7 +144,7 @@ with open("five_columns.vcf", "w", newline="\n") as f:  # not a VCF: no REF, ALT
 with open("quals.vcf", "w", newline="\n") as f:
     f.write("##fileformat=VCFv4.2\n##contig=<ID=chr1,length=1000>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
     f.write("chr1\t10\ta\tA\tG\t12.50\tPASS\t.\nchr1\t20\tb\tC\tT\t30.0\tPASS\t.\n")
-for _env in ("MMG_HUMAN_DEMO", "MMG_RESEARCH_DEMO", "MMG_16S_DEMO"):
+for _env in ("MMG_HUMAN_DEMO", "MMG_RESEARCH_DEMO", "MMG_16S_DEMO", "MMG_PGX_DEMO"):
     if os.environ.get(_env) and os.path.exists(os.environ[_env]):
         shutil.copy(os.environ[_env], os.path.basename(os.environ[_env]))
 if os.environ.get("PHARMCAT_JAR") and os.path.exists(os.environ["PHARMCAT_JAR"]):
@@ -225,7 +225,7 @@ MENU = {
     16: ("16. Relatedness, Trios & Paternity", "16. Relatedness, Trios & Paternity"),
     17: ("17. Ancestry & Polygenic Scores", "17. Ancestry & Polygenic Scores"),
     18: ("18. Disease Findings & Gene Panels", "18. Disease Findings & Gene Panels"),
-    19: ("19. Pharmacogenomics (PharmCAT)", "19. Pharmacogenomics (PharmCAT)"),
+    19: ("19. Pharmacogenomics", "19. Pharmacogenomics"),
     20: ("20. Sex Chromosomes & Homozygosity", "20. Sex Chromosomes & Homozygosity"),
     21: ("21. Variant Lookup & Allele Counts", "21. Variant Lookup & Allele Counts"),
     22: ("22. RNA-seq: Gene Counts", "22. RNA-seq: Gene Counts & Differential Expression"),
@@ -857,8 +857,17 @@ try:
                  lambda t: "carries it" in t, None),
             ]
             if PHARMCAT_JAR and os.path.exists(PHARMCAT_JAR):
-                flows.append((19, None, "HG002 (son of the Ashkenazi trio)", "Run PharmCAT", "PharmCAT results|ERROR",
-                              lambda t: "CYP2C19" in t, None))
+                flows.append((19, "PharmCAT", "HG002 (son of the Ashkenazi trio)", "Run PharmCAT", "Pharmacogenomics results|ERROR",
+                              lambda t: "CYP2C19" in t and "PharmCAT data" in t, None))
+            # MMGEN's own engine: its tables (MMGEN_PGX_TABLES) and, for the BAM
+            # example, the pgx demo pack (MMG_PGX_DEMO) and the HLA sequences (MMGEN_HLA_DIR).
+            if os.environ.get("MMGEN_PGX_TABLES"):
+                flows.append((19, "MMGEN's engine (mmgen-pgx)", "HG002 (son of the Ashkenazi trio)", "Call the pharmacogenes",
+                              "Pharmacogenomics results|ERROR", lambda t: "CYP2C19" in t and "mmgen-pgx" in t, None))
+                if os.environ.get("MMG_PGX_DEMO") and os.environ.get("MMGEN_HLA_DIR"):
+                    flows.append((19, "MMGEN's engine (mmgen-pgx)", "HG002 with its reads: CYP2D6 and the HLA genes",
+                                  "Call the pharmacogenes", "Pharmacogenomics results|ERROR",
+                                  lambda t: "*2/*4" in t and "*35:08/*38:01" in t, None))
         else:
             print("  (the human-genome examples are skipped: set MMG_HUMAN_DEMO to the demo data zip)")
         for n, task, label, button, pattern, good, written in flows:

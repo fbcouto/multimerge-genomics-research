@@ -1,0 +1,178 @@
+{
+  "data_version": "synth-v1.0.0",
+  "recommendations": [
+    {
+      "drug": "syndrug_a",
+      "guideline_id": "synth-g1",
+      "guideline_name": "Synthetic Guideline for Syndrug A",
+      "genes": [
+        "SYNG_STAR"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "SYNG_STAR": "0.5"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid syndrug_a due to poor metabolism.",
+      "url": "https://example.org/syndrug_a",
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "syndrug_a",
+      "guideline_id": "synth-g1",
+      "guideline_name": "Synthetic Guideline for Syndrug A",
+      "genes": [
+        "SYNG_STAR"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "SYNG_STAR": "1.0"
+      },
+      "population": "general",
+      "classification": "Moderate",
+      "recommendation": "Use reduced starting dose of syndrug_a.",
+      "url": "https://example.org/syndrug_a",
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "warfarin",
+      "guideline_id": "synth-g2",
+      "guideline_name": "Synthetic Warfarin Dosing Guideline",
+      "genes": [
+        "SYNG_ACT",
+        "SYNG_VG"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "_algorithm": "warfarin"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Compute warfarin dose using SYNG_ACT and SYNG_VG status.",
+      "url": "https://example.org/warfarin",
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "syndrug_x",
+      "guideline_id": "synth-g3",
+      "guideline_name": "Synthetic X-linked Guideline",
+      "genes": [
+        "SYNG_X"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "SYNG_X": "Deficient"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid syndrug_x in SYNG_X deficiency.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "syndrug_mito",
+      "guideline_id": "synth-g4",
+      "guideline_name": "Synthetic Mitochondrial Guideline",
+      "genes": [
+        "SYNG_MITO"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "SYNG_MITO": "Increased risk"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid aminoglycosides.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "codeine",
+      "guideline_id": "synth-g5",
+      "guideline_name": "Synthetic CYP2D6 Codeine Guideline",
+      "genes": [
+        "CYP2D6"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "CYP2D6": "1.25"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Use label recommended age- or weight-specific dosing for CYP2D6 AS 1.25.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "codeine",
+      "guideline_id": "synth-g5",
+      "guideline_name": "Synthetic CYP2D6 Codeine Guideline",
+      "genes": [
+        "CYP2D6"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "CYP2D6": "0.0"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid codeine in CYP2D6 poor metabolizers.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "codeine",
+      "guideline_id": "synth-g5",
+      "guideline_name": "Synthetic CYP2D6 Codeine Guideline",
+      "genes": [
+        "CYP2D6"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "CYP2D6": "≥3.0"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid codeine in CYP2D6 ultrarapid metabolizers.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "abacavir",
+      "guideline_id": "synth-g6",
+      "guideline_name": "Synthetic HLA-B Abacavir Guideline",
+      "genes": [
+        "HLA-B"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "HLA-B": "*57:01 positive"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Abacavir is contraindicated in HLA-B*57:01 positive patients.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    },
+    {
+      "drug": "carbamazepine",
+      "guideline_id": "synth-g7",
+      "guideline_name": "Synthetic HLA Carbamazepine Guideline",
+      "genes": [
+        "HLA-A",
+        "HLA-B"
+      ],
+      "untested_genes": [],
+      "lookup": {
+        "HLA-A": "*31:01 positive",
+        "HLA-B": "*15:02 negative"
+      },
+      "population": "general",
+      "classification": "Strong",
+      "recommendation": "Avoid carbamazepine due to HLA-A*31:01 risk.",
+      "url": null,
+      "source": "Synthetic CPIC-style Fixture"
+    }
+  ]
+}

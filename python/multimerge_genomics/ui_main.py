@@ -613,9 +613,9 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         "pgx": (EXAMPLES_DIR + "/pgx", "1", "mmgen_demo_pgx_v1.zip", _PACKS_URL + "mmgen_demo_pgx_v1.zip",
                 "33 MB of public data: the reads of the HG002 genome (Genome in a Bottle) over CYP2D6, the regions its copy "
                 "number is measured against, and the HLA class I genes"),
-        "amplicon16s": (EXAMPLES_DIR + "/research_16s", "1", "mmgen_demo_16s_v1.zip", None,
-                        "the 16S reads of the mothur MiSeq SOP. It is not published with MMGEN, because those data carry "
-                        "no explicit licence; the SOP files are at https://mothur.org/wiki/miseq_sop/"),
+        "amplicon16s": (EXAMPLES_DIR + "/research_16s", "2", "mmgen_demo_16s_v2.zip", _PACKS_URL + "mmgen_demo_16s_v2.zip",
+                        "17 MB of public data: the 16S reads of the mothur MiSeq SOP (Kozich et al. 2013; redistributed with the "
+                        "permission of Patrick D. Schloss) and an RDP classifier"),
     }
     EXAMPLE_FILES = (
         "toy_genome.fa", "toy_genome.fa.fai", "cohort.vcf", "cohort.vcf.gz", "sample_a.vcf", "sample_b.vcf.gz",

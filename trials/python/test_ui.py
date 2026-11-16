@@ -653,7 +653,7 @@ import shutil
 RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
 if RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO):
     shutil.copy(RESEARCH_DEMO, os.path.basename(RESEARCH_DEMO))
-# The 16S examples (screen 27) need their own pack, not published (MMG_16S_DEMO).
+# The 16S examples (screen 27) need their own pack (MMG_16S_DEMO; published with the release since 2.3.0).
 DEMO_16S = os.environ.get("MMG_16S_DEMO")
 if DEMO_16S and os.path.exists(DEMO_16S):
     shutil.copy(DEMO_16S, os.path.basename(DEMO_16S))

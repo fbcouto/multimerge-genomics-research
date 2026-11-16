@@ -611,10 +611,15 @@ r = cell_run(ui.workbench_rail, get_page=lambda: "sort", set_page=lambda _: None
 check("  the rail lists the 31 screens as links, the open one marked",
       not isinstance(r, BaseException) and raw(r).count('class="mmg-item') == 32 and 'class="mmg-item active" href="#sort"' in raw(r)
       and raw(r).count("mmg-rail-bridge") == 1, raw(r)[:300])
-_rail_pages = {p for _, _, items in r[1]["RAIL_GROUPS"] for p, _, _ in items}
-_menu_pages = set(re.findall(r'set_page\("(\w+)"\)', ui.main_menu._cell.code)) - {"home"}
-check("  every screen of the menu is in the rail, and only those", _rail_pages == _menu_pages, sorted(_rail_pages ^ _menu_pages))
-r = cell_run(ui.workbench_header, RAIL_GROUPS=r[1]["RAIL_GROUPS"], RAIL_HUMAN=r[1]["RAIL_HUMAN"], get_page=lambda: "pgx")
+_rail = r[1]
+_rail_pages = {p for _, _, items in _rail["RAIL_GROUPS"] for p, _, _ in items}
+_menu_pages = {p for p, _ in examples[1]["EXAMPLES"]} | {"guide"}   # every screen has examples but the guide
+check("  every screen is in the rail, and only those", _rail_pages == _menu_pages, sorted(_rail_pages ^ _menu_pages))
+r = cell_run(ui.main_menu, RAIL_GROUPS=_rail["RAIL_GROUPS"], get_page=lambda: "home")
+check("  the start page: the families with their screens as links, the folder, the engine",
+      not isinstance(r, BaseException) and raw(r).count('class="mmg-card"') == 5 and raw(r).count("data-page=") == 31
+      and "running on:" in shown(r) and os.path.basename(os.getcwd()) in shown(r), raw(r)[:300])
+r = cell_run(ui.workbench_header, RAIL_GROUPS=_rail["RAIL_GROUPS"], RAIL_HUMAN=_rail["RAIL_HUMAN"], get_page=lambda: "pgx")
 check("  the header strip: group, screen, folder and the human-genome chip",
       not isinstance(r, BaseException) and "Human genetics" in shown(r) and "19. Pharmacogenomics" in shown(r)
       and os.path.basename(os.getcwd()) in shown(r) and "human genome" in shown(r), shown(r)[:300])

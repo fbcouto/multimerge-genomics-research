@@ -47,6 +47,29 @@
   background: var(--mmg-rail); color: var(--mmg-rail-fg); font: 13px "Segoe UI", system-ui, sans-serif; cursor: pointer; }
 .mmg-rail-foot { margin-top: 14px; padding: 10px 8px 0; border-top: 1px solid var(--mmg-rail-line); color: var(--mmg-rail-fg-2); font: 11px/1.6 ui-monospace, Consolas, monospace; }
 .mmg-rail-foot .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0ca30c; margin-right: 5px; }
+/* the start page (main_menu): what MMGEN is, the families of tools, how a screen works */
+.mmg-home { max-width: 1040px; margin: 0 auto; padding: 8px 0 24px; }
+.mmg-home .hero h1 { font-size: 2.4em; margin: 10px 0 4px; }
+.mmg-home .hero .tag { font-size: 1.1em; margin: 0 0 10px; }
+.mmg-home .hero .ctx { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.mmg-home .hero .hint, .mmg-home .foot { color: var(--mmg-fg-3); font-size: 0.92em; }
+.mmg-home .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 14px 0 18px; padding: 0; counter-reset: step; list-style: none; }
+.mmg-home .steps li { position: relative; padding: 10px 12px 10px 44px; border: 1px solid var(--mmg-line); border-radius: 8px; background: var(--mmg-surface-2); font-size: 0.92em; line-height: 1.45; }
+.mmg-home .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 12px; top: 10px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--mmg-accent); color: #fff; font: 600 12px/22px ui-monospace, Consolas, monospace; text-align: center; }
+.mmg-home .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.mmg-card { border: 1px solid var(--mmg-line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.mmg-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 1.05em; }
+.mmg-card h3 .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.mmg-card h3 small { margin-left: auto; color: var(--mmg-fg-3); font-weight: 400; font-size: 0.78em; }
+.mmg-card p { margin: 0 0 8px; font-size: 0.92em; line-height: 1.45; }
+.mmg-card p.note { color: var(--mmg-fg-3); font-size: 0.85em; }
+.mmg-card .links { display: flex; flex-wrap: wrap; gap: 6px; }
+.mmg-card .links a { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 6px; border: 1px solid var(--mmg-line); border-radius: 999px;
+  background: var(--mmg-surface-2); color: inherit; text-decoration: none; font-size: 0.86em; white-space: nowrap; }
+.mmg-card .links a:hover { border-color: var(--mmg-accent); background: var(--mmg-accent-soft); }
+.mmg-card .links a .n { font: 11px ui-monospace, Consolas, monospace; color: var(--mmg-fg-3); }
+.mmg-home .foot { text-align: center; margin-top: 22px; }
 /* the form with the example's note beside it (form_with_note); one column on a phone */
 .mmg-form-note { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 .mmg-form-note > .f, .mmg-form-note > .n { min-width: 0; }

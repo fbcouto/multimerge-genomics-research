@@ -2038,143 +2038,58 @@ def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os):
 
 
 @app.cell
-def main_menu(get_page, mmg, mo, set_page):
+def main_menu(RAIL_GROUPS, get_page, mmg, mo, os):
     mo.stop(get_page() != "home")
-
-    btn_menu_qc = mo.ui.button(label="🔬 1. QC & Ingestion (FASTQ / FASTA)", on_change=lambda _: set_page("qc"))
-    btn_menu_cluster = mo.ui.button(label="🧬 2. Taxonomic Clustering", on_change=lambda _: set_page("cluster"))
-    btn_menu_assembly = mo.ui.button(label="🧩 3. Genome Assembly (De Bruijn)", on_change=lambda _: set_page("assembly"))
-    btn_menu_variant = mo.ui.button(label="⚠️ 4. Variant Calling (SNPs)", on_change=lambda _: set_page("variant"))
-    btn_menu_annotation = mo.ui.button(label="📘 5. Functional Annotation", on_change=lambda _: set_page("annotation"))
-    btn_menu_bloom = mo.ui.button(label="🔍 6. Bloom Filters", on_change=lambda _: set_page("bloom"))
-    btn_menu_scaffold = mo.ui.button(label="🖇️ 7. Genome Scaffolding", on_change=lambda _: set_page("scaffold"))
-    btn_menu_vcf = mo.ui.button(label="🗄️ 8. VCF Multimerge & Sorting", on_change=lambda _: set_page("vcf"))
-    btn_menu_sort = mo.ui.button(label="📏 9. Sort, Index & Intervals", on_change=lambda _: set_page("sort"))
-    btn_menu_validate = mo.ui.button(label="🩺 10. Validation & Chromosome Names", on_change=lambda _: set_page("validate"))
-    btn_menu_vcftools = mo.ui.button(label="🧪 11. VCF Stats, Filter & Normalize", on_change=lambda _: set_page("vcftools"))
-    btn_menu_fastq = mo.ui.button(label="📈 12. FASTQ Quality & Trimming", on_change=lambda _: set_page("fastq"))
-    btn_menu_kmercount = mo.ui.button(label="🔢 13. K-mer Counting", on_change=lambda _: set_page("kmercount"))
-    btn_menu_convert = mo.ui.button(label="📦 14. Formats & Conversion", on_change=lambda _: set_page("convert"))
-    btn_menu_guide = mo.ui.button(label="📚 15. Which Test Sees What (a guide)", on_change=lambda _: set_page("guide"))
-    btn_menu_kin = mo.ui.button(label="👪 16. Relatedness, Trios & Paternity", on_change=lambda _: set_page("kin"))
-    btn_menu_anc = mo.ui.button(label="🌍 17. Ancestry & Polygenic Scores", on_change=lambda _: set_page("anc"))
-    btn_menu_findings = mo.ui.button(label="🧾 18. Disease Findings & Gene Panels", on_change=lambda _: set_page("findings"))
-    btn_menu_pgx = mo.ui.button(label="💊 19. Pharmacogenomics", on_change=lambda _: set_page("pgx"))
-    btn_menu_chrom = mo.ui.button(label="🧫 20. Sex Chromosomes & Homozygosity", on_change=lambda _: set_page("chrom"))
-    btn_menu_lookup = mo.ui.button(label="🔎 21. Variant Lookup & Allele Counts", on_change=lambda _: set_page("lookup"))
-    btn_menu_assoc = mo.ui.button(label="📐 30. Genotype & Outcome: Association and Power", on_change=lambda _: set_page("assoc"))
-    btn_menu_rnaseq = mo.ui.button(label="📊 22. RNA-seq: Gene Counts & Differential Expression", on_change=lambda _: set_page("rnaseq"))
-    btn_menu_crispr = mo.ui.button(label="✂️ 23. CRISPR Screens (MAGeCK)", on_change=lambda _: set_page("crispr"))
-    btn_menu_meta = mo.ui.button(label="🦠 24. Metagenomics: Species & Abundance", on_change=lambda _: set_page("meta"))
-    btn_menu_amr = mo.ui.button(label="💉 25. Antimicrobial Resistance Genes", on_change=lambda _: set_page("amr"))
-    btn_menu_outbreak = mo.ui.button(label="🌳 26. Outbreaks: Trees, Viral Mutations & PCR", on_change=lambda _: set_page("outbreak"))
-    btn_menu_amplicon = mo.ui.button(label="🌿 27. 16S Amplicons: Taxonomy & Diversity", on_change=lambda _: set_page("amplicon"))
-    btn_menu_tmb = mo.ui.button(label="🎯 28. Tumor Mutational Burden (TMB)", on_change=lambda _: set_page("tmb"))
-    btn_menu_contam = mo.ui.button(label="🛡️ 31. Contaminant Screening: Adventitious Agents", on_change=lambda _: set_page("contam"))
-    btn_menu_ai = mo.ui.button(label="🤖 29. AI Assistant: Describe Your Problem", on_change=lambda _: set_page("ai"))
-
-    # What this installation really has: the GPU modules fall back to the CPU.
+    # The start page of the workbench: what MMGEN is, where it runs, the
+    # families of tools with their screens (links the rail's script handles,
+    # like the rail's own: ui_head.html) and how a screen works. Navigation
+    # itself is the rail on the left.
     _engine = mmg.engine_info()
     _where = "NVIDIA GPU (CUDA)" if _engine["gpu"] else "CPU"
-    # auto-fit: two columns on a wide screen, one on a phone (a fixed 1fr 1fr clipped every label at 390 px)
-    _grid = 'style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; max-width: 850px; margin: 0 auto;"'
-    _section = 'style="color: gray; margin: 30px 0 12px 0; text-align: center;"'
+    _folder = os.getcwd()
+    FAMILIES = {
+        "K-mer modules": ("Reads and small genomes as k-mers, in memory: quality and ingestion, assembly, variant calling, "
+                          "functional annotation, Bloom filters and scaffolding. Good for teaching and for bacteria and viruses.", ""),
+        "File tools, any size": ("VCF, BED, GFF/GTF, SAM/BAM and FASTQ of any size, read as streams: sort, merge, index and query, "
+                                 "validate and rename chromosomes, statistics, filter and normalize, quality and trimming, k-mer counting, "
+                                 "and every format in and out (BGZF, BAM, Parquet).", ""),
+        "Human genetics": ("Relatedness, trios and paternity; ancestry and polygenic scores; ClinVar findings and gene panels; "
+                           "pharmacogenomics; sex chromosomes and homozygosity; variant lookup and a genome browser; association and power.",
+                           "Experimental, for teaching and research: not a diagnosis, and only genomes of people who agreed."),
+        "Research & microbiology": ("RNA-seq from counts or reads; CRISPR screens; metagenomics; resistance genes; outbreak trees, "
+                                    "viral mutations and in-silico PCR; 16S amplicons; tumor mutational burden; contaminant screening.", ""),
+        "Assistant": ("Describe your problem and get a plan with the right tools and the Python to run it, or ask about a result. "
+                      "Optional: it needs your own Anthropic API key, and nothing is sent until you press the button.", ""),
+    }
 
-    menu_screen = mo.md(f"""
-    <div style="text-align: center; margin-top: 40px; font-family: sans-serif;">
-        <h1 style="font-size: 3em; margin-bottom: 0px; text-align: center;">🧬 MMGEN</h1>
-        <h3 style="color: gray; margin-top: 5px;">High-Performance Genomics Framework</h3>
-        <p style="margin-bottom: 10px;">Rust engine with optional NVIDIA CUDA acceleration. Pick a module to start:</p>
+    def _card(name, colour, items):
+        about, note = FAMILIES[name]
+        links = "".join(f'<a href="#{p}" data-page="{p}" data-n="{n}"><span class="n">{n}</span>{t}</a>' for p, n, t in items)
+        _note = f'<p class="note">{note}</p>' if note else ""
+        return (f'<section class="mmg-card"><h3><span class="sw" style="background:{colour}"></span>{name}'
+                f'<small>{len(items)} screen{"s" if len(items) > 1 else ""}</small></h3><p>{about}</p>{_note}<div class="links">{links}</div></section>')
 
-        <h4 {_section}>K-mer modules</h4>
-        <div {_grid}>
-            {btn_menu_qc}
-            {btn_menu_cluster}
-            {btn_menu_assembly}
-            {btn_menu_variant}
-            {btn_menu_annotation}
-            {btn_menu_bloom}
-            {btn_menu_scaffold}
-        </div>
-
-        <h4 {_section}>File tools, for files of any size</h4>
-        <div {_grid}>
-            {btn_menu_vcf}
-            {btn_menu_sort}
-            {btn_menu_validate}
-            {btn_menu_vcftools}
-            {btn_menu_fastq}
-            {btn_menu_kmercount}
-            {btn_menu_convert}
-        </div>
-
-        <h4 {_section}>Human genetics — experimental, for teaching and research</h4>
-        <div {_grid}>
-            {btn_menu_guide}
-            {btn_menu_kin}
-            {btn_menu_anc}
-            {btn_menu_findings}
-            {btn_menu_pgx}
-            {btn_menu_chrom}
-            {btn_menu_lookup}
-            {btn_menu_assoc}
-        </div>
-
-        <h4 {_section}>Research, microbiology and oncology — experimental</h4>
-        <div {_grid}>
-            {btn_menu_rnaseq}
-            {btn_menu_crispr}
-            {btn_menu_meta}
-            {btn_menu_amr}
-            {btn_menu_outbreak}
-            {btn_menu_amplicon}
-            {btn_menu_tmb}
-            {btn_menu_contam}
-        </div>
-
-        <h4 {_section}>AI assistant — optional, uses the Claude API</h4>
-        <div style="display: grid; grid-template-columns: 1fr; gap: 15px; max-width: 420px; margin: 0 auto;">
-            {btn_menu_ai}
-        </div>
-        <p style="color: gray; font-size: 0.85em; margin-top: 40px;">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
+    _cards = "".join(_card(_name, _colour, _items) for _name, _colour, _items in RAIL_GROUPS)
+    mo.Html(f"""
+    <div class="mmg-home">
+      <header class="hero">
+        <h1>🧬 MMGEN</h1>
+        <p class="tag">MultiMerge Genomics: free tools for files of any size, for research and teaching.</p>
+        <p class="ctx"><span class="mmg-chip ctx" title="{_folder}">📁 {os.path.basename(_folder) or _folder}</span>
+           <span class="mmg-chip">{_where} · {_engine["threads"]} threads</span><span class="mmg-chip">engine {_engine["version"]}</span></p>
+        <p class="hint">The screens list the files of this folder and write their results next to the input.
+           Pick a tool in the rail on the left, or below.</p>
+      </header>
+      <ol class="steps">
+        <li><b>Choose a task</b> on the screen's tabs.</li>
+        <li><b>Fill in the form</b>, or pick an example: its files are written to <code>mmgen_examples/</code> and the form is filled in.</li>
+        <li><b>Read the result</b>: the numbers, a look at the output, the figures, and the Python call that does the same thing.</li>
+      </ol>
+      <div class="cards">{_cards}</div>
+      <p class="foot">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
     </div>
     """)
-
-    menu_screen
-    return (
-        btn_menu_ai,
-        btn_menu_amr,
-        btn_menu_outbreak,
-        btn_menu_amplicon,
-        btn_menu_tmb,
-        btn_menu_anc,
-        btn_menu_annotation,
-        btn_menu_assoc,
-        btn_menu_crispr,
-        btn_menu_meta,
-        btn_menu_assembly,
-        btn_menu_bloom,
-        btn_menu_chrom,
-        btn_menu_contam,
-        btn_menu_kin,
-        btn_menu_cluster,
-        btn_menu_convert,
-        btn_menu_fastq,
-        btn_menu_findings,
-        btn_menu_guide,
-        btn_menu_lookup,
-        btn_menu_pgx,
-        btn_menu_kmercount,
-        btn_menu_qc,
-        btn_menu_rnaseq,
-        btn_menu_scaffold,
-        btn_menu_sort,
-        btn_menu_validate,
-        btn_menu_variant,
-        btn_menu_vcf,
-        btn_menu_vcftools,
-        menu_screen,
-    )
+    return
 
 
 @app.cell

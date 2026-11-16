@@ -16,7 +16,7 @@
   const activePage = () => { const a = document.querySelector('.mmg-rail a.mmg-item.active'); return a ? a.dataset.page : 'home'; };
 
   document.addEventListener('click', (e) => {
-    const t = e.target && e.target.closest ? e.target.closest('.mmg-rail-toggle, .mmg-rail a[data-page]') : null;
+    const t = e.target && e.target.closest ? e.target.closest('.mmg-rail-toggle, .mmg-rail a[data-page], .mmg-home a[data-page]') : null;
     if (!t) {   // a tap outside the open drawer closes it
       const r = rail();
       if (r && r.classList.contains('open') && !(e.target.closest && e.target.closest('.mmg-rail'))) r.classList.remove('open');

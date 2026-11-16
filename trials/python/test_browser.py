@@ -286,15 +286,21 @@ def page(browser):
     pg.on("pageerror", lambda e: js_errors.append(str(e)))
     pg.on("console", lambda m: js_errors.append(m.text) if m.type == "error" else None)
     pg.goto(URL, wait_until="domcontentloaded")
-    menu_button(pg, 1).wait_for(timeout=90000)
+    home(pg).wait_for(timeout=90000)
     try:
         yield pg
     finally:
         pg.close()
 
 
+def home(pg):
+    """The start page: the families of tools with their screens as links (the rail is on every page)."""
+    return pg.locator(".mmg-home")
+
+
 def menu_button(pg, n):
-    return pg.get_by_role("button", name=MENU[n][0])
+    """The link of screen n on the start page (a button before the workbench layout)."""
+    return pg.locator(f'.mmg-home a[data-n="{n}"]')
 
 
 def back(pg):
@@ -443,32 +449,32 @@ try:
         print("== navigation")
         with page(browser) as pg:
             check("tab title: MMGEN Suite", pg.title() == "MMGEN Suite", pg.title())
-            check(f"the menu shows the {len(MENU)} modules", all(menu_button(pg, n).is_visible() for n in MENU))
+            check(f"the start page links the {len(MENU)} screens", all(menu_button(pg, n).is_visible() for n in MENU))
             t = text_of(pg)
-            check("the menu says where the engine runs", "running on:" in t and WHERE in t, t[-200:])
+            check("the start page says where the engine runs", "running on:" in t and WHERE in t, t[-200:])
             check("menu: no Portuguese left on the page", not PORTUGUESE.search(t), PORTUGUESE.findall(t))
             shot(pg, "menu")
             for n, (_, title) in MENU.items():
                 enter(pg, n)
                 t = text_of(pg)
                 check(f"screen {n}: opens, with its title drawn as a heading", pg.locator("h1", has_text=title).count() >= 1, t[:200])
-                check(f"screen {n}: the menu leaves the page", not any(menu_button(pg, m).is_visible() for m in MENU))
+                check(f"screen {n}: the start page leaves the page", home(pg).count() == 0)
                 check(f"screen {n}: no Portuguese left on the page", not PORTUGUESE.search(t), PORTUGUESE.findall(t))
                 shot(pg, f"screen{n}_empty")
                 back(pg).click()
                 try:
-                    menu_button(pg, 1).wait_for(timeout=30000)
+                    home(pg).wait_for(timeout=30000)
                 except Exception:
                     pass
                 pg.wait_for_timeout(400)
-                check(f"screen {n}: 'Back to Menu' brings the menu back and removes the screen",
-                      menu_button(pg, 1).is_visible() and not back(pg).is_visible() and pg.locator("h1", has_text=title).count() == 0)
+                check(f"screen {n}: 'Back to Menu' brings the start page back and removes the screen",
+                      home(pg).is_visible() and not back(pg).is_visible() and pg.locator("h1", has_text=title).count() == 0)
 
         print("== the rail of tools (ui_theme.css + ui_head.html)")
         with page(browser) as pg:
             rail = pg.locator(".mmg-rail a.mmg-item")
             check(f"the rail lists the {len(MENU)} screens and 'Start here'", rail.count() == len(MENU) + 1, rail.count())
-            check("the rail is visible beside the menu", pg.locator(".mmg-rail").is_visible())
+            check("the rail is visible beside the start page", pg.locator(".mmg-rail").is_visible())
             pg.locator(".mmg-rail a.mmg-item[data-page='sort']").click()
             back(pg).wait_for(timeout=30000)
             pg.wait_for_timeout(600)
@@ -482,7 +488,7 @@ try:
             check("the rail switches from one screen to another", pg.locator("h1", has_text=MENU[9][1]).count() == 0 and pg.evaluate("() => location.hash") == "#fastq")
             shot(pg, "rail_screen12")
             back(pg).click()
-            menu_button(pg, 1).wait_for(timeout=30000)
+            home(pg).wait_for(timeout=30000)
             pg.wait_for_timeout(500)
             check("'Back to Menu' clears the address", pg.evaluate("() => location.hash") == "")
             pg.set_viewport_size({"width": 390, "height": 844})

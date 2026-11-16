@@ -54,6 +54,9 @@ pub mod parentesco;
 pub mod ancestralidade;
 // Pesquisa: contagem de leituras por gene e expressao diferencial (DESeq2).
 pub mod expressao;
+pub mod conjuntos;
+// RNA-seq direto do FASTQ: pseudoalinhamento e EM, como o kallisto.
+pub mod quantificacao;
 // Triagens CRISPR: contagem de guias e teste de genes (MAGeCK, RRA).
 pub mod crispr;
 // Microbiologia: esbocos FracMinHash (como o sourmash), especies e
@@ -65,6 +68,12 @@ pub mod surto;
 // 16S: pares -> ASVs (UNOISE3, quimeras), taxonomia (classificador do RDP),
 // diversidade alfa e beta, PCoA, PERMANOVA; e a carga mutacional do tumor.
 pub mod amplicon;
+// Coorte: associacao genotipo x desfecho (linear, logistica, Firth,
+// permutacoes, FDR) e poder do estudo.
+pub mod associacao;
+// Triagem de agentes adventicios (virus, bacterias, micoplasmas, fungos)
+// nas leituras de um material, com hospedeiro, brancos e spike-ins.
+pub mod contaminantes;
 
 // A API PYTHON E EM INGLES (2026-11-13): nomes das funcoes, parametros, chaves
 // dos dicionarios, valores aceitos, mensagens e a documentacao que o `help()`
@@ -1603,10 +1612,18 @@ fn pharmcat_run(
 /// nothing could be read or no definition fits. With `bam=`, the HLA genes use the
 /// IPD-IMGT/HLA release the tables pin (its SHA-256 is checked).
 ///
+/// - `ancestry`: the person's ancestry proportions, e.g. {"EUR": 0.6, "AFR": 0.3,
+///   "AMR": 0.1} (1000 Genomes superpopulations or CPIC group names), or
+///   `ancestry_panel`: a reference panel to estimate them from the VCF (as
+///   `estimate_ancestry`). With either, the frequency choice of NAT2 weights the CPIC
+///   population groups by the person's ancestry instead of their plain mean: what
+///   matters in admixed populations. The result says which was used (`x_ancestry`).
+///
 /// Writes `result.json` (matching `pgx_result.schema.json` v1) and `report.html`
 /// inside `output_dir`, and returns the parsed result dictionary with `notice`.
 #[pyfunction]
-#[pyo3(signature = (vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, tables=None))]
+#[pyo3(signature = (vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, tables=None, ancestry=None, ancestry_panel=None))]
+#[allow(clippy::too_many_arguments)]
 fn mmgen_pgx_run(
     py: Python<'_>,
     vcf: &str,
@@ -1616,10 +1633,69 @@ fn mmgen_pgx_run(
     bam: Option<String>,
     reference: Option<String>,
     tables: Option<String>,
+    ancestry: Option<std::collections::BTreeMap<String, f64>>,
+    ancestry_panel: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let op = farmacogenetica::PgxOptions { sample, callable_bed, bam, reference, tables };
+    let op = farmacogenetica::PgxOptions { sample, callable_bed, bam, reference, tables, ancestry, ancestry_panel };
     let r = py.allow_threads(|| farmacogenetica::run(vcf, output_dir, &op)).map_err(erro_py)?;
     let d = json_para_py(py, &r.json_text)?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// Runs MMGEN's pharmacogenomics engine (`mmgen-pgx`) for a group of people and
+/// the medicines of a protocol (e.g. the drugs given around a surgery).
+///
+/// - `vcfs`: one VCF per person, or multi-sample VCFs (every sample is a person;
+///   `samples` keeps only some). `callable_beds`: one BED for all, or one per VCF
+///   (None or "" for a VCF without one).
+/// - `drugs`: the medicines (a list, or one text with commas or lines); each person
+///   gets, for each one, a recommendation, or the reason there is none: a gene not
+///   called (CYP2D6 and HLA need the reads), or no CPIC guideline in the tables.
+/// - `ancestry_panel`: a reference panel to estimate each person's ancestry, which
+///   weights the frequency choice of NAT2 (see `mmgen_pgx_run`).
+///
+/// Writes one folder per person (result.json, report.html) and two tables,
+/// `cohort_genes.tsv` and `cohort_medicines.tsv`, inside `output_dir`; returns
+/// `people`, `genes`, `medicines`, `medicines_without_guideline`, `files`,
+/// `warnings`, `text` and `notice`.
+#[pyfunction]
+#[pyo3(signature = (vcfs, output_dir, callable_beds=None, samples=None, drugs=None, reference=None, tables=None, ancestry_panel=None))]
+#[allow(clippy::too_many_arguments)]
+fn pgx_cohort(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    output_dir: &str,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    samples: Option<&Bound<'_, PyAny>>,
+    drugs: Option<&Bound<'_, PyAny>>,
+    reference: Option<String>,
+    tables: Option<String>,
+    ancestry_panel: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let arquivos = lista_de_textos(Some(vcfs), "vcfs")?;
+    let beds: Vec<Option<String>> = match callable_beds {
+        None => Vec::new(),
+        Some(b) => {
+            if let Ok(s) = b.extract::<String>() {
+                vec![Some(s).filter(|x| !x.is_empty())]
+            } else {
+                b.extract::<Vec<Option<String>>>()
+                    .map_err(|_| pyo3::exceptions::PyTypeError::new_err("`callable_beds` must be a path or a list of paths (None for none)"))?
+                    .into_iter()
+                    .map(|x| x.filter(|s| !s.is_empty()))
+                    .collect()
+            }
+        }
+    };
+    let amostras = samples.map(|s| lista_de_textos(Some(s), "samples")).transpose()?;
+    let remedios = drugs
+        .map(|d| lista_de_textos(Some(d), "drugs"))
+        .transpose()?
+        .map(|v| v.iter().flat_map(|s| s.split([',', ';', '\n'])).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+    let op = farmacogenetica::CohortOptions { callable_beds: beds, samples: amostras, reference, tables, drugs: remedios, ancestry_panel };
+    let texto = py.allow_threads(|| farmacogenetica::run_cohort(&arquivos, output_dir, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &texto)?;
     d.bind(py).set_item("notice", AVISO)?;
     Ok(d)
 }
@@ -1631,6 +1707,7 @@ fn mmgen_pgx_run(
 /// (with `called`, `diplotype`, `phenotype`, `evidence`, and `not_called_reason`
 /// when a gene could not be called), `drugs`, `traits`, `warnings`, `report_html`,
 /// `text` and `notice`. PharmCAT's own run details are under `x_pharmcat`.
+/// `ancestry` / `ancestry_panel` (MMGEN's engine): see `mmgen_pgx_run`.
 #[pyfunction]
 #[pyo3(signature = (
     vcf,
@@ -1646,7 +1723,9 @@ fn mmgen_pgx_run(
     absent_is_ref=false,
     java="java",
     outside_calls=None,
-    base_name=None
+    base_name=None,
+    ancestry=None,
+    ancestry_panel=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn pgx_run(
@@ -1665,9 +1744,11 @@ fn pgx_run(
     java: &str,
     outside_calls: Option<String>,
     base_name: Option<String>,
+    ancestry: Option<std::collections::BTreeMap<String, f64>>,
+    ancestry_panel: Option<String>,
 ) -> PyResult<Py<PyAny>> {
     match engine {
-        "mmgen-pgx" => mmgen_pgx_run(py, vcf, output_dir, sample, callable_bed, bam, reference, tables),
+        "mmgen-pgx" => mmgen_pgx_run(py, vcf, output_dir, sample, callable_bed, bam, reference, tables, ancestry, ancestry_panel),
         "pharmcat" => {
             let jar_path = jar
                 .or_else(|| std::env::var("PHARMCAT_JAR").ok().filter(|s| !s.trim().is_empty()))
@@ -2168,6 +2249,545 @@ fn differential_expression(
     };
     let r = py.allow_threads(|| expressao::differential_expression(counts, samples, output, &op)).map_err(erro_py)?;
     json_para_py(py, &r.json())
+}
+
+/// Tests gene sets against a differential-expression table (the one
+/// `differential_expression` writes, or DESeq2's from R): for each set, the
+/// Wilcoxon rank-sum test of its genes' statistic against the other genes tested,
+/// as limma's `wilcoxGST` (a competitive test that assumes independent genes):
+/// does the set go up or down (`pvalue`, `fdr`), or change in either direction
+/// (`pvalue_mixed`, `fdr_mixed`), more than the rest?
+///
+/// - `gene_sets`: a GMT file (name, description, genes), a two-column table (set,
+///   gene), or the built-in "spinal_cord_injury" (reactive astrocytes, glial-scar
+///   proteoglycans, fibrotic scar, inflammation, regeneration-associated genes,
+///   axonal cytoskeleton, myelin, growth inhibition and RhoA/ROCK, neurotrophins,
+///   laminin receptors and chains: marker genes from reviews, for teaching and
+///   exploratory analysis, not validated signatures). Gene symbols are matched
+///   without case (human GFAP = rodent Gfap).
+/// - `statistic`: the column the genes are ranked by ("stat", or "log2FoldChange").
+/// - `require_padj`: rank only the genes with an adjusted p-value, those DESeq2
+///   kept after independent filtering (as limma users filter lowly expressed genes
+///   first); otherwise thousands of barely expressed genes, with statistics near
+///   zero, make any set of expressed genes look changed.
+#[pyfunction]
+#[pyo3(signature = (results, gene_sets="spinal_cord_injury", output=None, statistic="stat", alpha=0.1, min_size=3, require_padj=true))]
+#[allow(clippy::too_many_arguments)]
+fn gene_set_test(
+    py: Python<'_>,
+    results: &str,
+    gene_sets: &str,
+    output: Option<&str>,
+    statistic: &str,
+    alpha: f64,
+    min_size: usize,
+    require_padj: bool,
+) -> PyResult<Py<PyAny>> {
+    let op = conjuntos::SetOptions { statistic: statistic.to_string(), alpha, min_size, require_padj };
+    let texto = py.allow_threads(|| conjuntos::gene_set_test(results, gene_sets, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &texto)
+}
+
+/// Association between genotypes and an outcome in a cohort: one test per ALT
+/// allele of each selected variant, adjusted for covariates. Quantitative
+/// outcome: linear regression (t test). Binary outcome: logistic regression
+/// (likelihood-ratio p, Wald p too), with Firth's penalized likelihood when the
+/// plain fit separates or fails (`firth="auto"`), always, or never.
+/// Benjamini-Hochberg FDR; with `permutations`, an empirical p per variant and a
+/// family-wise (max-T) p.
+///
+/// - `vcfs`: one multi-sample VCF or several (people matched by sample name;
+///   several files must be sorted). A position missing from a person's file is a
+///   missing genotype, unless `absent_is_ref=True`.
+/// - `phenotypes`: a table (tab, comma or space separated) with a header; the
+///   first column (or `IID`, or `sample_column`) names the people. `outcome` is
+///   the column tested; `covariates` the columns adjusted for. Numeric
+///   covariates are numbers, text ones categories (the first level in sorted
+///   order is the reference; `categorical` forces a column to be a category).
+/// - `outcome_type`: "auto" (two values: binary), "binary" or "quantitative";
+///   `case_value`: which value is the event (binary).
+/// - `ids`: rsIDs, "chr:pos", "chr:pos:ref:alt"; `regions`: "chr:start-end".
+///   Without either, every variant with MAF >= `min_maf` and call rate >=
+///   `min_call_rate`.
+/// - `model`: "additive", "dominant" or "recessive". `output`: the table (TSV).
+///
+/// Returns `people` (used and dropped, and why), `variants` (read, tested,
+/// skipped and why, methods), `rows` (one per tested allele: beta, se, ci, or,
+/// p, method, p_permutation, p_fwer, fdr...), `top`, `power` (the effect the
+/// study could detect with 80% power), `warnings`, `text` and `notice`.
+/// Only hard GT calls are read; there is no relatedness correction (run
+/// `relatedness` first). An association is not causation.
+#[pyfunction]
+#[pyo3(signature = (vcfs, phenotypes, outcome, covariates=None, categorical=None, sample_column=None, outcome_type="auto", case_value=None, model="additive", ids=None, regions=None, min_maf=0.01, min_call_rate=0.9, firth="auto", permutations=0, seed=1, absent_is_ref=false, pass_only=false, output=None))]
+#[allow(clippy::too_many_arguments)]
+fn genotype_association(
+    py: Python<'_>,
+    vcfs: &Bound<'_, PyAny>,
+    phenotypes: &str,
+    outcome: &str,
+    covariates: Option<&Bound<'_, PyAny>>,
+    categorical: Option<&Bound<'_, PyAny>>,
+    sample_column: Option<String>,
+    outcome_type: &str,
+    case_value: Option<String>,
+    model: &str,
+    ids: Option<&Bound<'_, PyAny>>,
+    regions: Option<&Bound<'_, PyAny>>,
+    min_maf: f64,
+    min_call_rate: f64,
+    firth: &str,
+    permutations: usize,
+    seed: u64,
+    absent_is_ref: bool,
+    pass_only: bool,
+    output: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let vcfs = lista_de_textos(Some(vcfs), "vcfs")?;
+    let op = associacao::AssocOptions {
+        outcome: outcome.to_string(),
+        covariates: lista_de_textos(covariates, "covariates")?,
+        categorical: lista_de_textos(categorical, "categorical")?,
+        sample_column,
+        outcome_type: associacao::OutcomeType::from_text(outcome_type).map_err(erro_py)?,
+        case_value,
+        model: associacao::GeneticModel::from_text(model).map_err(erro_py)?,
+        ids: lista_de_textos(ids, "ids")?,
+        regions: lista_de_textos(regions, "regions")?,
+        min_maf,
+        min_call_rate,
+        firth: associacao::FirthPolicy::from_text(firth).map_err(erro_py)?,
+        permutations,
+        seed,
+        absent_is_ref,
+        pass_only,
+        output,
+    };
+    let r = py.allow_threads(|| associacao::genotype_association(&vcfs, phenotypes, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// Power of a genotype association test, the people needed for
+/// `target_power`, and the smallest effect detectable with `n` people.
+///
+/// - `outcome="binary"`: `effect` is the odds ratio per copy (additive model),
+///   `allele_freq` the frequency in people without the event, `case_fraction`
+///   the fraction with it (Wald test, large-sample).
+/// - `outcome="quantitative"`: `effect` is beta in standard deviations of the
+///   outcome per copy (non-central t).
+/// - `tests` applies Bonferroni (alpha / tests); `covariates` is how many the
+///   model adjusts for. `simulations` adds a simulated power (the default tests
+///   of `genotype_association`, with Firth when needed): use it for small
+///   studies.
+///
+/// Returns `power`, `n_needed`, `detectable_effect`, `simulated_power`,
+/// `expected_events`, `expected_carriers`, `curve` (n and power), `warnings`
+/// and `text`.
+#[pyfunction]
+#[pyo3(signature = (allele_freq, effect=None, n=None, outcome="binary", case_fraction=0.5, alpha=0.05, tests=1, model="additive", covariates=0, target_power=0.8, simulations=0, seed=1))]
+#[allow(clippy::too_many_arguments)]
+fn association_power(
+    py: Python<'_>,
+    allele_freq: f64,
+    effect: Option<f64>,
+    n: Option<usize>,
+    outcome: &str,
+    case_fraction: f64,
+    alpha: f64,
+    tests: usize,
+    model: &str,
+    covariates: usize,
+    target_power: f64,
+    simulations: usize,
+    seed: u64,
+) -> PyResult<Py<PyAny>> {
+    let op = associacao::PowerOptions {
+        outcome: associacao::OutcomeType::from_text(outcome).map_err(erro_py)?,
+        allele_freq,
+        effect,
+        n,
+        case_fraction,
+        alpha,
+        tests,
+        model: associacao::GeneticModel::from_text(model).map_err(erro_py)?,
+        covariates,
+        target_power,
+        simulations,
+        seed,
+    };
+    let r = py.allow_threads(|| associacao::association_power(&op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Builds the database of an adventitious-agent screen: the genomes of the
+/// agents to look for (viruses, bacteria, mycoplasmas, fungi), of the
+/// process controls and of the host, in one file. Agents and controls are
+/// indexed by minimizers with their genome windows (for the breadth of
+/// coverage); the host goes into a compact set (a human genome takes ~0.7
+/// GB and is built in passes within `memory_mb`). The SHA-256 of every
+/// reference file is kept. For research and teaching: not a validated
+/// method (see `notice`).
+///
+/// - `references`: one entry per genome: a FASTA path, or a list of paths
+///   (one genome in several files: chromosomes, segments, plasmids).
+/// - `kinds`: one per genome: "virus", "bacterium", "mycoplasma", "fungus",
+///   "other", "spike" (a spike-in or process control) or "host".
+/// - `names`: the names in the reports (default: the first FASTA header).
+/// - `minimizer_window`: one k-mer in about (w + 1) / 2 is kept for the
+///   agents; `host_minimizer_window` the same for the host (sparser).
+/// - `genome_window`: bases per genome window for the breadth (a small
+///   genome gets length / 20, at least 100).
+#[pyfunction]
+#[pyo3(signature = (references, output, kinds, names=None, k=31, minimizer_window=12, host_minimizer_window=31,
+                    genome_window=1000, memory_mb=1024))]
+#[allow(clippy::too_many_arguments)]
+fn build_screen_database(
+    py: Python<'_>,
+    references: &Bound<'_, PyAny>,
+    output: &str,
+    kinds: Vec<String>,
+    names: Option<&Bound<'_, PyAny>>,
+    k: u8,
+    minimizer_window: u16,
+    host_minimizer_window: u16,
+    genome_window: u32,
+    memory_mb: u64,
+) -> PyResult<Py<PyAny>> {
+    let listas: Vec<Vec<String>> = if let Ok(s) = references.extract::<String>() {
+        vec![vec![s]]
+    } else if let Ok(v) = references.extract::<Vec<String>>() {
+        v.into_iter().map(|f| vec![f]).collect()
+    } else {
+        references.extract::<Vec<Vec<String>>>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("`references` must be a path, a list of paths, or a list of lists of paths")
+        })?
+    };
+    if kinds.len() != listas.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "`kinds` needs one kind per reference ({} references, {} kinds): virus, bacterium, mycoplasma, fungus, other, spike or host",
+            listas.len(),
+            kinds.len()
+        )));
+    }
+    let tipos: Vec<contaminantes::AgentKind> =
+        kinds.iter().map(|s| contaminantes::AgentKind::from_text(s)).collect::<Result<_, _>>().map_err(erro_py)?;
+    let nomes = opcoes_de_lista(names, "names", listas.len())?;
+    let refs: Vec<contaminantes::ScreenReference> = listas
+        .into_iter()
+        .zip(nomes)
+        .zip(tipos)
+        .map(|((files, name), kind)| contaminantes::ScreenReference { files, name: name.unwrap_or_default(), kind })
+        .collect();
+    let op = contaminantes::ScreenDbOptions { k, minimizer_window, host_minimizer_window, genome_window_bp: genome_window, memory_mb };
+    let r = py.allow_threads(|| contaminantes::build_screen_database(&refs, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// What a screen database holds: its references (name, kind, files and
+/// their SHA-256, sizes, genome windows), its parameters and its SHA-256.
+#[pyfunction]
+fn describe_screen_database(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
+    let r = py.allow_threads(|| contaminantes::describe_screen_database(path)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Screens the sequencing reads of a biological material (a raw material,
+/// a cell bank, a harvest, a tissue extract) for adventitious agents with a
+/// database of `build_screen_database`: host reads set aside, each read (or
+/// pair) given to the reference it matches best, and for each organism the
+/// evidence -- unique and tied reads, reads per million (RPM), distinct
+/// k-mers, the genome windows hit (breadth) and whether they are spread as
+/// an infection would spread them -- and a call: "detected", "background"
+/// (also in a negative control, not 10x above it), "below_threshold" (with
+/// the reasons) or "not_detected". Spike-ins get their recovery, and the
+/// run its limit of detection. The report (TSV, JSON, HTML) records the
+/// SHA-256 of every input and of the database, all parameters, the date and
+/// the engine version.
+///
+/// For research and teaching: releasing a GMP batch requires a validated
+/// method and validated software (ICH Q5A(R2) admits NGS for adventitious
+/// virus detection, but the validation is the laboratory's).
+///
+/// - `samples`: a list of (name, r1) or (name, r1, r2) -- r1 and r2 a path
+///   or a list of paths (lanes, in the same order) -- or of dicts with the
+///   keys name, r1 and r2.
+/// - `negative_controls`: names of the samples that are blanks.
+/// - The thresholds of a call: `min_reads` own reads, `min_windows` genome
+///   windows, `min_dispersion` (windows hit / windows expected at random for
+///   that many reads), `min_unique_fraction` (own reads among those that match
+///   it best) and `max_weak_fraction` (reads that only resemble it); a sample
+///   is "background" unless its RPM is `min_blank_ratio` times a blank's.
+/// - `spike_ins`: a TSV path (columns sample, organism, amount, unit; sample
+///   empty or "*" = every sample) or a list of dicts with those keys. unit:
+///   "reads", "rpm", or any other (copies, CFU...: recovery in reads per
+///   unit).
+#[pyfunction]
+#[pyo3(signature = (samples, database, negative_controls=None, spike_ins=None, output_tsv=None, output_json=None,
+                    output_html=None, min_hits=3, min_fraction=0.2, unique_margin=0.2, host_min_hits=1, min_reads=3,
+                    min_windows=2, min_dispersion=0.5, min_unique_fraction=0.25, max_weak_fraction=0.5, min_rpm=0.0,
+                    min_blank_ratio=10.0, lod_rate=0.95))]
+#[allow(clippy::too_many_arguments)]
+fn contaminant_screen(
+    py: Python<'_>,
+    samples: &Bound<'_, PyAny>,
+    database: &str,
+    negative_controls: Option<&Bound<'_, PyAny>>,
+    spike_ins: Option<&Bound<'_, PyAny>>,
+    output_tsv: Option<String>,
+    output_json: Option<String>,
+    output_html: Option<String>,
+    min_hits: u32,
+    min_fraction: f64,
+    unique_margin: f64,
+    host_min_hits: u32,
+    min_reads: u64,
+    min_windows: u32,
+    min_dispersion: f64,
+    min_unique_fraction: f64,
+    max_weak_fraction: f64,
+    min_rpm: f64,
+    min_blank_ratio: f64,
+    lod_rate: f64,
+) -> PyResult<Py<PyAny>> {
+    use pyo3::types::{PyDict, PyList};
+    let paths = |v: Option<Bound<'_, PyAny>>| -> PyResult<Vec<String>> {
+        match v {
+            None => Ok(Vec::new()),
+            Some(x) if x.is_none() => Ok(Vec::new()),
+            Some(x) => lista_de_textos(Some(&x), "r1/r2"),
+        }
+    };
+    let mut amostras = Vec::new();
+    let itens: Vec<Bound<'_, PyAny>> = samples
+        .extract()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("`samples` must be a list of (name, r1[, r2]) or of dicts"))?;
+    for item in itens {
+        let (name, r1, r2) = if let Ok(d) = item.downcast::<PyDict>() {
+            let name: String = d.get_item("name")?.ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a sample dict needs \"name\""))?.extract()?;
+            (name, paths(d.get_item("r1")?)?, paths(d.get_item("r2")?)?)
+        } else {
+            let t: Vec<Bound<'_, PyAny>> = item.extract().map_err(|_| {
+                pyo3::exceptions::PyTypeError::new_err("each sample is (name, r1), (name, r1, r2) or a dict with name, r1 and r2")
+            })?;
+            if t.len() < 2 || t.len() > 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err("each sample is (name, r1) or (name, r1, r2)"));
+            }
+            (t[0].extract()?, paths(Some(t[1].clone()))?, paths(t.get(2).cloned())?)
+        };
+        amostras.push(contaminantes::ScreenSample { name, r1, r2 });
+    }
+    let mut op = contaminantes::ScreenOptions {
+        negative_controls: lista_de_textos(negative_controls, "negative_controls")?,
+        min_hits,
+        min_fraction,
+        unique_margin,
+        host_min_hits,
+        min_reads,
+        min_windows,
+        min_dispersion,
+        min_unique_fraction,
+        max_weak_fraction,
+        min_rpm,
+        min_blank_ratio,
+        lod_rate,
+        output_tsv,
+        output_json,
+        output_html,
+        ..Default::default()
+    };
+    if let Some(sp) = spike_ins.filter(|x| !x.is_none()) {
+        if let Ok(p) = sp.extract::<String>() {
+            op.spike_table = Some(p);
+        } else {
+            for d in sp.downcast::<PyList>().map_err(|_| pyo3::exceptions::PyTypeError::new_err("`spike_ins` must be a TSV path or a list of dicts"))?.iter() {
+                let d = d.downcast::<PyDict>().map_err(|_| pyo3::exceptions::PyTypeError::new_err("each spike-in is a dict: organism, amount, and optionally sample and unit"))?;
+                let get = |k: &str| d.get_item(k).ok().flatten().filter(|v| !v.is_none());
+                op.spike_ins.push(contaminantes::SpikeIn {
+                    sample: get("sample").map(|v| v.extract::<String>()).transpose()?.filter(|s| !s.is_empty() && s != "*"),
+                    organism: get("organism").ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a spike-in needs \"organism\""))?.extract()?,
+                    amount: get("amount").ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a spike-in needs \"amount\""))?.extract()?,
+                    unit: get("unit").map(|v| v.extract::<String>()).transpose()?.unwrap_or_else(|| "reads".to_string()),
+                });
+            }
+        }
+    }
+    let r = py.allow_threads(|| contaminantes::contaminant_screen(&amostras, database, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// Builds the pseudoalignment index of a transcriptome, for
+/// `quantify_samples` (the method of kallisto): every k-mer of the
+/// transcripts, on both strands, mapped to the set of transcripts that contain
+/// it. Reads a FASTA of transcript sequences (cDNA: Ensembl
+/// `*.cdna.all.fa.gz`, GENCODE `*.transcripts.fa.gz`, RefSeq `*_rna.fna.gz`),
+/// plain or .gz. The index is a file; build it once per transcriptome.
+///
+/// - `k`: k-mer length, odd, 7 to 31; 31 (kallisto's default) suits reads of
+///   50 bp or more.
+/// - `gene_map`: a GTF, a GFF3, or a table (transcript, gene[, gene name]);
+///   by default the gene of each transcript is read from the FASTA headers
+///   (Ensembl `gene:`/`gene_symbol:`, GENCODE `|` fields, RefSeq `(SYMBOL)`),
+///   and a transcript without one is its own gene.
+/// - `make_unique`: rename repeated transcript names NAME_2, NAME_3... instead
+///   of stopping.
+/// - `memory_mb`: memory for one building pass (default 1024); less memory
+///   means more passes, never a failure.
+/// - `clip_poly_a`: leave poly-A tails (10 or more A's at the end) out of the
+///   k-mers, as kallisto does.
+///
+/// Returns the summary: `transcripts`, `genes`, `gene_map`, `kmers`,
+/// `equivalence_classes`, `bytes`, `bytes_per_million_kmers`, `passes`,
+/// `seconds`, `warnings`, `text`...
+#[pyfunction]
+#[pyo3(signature = (fasta, output, k=31, gene_map=None, make_unique=false, memory_mb=None, clip_poly_a=true))]
+#[allow(clippy::too_many_arguments)]
+fn build_transcript_index(
+    py: Python<'_>,
+    fasta: &str,
+    output: &str,
+    k: usize,
+    gene_map: Option<String>,
+    make_unique: bool,
+    memory_mb: Option<usize>,
+    clip_poly_a: bool,
+) -> PyResult<Py<PyAny>> {
+    let op = quantificacao::IndexOptions { k, gene_map, make_unique, memory_mb, clip_poly_a };
+    let r = py.allow_threads(|| quantificacao::build_transcript_index(fasta, output, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// What a transcript index holds -- k, transcripts, genes, k-mers,
+/// equivalence classes, the FASTA and gene map it was built from, its size --
+/// read from the header of the file (fast).
+#[pyfunction]
+fn transcript_index_info(py: Python<'_>, index: &str) -> PyResult<Py<PyAny>> {
+    let r = quantificacao::transcript_index_info(index).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// One item of `samples`: a dict {"name", "r1", "r2", "condition"} ("r2" and
+/// "condition" optional), or a tuple/list (name, r1[, r2[, condition]]).
+fn amostra_quant(item: &Bound<'_, PyAny>, i: usize) -> PyResult<quantificacao::QuantSample> {
+    use pyo3::types::PyDict;
+    let texto = |v: Option<Bound<'_, PyAny>>, campo: &str| -> PyResult<Option<String>> {
+        match v {
+            Some(v) if !v.is_none() => v.extract::<String>().map(Some).map_err(|_| {
+                pyo3::exceptions::PyTypeError::new_err(format!("sample {}: `{campo}` must be a string", i + 1))
+            }),
+            _ => Ok(None),
+        }
+    };
+    if let Ok(d) = item.downcast::<PyDict>() {
+        Ok(quantificacao::QuantSample {
+            name: texto(d.get_item("name")?, "name")?.unwrap_or_default(),
+            r1: texto(d.get_item("r1")?, "r1")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!("sample {}: no \"r1\" (the FASTQ file, or the R1 file of a pair)", i + 1))
+            })?,
+            r2: texto(d.get_item("r2")?, "r2")?,
+            condition: texto(d.get_item("condition")?, "condition")?,
+        })
+    } else {
+        let v: Vec<Option<String>> = item.extract().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "sample {}: give a dict {{\"name\", \"r1\", \"r2\", \"condition\"}} or a tuple (name, r1[, r2[, condition]])",
+                i + 1
+            ))
+        })?;
+        if v.len() < 2 || v.len() > 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "sample {}: a tuple (name, r1[, r2[, condition]]) has 2 to 4 items, not {}",
+                i + 1,
+                v.len()
+            )));
+        }
+        let pega = |j: usize| v.get(j).cloned().flatten().filter(|s| !s.is_empty());
+        Ok(quantificacao::QuantSample {
+            name: pega(0).unwrap_or_default(),
+            r1: pega(1).ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("sample {}: no r1 file", i + 1)))?,
+            r2: pega(2),
+            condition: pega(3),
+        })
+    }
+}
+
+/// Quantifies RNA-seq samples straight from their FASTQ files, without an
+/// aligner: pseudoalignment against an index made by `build_transcript_index`
+/// and the EM of kallisto. Single-end or paired-end, plain or gzip.
+///
+/// - `samples`: a list with one item per sample: a dict {"name", "r1", "r2",
+///   "condition"} or a tuple (name, r1[, r2[, condition]]). Without "r2" the
+///   reads are single-end. A name left empty comes from the file name. When
+///   every sample has a condition, `samples.tsv` is written too, ready for
+///   `differential_expression`.
+/// - `fragment_length`, `fragment_sd`: mean and standard deviation of the
+///   fragment (insert) length. Required for single-end reads (kallisto's -l
+///   and -s; 200 and 20 are common for Illumina mRNA libraries); for pairs
+///   they are estimated from the first `fragment_pairs` pairs that fall on a
+///   single transcript, unless given.
+/// - `gene_map`: replaces the gene map stored in the index (GTF, GFF3 or a
+///   transcript-gene table).
+/// - `check_pair_names`: stop when R1 and R2 are out of step (read names
+///   differ).
+/// - `single_overhang`: single-end reads only. True (default) keeps every
+///   compatible transcript; False applies kallisto's default rule (drops the
+///   transcripts on which a fragment of the mean length, starting at the read,
+///   would run past the end).
+/// - `max_reads`: only the first reads (pairs) of each sample, for a quick look.
+///
+/// Writes in `output_dir`: a folder per sample (`abundance.tsv` as kallisto's,
+/// `abundance_genes.tsv`, `run_info.json`) and the tables of all samples:
+/// `gene_counts.tsv` (rounded estimated counts: the input of
+/// `differential_expression`), `gene_tpm.tsv`, `transcript_counts.tsv`,
+/// `transcript_tpm.tsv`, `gene_names.tsv`, `quant_stats.tsv`, `samples.tsv`.
+/// Returns, per sample, the reads, pseudoaligned, unique, fragment length and
+/// EM rounds; the gene ids, names, counts and TPM of every sample; the files
+/// written; warnings; and `text`, the summary.
+#[pyfunction]
+#[pyo3(signature = (index, samples, output_dir, fragment_length=None, fragment_sd=None, gene_map=None, fragment_pairs=10000,
+                    check_pair_names=true, single_overhang=true, max_reads=None))]
+#[allow(clippy::too_many_arguments)]
+fn quantify_samples(
+    py: Python<'_>,
+    index: &str,
+    samples: &Bound<'_, PyAny>,
+    output_dir: &str,
+    fragment_length: Option<f64>,
+    fragment_sd: Option<f64>,
+    gene_map: Option<String>,
+    fragment_pairs: usize,
+    check_pair_names: bool,
+    single_overhang: bool,
+    max_reads: Option<u64>,
+) -> PyResult<Py<PyAny>> {
+    let mut amostras = Vec::new();
+    for (i, item) in samples.try_iter()?.enumerate() {
+        amostras.push(amostra_quant(&item?, i)?);
+    }
+    let op = quantificacao::QuantOptions {
+        fragment_length,
+        fragment_sd,
+        fragment_pairs,
+        gene_map,
+        check_pair_names,
+        single_overhang,
+        max_reads,
+        ..Default::default()
+    };
+    let r = py.allow_threads(|| quantificacao::quantify_samples(index, &amostras, output_dir, &op)).map_err(erro_py)?;
+    json_para_py(py, &r.json())
+}
+
+/// How one read (or pair) is pseudoaligned, step by step, for teaching: each
+/// k-mer of the read, whether it is in the index and which transcripts
+/// contain it, and the intersection -- the transcripts the read is compatible
+/// with (`status`: "unique", "multi", "conflicting", "no_kmer" or
+/// "too_short"). Loads the index on every call: meant for small indexes.
+#[pyfunction]
+#[pyo3(signature = (index, read, read2=None))]
+fn explain_pseudoalignment(py: Python<'_>, index: &str, read: &str, read2: Option<&str>) -> PyResult<Py<PyAny>> {
+    let j = py.allow_threads(|| quantificacao::explain_pseudoalignment(index, read, read2)).map_err(erro_py)?;
+    json_para_py(py, &j)
 }
 
 /// Counts the guides of a pooled CRISPR screen in FASTQ files, as `mageck
@@ -2898,6 +3518,7 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pharmcat_run, m)?)?;
     m.add_function(wrap_pyfunction!(mmgen_pgx_run, m)?)?;
     m.add_function(wrap_pyfunction!(pgx_run, m)?)?;
+    m.add_function(wrap_pyfunction!(pgx_cohort, m)?)?;
     m.add_function(wrap_pyfunction!(relatedness, m)?)?;
     m.add_function(wrap_pyfunction!(trio_analysis, m)?)?;
     m.add_function(wrap_pyfunction!(runs_of_homozygosity, m)?)?;
@@ -2908,6 +3529,16 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(polygenic_score, m)?)?;
     m.add_function(wrap_pyfunction!(count_reads, m)?)?;
     m.add_function(wrap_pyfunction!(differential_expression, m)?)?;
+    m.add_function(wrap_pyfunction!(gene_set_test, m)?)?;
+    m.add_function(wrap_pyfunction!(genotype_association, m)?)?;
+    m.add_function(wrap_pyfunction!(association_power, m)?)?;
+    m.add_function(wrap_pyfunction!(build_screen_database, m)?)?;
+    m.add_function(wrap_pyfunction!(describe_screen_database, m)?)?;
+    m.add_function(wrap_pyfunction!(contaminant_screen, m)?)?;
+    m.add_function(wrap_pyfunction!(build_transcript_index, m)?)?;
+    m.add_function(wrap_pyfunction!(transcript_index_info, m)?)?;
+    m.add_function(wrap_pyfunction!(quantify_samples, m)?)?;
+    m.add_function(wrap_pyfunction!(explain_pseudoalignment, m)?)?;
     m.add_function(wrap_pyfunction!(crispr_count, m)?)?;
     m.add_function(wrap_pyfunction!(crispr_test, m)?)?;
     m.add_function(wrap_pyfunction!(sketch_references, m)?)?;

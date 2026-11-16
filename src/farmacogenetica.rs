@@ -20,7 +20,7 @@ use crate::{externo, indice, nomes, referencia};
 pub use pgx_bam::BamGenesBundle;
 
 pub const ENGINE_NAME: &str = "mmgen-pgx";
-pub const ENGINE_VERSION: &str = "1.1.0";
+pub const ENGINE_VERSION: &str = "1.2.0";
 pub const SCHEMA_VERSION: &str = "1";
 pub const DEFAULT_BUNDLE_VERSION: &str = "cpic-v1.61.0";
 
@@ -32,6 +32,59 @@ pub struct PgxOptions {
     pub bam: Option<String>,
     pub reference: Option<String>,
     pub tables: Option<String>,
+    /// The person's ancestry proportions, by 1000 Genomes superpopulation (AFR, AMR,
+    /// EAS, EUR, SAS) or by CPIC population group name: the frequency choice (NAT2)
+    /// weights the groups by them instead of taking their plain mean.
+    pub ancestry: Option<BTreeMap<String, f64>>,
+    /// A reference panel (as `estimate_ancestry` takes) to estimate those proportions
+    /// from the person's VCF, when `ancestry` is not given.
+    pub ancestry_panel: Option<String>,
+}
+
+/// The CPIC population groups each 1000 Genomes superpopulation stands for. The
+/// other CPIC groups (Near Eastern, Oceanian, American) can be given by name.
+const SUPERPOP_GROUPS: &[(&str, &[&str])] = &[
+    ("AFR", &["Sub-Saharan African", "African American/Afro-Caribbean"]),
+    ("AMR", &["Latino"]),
+    ("EAS", &["East Asian"]),
+    ("EUR", &["European"]),
+    ("SAS", &["Central/South Asian"]),
+];
+const CPIC_GROUPS: &[&str] = &[
+    "African American/Afro-Caribbean", "American", "Central/South Asian", "East Asian", "European", "Latino",
+    "Near Eastern", "Oceanian", "Sub-Saharan African",
+];
+
+/// Weights by CPIC group from ancestry proportions (superpopulation codes or CPIC
+/// group names; normalized to sum 1). A superpopulation's share is split evenly
+/// over its CPIC groups.
+pub fn ancestry_group_weights(ancestry: &BTreeMap<String, f64>) -> Result<BTreeMap<String, f64>, String> {
+    let mut w: BTreeMap<String, f64> = BTreeMap::new();
+    for (k, &v) in ancestry {
+        if !v.is_finite() || v < 0.0 {
+            return Err(format!("ancestry: the proportion of {k:?} is {v}; proportions are numbers from 0 to 1."));
+        }
+        if let Some((_, groups)) = SUPERPOP_GROUPS.iter().find(|(code, _)| code.eq_ignore_ascii_case(k)) {
+            for g in groups.iter() {
+                *w.entry(g.to_string()).or_insert(0.0) += v / groups.len() as f64;
+            }
+        } else if let Some(g) = CPIC_GROUPS.iter().find(|g| g.eq_ignore_ascii_case(k)) {
+            *w.entry(g.to_string()).or_insert(0.0) += v;
+        } else {
+            return Err(format!(
+                "ancestry: {k:?} is neither a 1000 Genomes superpopulation (AFR, AMR, EAS, EUR, SAS) nor a CPIC group ({}).",
+                CPIC_GROUPS.join(", ")
+            ));
+        }
+    }
+    let total: f64 = w.values().sum();
+    if total <= 0.0 {
+        return Err("ancestry: the proportions add up to zero.".to_string());
+    }
+    for v in w.values_mut() {
+        *v /= total;
+    }
+    Ok(w)
 }
 
 /// Output produced by [`run`].
@@ -1354,6 +1407,7 @@ fn format_pos_list(gene: &GeneDef, missing_idxs: &[usize]) -> String {
 }
 
 /// Evaluate one gene using exact haplotype/diplotype matching (`star_allele` or `variant_genotype`).
+#[allow(clippy::too_many_arguments)]
 fn call_combinatorial_gene(
     gene: &GeneDef,
     obs: &[PosObservation],
@@ -1362,6 +1416,7 @@ fn call_combinatorial_gene(
     pheno_table: Option<&GenePhenotypeTable>,
     method: &str,
     haploid: bool,
+    group_weights: Option<&BTreeMap<String, f64>>,
 ) -> GeneOutcome {
     let total = gene.positions.len();
     let read = obs.iter().filter(|o| o.origin != "missing").count();
@@ -1550,7 +1605,7 @@ fn call_combinatorial_gene(
         };
         let (pheno, act) = lookup_phenotype_and_score(gene, &haps, pheno_table);
         let score = haps.iter().map(|a| allele_score(a, &read_mask, read)).sum();
-        let freq = diplotype_frequency(a1, a2_opt);
+        let freq = diplotype_frequency(a1, a2_opt, group_weights);
         let sk = star_sort_key(&a1.name, a1.is_reference);
         cands.push(Cand { dip, pheno, act, h1: Some(a1.name.clone()), h2: a2_opt.map(|x| x.name.clone()), sk, score, freq });
     }
@@ -1618,9 +1673,16 @@ fn call_combinatorial_gene(
             Some((d, s)) if s > top_score => format!(" By score alone, {d} (score {s}) would be chosen."),
             _ => String::new(),
         };
+        let how = match group_weights {
+            Some(w) => format!(
+                "the CPIC population groups weighted by the person's ancestry: {}",
+                w.iter().filter(|(_, v)| **v >= 0.005).map(|(k, v)| format!("{k} {v:.2}")).collect::<Vec<_>>().join(", ")
+            ),
+            None => "the mean over the CPIC population groups".to_string(),
+        };
         notes.push(format!(
             "Chosen by population frequency, as PharmCAT does for {}: {dip_joined} is the most common of the diplotypes that fit \
-             (expected frequency {}, the mean over the CPIC population groups; the next candidate {}).{by_score_note}",
+             (expected frequency {}, {how}; the next candidate {}).{by_score_note}",
             gene.gene,
             format_freq(top_freq),
             format_freq(rest[0].freq)
@@ -1690,10 +1752,11 @@ fn call_combinatorial_gene(
 
 /// Expected frequency of a diplotype: in each CPIC population group with a frequency for
 /// both alleles, 2·f(a)·f(b) (f(a)² when a = b; f(a) for a haploid call), then the mean over
-/// those groups. `None` when no group has both.
-fn diplotype_frequency(a: &AlleleDef, b: Option<&AlleleDef>) -> Option<f64> {
+/// those groups, or, with the person's ancestry, the mean weighted by it (renormalized over
+/// the groups that have both frequencies). `None` when no (weighted) group has both.
+fn diplotype_frequency(a: &AlleleDef, b: Option<&AlleleDef>, weights: Option<&BTreeMap<String, f64>>) -> Option<f64> {
     let mut sum = 0.0;
-    let mut n = 0usize;
+    let mut total_weight = 0.0;
     for (pop, fa) in &a.pop_freqs {
         let v = match b {
             None => *fa,
@@ -1703,10 +1766,14 @@ fn diplotype_frequency(a: &AlleleDef, b: Option<&AlleleDef>) -> Option<f64> {
                 None => continue,
             },
         };
-        sum += v;
-        n += 1;
+        let w = match weights {
+            Some(ws) => ws.get(pop).copied().unwrap_or(0.0),
+            None => 1.0,
+        };
+        sum += w * v;
+        total_weight += w;
     }
-    (n > 0).then(|| sum / n as f64)
+    (total_weight > 0.0).then(|| sum / total_weight)
 }
 
 fn format_freq(f: Option<f64>) -> String {
@@ -2237,6 +2304,7 @@ fn evaluate_gene(
     callable: Option<&CallableBed>,
     pheno_table: Option<&GenePhenotypeTable>,
     genome: &mut Option<referencia::Genoma>,
+    group_weights: Option<&BTreeMap<String, f64>>,
 ) -> Result<GeneOutcome, String> {
     let (obs, evidence, notes) = observe_gene_positions(gene, vcf_obs, callable, genome)?;
     let method = format!("vcf_{}", gene.model);
@@ -2300,7 +2368,7 @@ fn evaluate_gene(
 
     let mut outcome = match gene.model.as_str() {
         "variant_activity" | "variant_status" => call_variant_model_gene(gene, &obs, evidence, notes, pheno_table, &method),
-        _ => call_combinatorial_gene(gene, &obs, evidence, notes, pheno_table, &method, haploid),
+        _ => call_combinatorial_gene(gene, &obs, evidence, notes, pheno_table, &method, haploid, group_weights),
     };
     outcome.missing_key_positions = missing_keys
         .iter()
@@ -2942,6 +3010,47 @@ pub fn run(vcf: &str, output_dir: &str, opts: &PgxOptions) -> Result<PgxRunResul
 
     let windows = build_query_windows(&bundle.genes.genes, &bundle.traits.traits);
     let vcf_obs = read_vcf_observations(vcf, opts.sample.as_deref(), &windows)?;
+
+    // The person's ancestry, when given or estimated with a panel: the frequency choice
+    // (NAT2) weights the CPIC population groups by it.
+    let mut ancestry_warnings: Vec<String> = Vec::new();
+    let (ancestry_props, ancestry_source): (Option<BTreeMap<String, f64>>, Option<String>) = match (&opts.ancestry, &opts.ancestry_panel) {
+        (Some(a), _) => (Some(a.clone()), Some("given".to_string())),
+        (None, Some(panel)) => {
+            let person = crate::ancestralidade::Person {
+                vcf: vcf.to_string(),
+                sample: Some(vcf_obs.sample.clone()),
+                callable: opts.callable_bed.clone(),
+            };
+            let aopt = crate::ancestralidade::AncestryOptions { bootstrap: 0, ..Default::default() };
+            match crate::ancestralidade::estimate_ancestry(panel, &[person], &aopt) {
+                Ok(res) if !res.is_empty() => {
+                    let p: BTreeMap<String, f64> = res[0].groups.iter().cloned().zip(res[0].proportions.iter().copied()).collect();
+                    (Some(p), Some(format!("estimated with the panel {panel}")))
+                }
+                Ok(_) => (None, None),
+                Err(e) => {
+                    ancestry_warnings.push(format!(
+                        "The ancestry could not be estimated with {panel} ({e}); NAT2 is chosen with the plain mean of the CPIC groups."
+                    ));
+                    (None, None)
+                }
+            }
+        }
+        (None, None) => (None, None),
+    };
+    let group_weights = match &ancestry_props {
+        Some(p) => match ancestry_group_weights(p) {
+            Ok(w) => Some(w),
+            Err(e) if ancestry_source.as_deref() == Some("given") => return Err(e),
+            Err(e) => {
+                // A panel whose groups are not superpopulations or CPIC groups.
+                ancestry_warnings.push(format!("{e} NAT2 is chosen with the plain mean of the CPIC groups."));
+                None
+            }
+        },
+        None => None,
+    };
     let trait_outcomes = evaluate_traits(&bundle.traits.traits, &vcf_obs, callable.as_ref(), &mut genome)?;
 
     let mut outcomes = Vec::with_capacity(bundle.genes.genes.len());
@@ -2952,6 +3061,7 @@ pub fn run(vcf: &str, output_dir: &str, opts: &PgxOptions) -> Result<PgxRunResul
             callable.as_ref(),
             bundle.phenotypes.genes.get(&g.gene),
             &mut genome,
+            group_weights.as_ref(),
         )?);
     }
     outcomes.sort_by(|a, b| a.gene.cmp(&b.gene));
@@ -3053,6 +3163,7 @@ pub fn run(vcf: &str, output_dir: &str, opts: &PgxOptions) -> Result<PgxRunResul
             "No callable_bed was provided; absent positions were treated as missing rather than homozygous reference.".to_string(),
         );
     }
+    warnings.extend(ancestry_warnings.iter().cloned());
     if let Some(ref bn) = bam_note {
         warnings.push(bn.clone());
     }
@@ -3129,6 +3240,12 @@ pub fn run(vcf: &str, output_dir: &str, opts: &PgxOptions) -> Result<PgxRunResul
     root.insert("report_html".into(), json!(report_html_path));
     root.insert("text".into(), json!(text_summary));
     root.insert("x_assembly".into(), json!("GRCh38"));
+    if let (Some(p), Some(w)) = (&ancestry_props, &group_weights) {
+        root.insert(
+            "x_ancestry".into(),
+            json!({"source": ancestry_source, "proportions": p, "cpic_group_weights": w}),
+        );
+    }
     root.insert("x_files".into(), serde_json::Value::Object(x_files));
     root.insert(
         "x_summary".into(),
@@ -3162,4 +3279,283 @@ pub fn run(vcf: &str, output_dir: &str, opts: &PgxOptions) -> Result<PgxRunResul
         .map_err(|e| format!("{report_html_path}: error writing report.html ({e})."))?;
 
     Ok(PgxRunResult { result_json_path, report_html_path, json_text })
+}
+
+// ---------------------------------------------------------------------------
+// A group of people and the medicines of a protocol
+// ---------------------------------------------------------------------------
+
+/// Options for [`run_cohort`].
+#[derive(Debug, Clone, Default)]
+pub struct CohortOptions {
+    /// One callable BED per VCF (`None` for a VCF without one); a single entry is
+    /// used for every VCF.
+    pub callable_beds: Vec<Option<String>>,
+    /// Only these samples (by name), from whichever VCF holds them.
+    pub samples: Option<Vec<String>>,
+    pub reference: Option<String>,
+    pub tables: Option<String>,
+    /// The medicines of the protocol (case does not matter); `None`: every medicine
+    /// with a recommendation for someone.
+    pub drugs: Option<Vec<String>>,
+    /// A reference panel to estimate each person's ancestry (for the frequency choice of NAT2).
+    pub ancestry_panel: Option<String>,
+}
+
+/// The sample names of a VCF (the columns after FORMAT).
+pub fn vcf_samples(vcf: &str) -> Result<Vec<String>, String> {
+    if !Path::new(vcf).exists() {
+        return Err(format!("{vcf}: VCF file does not exist."));
+    }
+    let reader = externo::abre_leitura(vcf)?;
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("{vcf}: {e}"))?;
+        if line.starts_with("#CHROM") {
+            return Ok(line.trim_end_matches(['\r', '\n']).split('\t').skip(9).map(ToString::to_string).collect());
+        }
+        if !line.starts_with('#') {
+            break;
+        }
+    }
+    Err(format!("{vcf}: no #CHROM header line."))
+}
+
+fn tsv_field(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
+}
+
+/// Runs `mmgen-pgx` for every person of one or more VCFs (one folder each, inside
+/// `output_dir`) and writes two tables: `cohort_genes.tsv` (person x gene) and
+/// `cohort_medicines.tsv` (person x medicine of the protocol, with the status of
+/// each: a recommendation, the gene that was not called, or no guideline in the
+/// tables). Returns JSON.
+pub fn run_cohort(vcfs: &[String], output_dir: &str, opts: &CohortOptions) -> Result<String, String> {
+    if vcfs.is_empty() {
+        return Err("No VCF given: pass one VCF per person, or a multi-sample VCF.".to_string());
+    }
+    if opts.callable_beds.len() > 1 && opts.callable_beds.len() != vcfs.len() {
+        return Err(format!(
+            "{} callable BEDs for {} VCFs: give one BED for all, or one per VCF (None for a VCF without one).",
+            opts.callable_beds.len(),
+            vcfs.len()
+        ));
+    }
+    let bundle = load_bundle(opts.tables.as_deref())?;
+    std::fs::create_dir_all(output_dir).map_err(|e| format!("{output_dir}: cannot create output directory ({e})."))?;
+
+    // Which genes each medicine's guidelines look at (from the tables).
+    let mut drug_genes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for rec in &bundle.guidelines.recommendations {
+        drug_genes.entry(rec.drug.to_ascii_lowercase()).or_default().extend(rec.genes.iter().cloned());
+    }
+    let requested: Option<Vec<String>> = opts.drugs.as_ref().map(|d| {
+        let mut v: Vec<String> = Vec::new();
+        for x in d {
+            let t = x.trim().to_ascii_lowercase();
+            if !t.is_empty() && !v.contains(&t) {
+                v.push(t);
+            }
+        }
+        v
+    });
+    let without_guideline: Vec<String> =
+        requested.iter().flatten().filter(|d| !drug_genes.contains_key(*d)).cloned().collect();
+
+    // The people: (name, vcf, sample in the vcf, callable bed).
+    let mut people: Vec<(String, String, String, Option<String>)> = Vec::new();
+    let mut names_seen: HashSet<String> = HashSet::new();
+    for (i, vcf) in vcfs.iter().enumerate() {
+        let bed = match opts.callable_beds.len() {
+            0 => None,
+            1 => opts.callable_beds[0].clone(),
+            _ => opts.callable_beds[i].clone(),
+        };
+        for s in vcf_samples(vcf)? {
+            if let Some(want) = &opts.samples {
+                if !want.contains(&s) {
+                    continue;
+                }
+            }
+            let mut name = s.clone();
+            if !names_seen.insert(name.clone()) {
+                let stem = Path::new(vcf).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                name = format!("{s} ({stem})");
+                names_seen.insert(name.clone());
+            }
+            people.push((name, vcf.clone(), s, bed.clone()));
+        }
+    }
+    if people.is_empty() {
+        return Err(match &opts.samples {
+            Some(w) => format!("None of the samples {w:?} is in the VCFs."),
+            None => "The VCFs have no sample columns.".to_string(),
+        });
+    }
+
+    let mut gene_rows: Vec<serde_json::Value> = Vec::new();
+    let mut drug_rows: Vec<serde_json::Value> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut per_person: Vec<serde_json::Value> = Vec::new();
+    let mut data_version = String::new();
+    let mut genes_tsv = String::from(
+        "person\tvcf\tgene\tcalled\tdiplotype\tphenotype\tactivity_score\tchosen_by\talso_possible_changing\tnot_called_reason\n",
+    );
+    let mut drugs_tsv = String::from("person\tmedicine\tstatus\tgenes\tphenotype\trecommendation\tstrength\tsource\n");
+    for (k, (name, vcf, sample, bed)) in people.iter().enumerate() {
+        let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).collect();
+        let dir = Path::new(output_dir).join(format!("{:03}_{safe}", k + 1)).to_string_lossy().to_string();
+        let r = run(
+            vcf,
+            &dir,
+            &PgxOptions {
+                sample: Some(sample.clone()),
+                callable_bed: bed.clone(),
+                bam: None,
+                reference: opts.reference.clone(),
+                tables: opts.tables.clone(),
+                ancestry: None,
+                ancestry_panel: opts.ancestry_panel.clone(),
+            },
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(&r.json_text).map_err(|e| format!("{name}: {e}"))?;
+        data_version = v["data_version"].as_str().unwrap_or("").to_string();
+        for w in v["warnings"].as_array().into_iter().flatten().filter_map(|w| w.as_str()) {
+            warnings.push(format!("{name}: {w}"));
+        }
+        let mut called: HashMap<String, (String, String)> = HashMap::new();
+        let mut not_called: HashSet<String> = HashSet::new();
+        let genes = v["genes"].as_array().cloned().unwrap_or_default();
+        for g in &genes {
+            let gene = g["gene"].as_str().unwrap_or("").to_string();
+            let is_called = g["called"].as_bool().unwrap_or(false);
+            let dip = g["diplotype"].as_str().unwrap_or("").to_string();
+            let pheno = g["phenotype"].as_str().unwrap_or("").to_string();
+            if is_called {
+                called.insert(gene.clone(), (dip.clone(), pheno.clone()));
+            } else {
+                not_called.insert(gene.clone());
+            }
+            let changing: Vec<String> = g["x_alternatives"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|a| a["changes_phenotype"].as_bool() == Some(true) || a["changes_recommendation"].as_bool() == Some(true))
+                .map(|a| format!("{} ({})", a["diplotype"].as_str().unwrap_or(""), a["phenotype"].as_str().unwrap_or("-")))
+                .collect();
+            let act = g["activity_score"].as_f64();
+            genes_tsv.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                tsv_field(name),
+                tsv_field(vcf),
+                gene,
+                is_called,
+                tsv_field(&dip),
+                tsv_field(&pheno),
+                act.map(format_activity_score).unwrap_or_default(),
+                g["x_chosen_by"].as_str().unwrap_or(""),
+                tsv_field(&changing.join("; ")),
+                tsv_field(g["not_called_reason"].as_str().unwrap_or(""))
+            ));
+            gene_rows.push(json!({
+                "person": name, "gene": gene, "called": is_called, "diplotype": g["diplotype"], "phenotype": g["phenotype"],
+                "activity_score": g["activity_score"], "chosen_by": g["x_chosen_by"], "also_possible_changing": changing,
+                "not_called_reason": g["not_called_reason"],
+            }));
+        }
+        // The person's recommendations, kept for the medicines asked for (or all).
+        let drugs = v["drugs"].as_array().cloned().unwrap_or_default();
+        let mut covered: HashSet<String> = HashSet::new();
+        for d in &drugs {
+            let drug = d["drug"].as_str().unwrap_or("").to_ascii_lowercase();
+            if let Some(req) = &requested {
+                if !req.contains(&drug) {
+                    continue;
+                }
+            }
+            covered.insert(drug.clone());
+            let genes_of: Vec<String> = d["genes"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+            drugs_tsv.push_str(&format!(
+                "{}\t{}\trecommendation\t{}\t{}\t{}\t{}\t{}\n",
+                tsv_field(name),
+                drug,
+                genes_of.join(","),
+                tsv_field(d["x_phenotype"].as_str().unwrap_or("")),
+                tsv_field(d["recommendation"].as_str().unwrap_or("")),
+                tsv_field(d["strength"].as_str().unwrap_or("")),
+                tsv_field(d["source"].as_str().unwrap_or(""))
+            ));
+            drug_rows.push(json!({
+                "person": name, "medicine": drug, "status": "recommendation", "genes": genes_of,
+                "phenotype": d["x_phenotype"], "recommendation": d["recommendation"], "strength": d["strength"], "source": d["source"],
+            }));
+        }
+        // The medicines asked for without a recommendation for this person, and why.
+        for drug in requested.iter().flatten() {
+            if covered.contains(drug) {
+                continue;
+            }
+            let (status, why) = match drug_genes.get(drug) {
+                None => ("no guideline", "no CPIC guideline for this medicine in the tables (check the spelling)".to_string()),
+                Some(gs) => {
+                    let missing: Vec<&String> = gs.iter().filter(|g| !called.contains_key(*g)).collect();
+                    if missing.is_empty() {
+                        ("no recommendation", "the genes were called, but no recommendation matches these phenotypes".to_string())
+                    } else {
+                        let needs_reads = missing.iter().any(|g| matches!(g.as_str(), "CYP2D6" | "HLA-A" | "HLA-B"));
+                        let mut why = format!(
+                            "not called for this person: {}",
+                            missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        );
+                        if needs_reads {
+                            why.push_str(" (CYP2D6 and HLA need the person's reads, a BAM, or an outside call)");
+                        }
+                        ("gene not called", why)
+                    }
+                }
+            };
+            let genes_of: Vec<String> = drug_genes.get(drug).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+            drugs_tsv.push_str(&format!("{}\t{drug}\t{status}\t{}\t\t{}\t\t\n", tsv_field(name), genes_of.join(","), tsv_field(&why)));
+            drug_rows.push(json!({
+                "person": name, "medicine": drug, "status": status, "genes": genes_of, "phenotype": null,
+                "recommendation": why, "strength": null, "source": null,
+            }));
+        }
+        per_person.push(json!({
+            "person": name, "vcf": vcf, "sample": sample, "callable_bed": bed, "output_dir": dir,
+            "genes_called": called.len(), "genes_not_called": not_called.len(),
+            "ancestry": v["x_ancestry"]["proportions"],
+            "result_json": r.result_json_path, "report_html": r.report_html_path,
+        }));
+    }
+
+    let genes_path = Path::new(output_dir).join("cohort_genes.tsv").to_string_lossy().to_string();
+    let drugs_path = Path::new(output_dir).join("cohort_medicines.tsv").to_string_lossy().to_string();
+    std::fs::write(&genes_path, genes_tsv).map_err(|e| format!("{genes_path}: {e}"))?;
+    std::fs::write(&drugs_path, drugs_tsv).map_err(|e| format!("{drugs_path}: {e}"))?;
+
+    let n_rec = drug_rows.iter().filter(|r| r["status"] == "recommendation").count();
+    let mut text = format!(
+        "{} {} ({}) on {} person(s): {} recommendation(s){}.",
+        ENGINE_NAME,
+        ENGINE_VERSION,
+        data_version,
+        people.len(),
+        n_rec,
+        match &requested {
+            Some(r) => format!(" for the {} medicine(s) asked for", r.len()),
+            None => String::new(),
+        }
+    );
+    if !without_guideline.is_empty() {
+        text.push_str(&format!(" No CPIC guideline in the tables for: {}.", without_guideline.join(", ")));
+    }
+    let out = json!({
+        "engine": ENGINE_NAME, "engine_version": ENGINE_VERSION, "data_version": data_version,
+        "people": per_person, "genes": gene_rows, "medicines": drug_rows,
+        "medicines_requested": requested, "medicines_without_guideline": without_guideline,
+        "files": {"genes": genes_path, "medicines": drugs_path},
+        "warnings": warnings, "text": text,
+    });
+    serde_json::to_string(&out).map_err(|e| format!("cohort result: {e}"))
 }

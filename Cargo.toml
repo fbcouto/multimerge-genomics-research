@@ -32,7 +32,7 @@ cc = "1.0"
 
 [package]
 name = "multimerge_genomics"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 description = "Genomics tools for files of any size: validate, sort, index and query VCF/BED/GFF/SAM/BAM; interval operations; VCF filter and normalization; FASTQ quality report and trimming; k-mer counting; BGZF, BAM and Parquet in and out; optional CUDA acceleration."
 license = "Apache-2.0"

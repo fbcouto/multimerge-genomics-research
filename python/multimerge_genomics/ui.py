@@ -39,7 +39,7 @@ def command(port: int = 2718, host: str = "127.0.0.1", headless: bool = False, p
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="mmgen-ui", description="MMGEN's web interface (29 screens, with ready-made examples).")
+    ap = argparse.ArgumentParser(prog="mmgen-ui", description="MMGEN's web interface (31 screens, with ready-made examples).")
     ap.add_argument("--folder", default=os.getcwd(),
                     help="the folder whose files the screens list and where results are written (default: the current one)")
     ap.add_argument("--port", type=int, default=2718)

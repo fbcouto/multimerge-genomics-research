@@ -46,6 +46,11 @@ SCREENS = [
     (28, "tmb", "Tumor Mutational Burden (TMB)", "Research and microbiology", "somatic variants per megabase of the sequenced region"),
     (29, "ai", "AI Assistant", "AI assistant", "describe a problem and get a path through the tools with a script; an agent that "
      "runs the tools with the person's approval; the session saved as a Python script"),
+    (30, "assoc", "Genotype & Outcome: Association and Power", "Human genetics",
+     "test variants against an outcome in a cohort (linear, logistic, Firth; covariates, FDR, permutations); study power"),
+    (31, "contam", "Contaminant Screening: Adventitious Agents", "Research and microbiology",
+     "viruses, bacteria, mycoplasmas and fungi in the reads of a biological material, with the host set aside, blanks, "
+     "spike-ins, breadth of coverage and a traceable report"),
 ]
 SCREEN_BY_PAGE = {s[1]: s for s in SCREENS}
 
@@ -66,10 +71,10 @@ _PAGE_OF = {
     "relatedness": "kin", "trio_analysis": "kin",
     "build_panel": "anc", "panel_from_frequencies": "anc", "estimate_ancestry": "anc", "polygenic_score": "anc",
     "clinvar_findings": "findings", "gene_regions": "findings",
-    "pharmcat_prepare": "pgx", "pharmcat_run": "pgx", "pgx_run": "pgx", "mmgen_pgx_run": "pgx",
+    "pharmcat_prepare": "pgx", "pharmcat_run": "pgx", "pgx_run": "pgx", "mmgen_pgx_run": "pgx", "pgx_cohort": "pgx",
     "genetic_sex": "chrom", "runs_of_homozygosity": "chrom",
     "variant_lookup": "lookup", "pileup": "lookup",
-    "count_reads": "rnaseq", "differential_expression": "rnaseq",
+    "count_reads": "rnaseq", "differential_expression": "rnaseq", "gene_set_test": "rnaseq",
     "crispr_count": "crispr", "crispr_test": "crispr",
     "sketch_references": "meta", "gather": "meta", "classify_reads": "meta",
     "find_resistance_genes": "amr",
@@ -78,6 +83,10 @@ _PAGE_OF = {
     "amplicon_asvs": "amplicon", "train_classifier": "amplicon", "classify_asvs": "amplicon", "alpha_diversity": "amplicon",
     "beta_diversity": "amplicon", "taxa_composition": "amplicon",
     "tumor_mutational_burden": "tmb",
+    "genotype_association": "assoc", "association_power": "assoc",
+    "build_screen_database": "contam", "describe_screen_database": "contam", "contaminant_screen": "contam",
+    "build_transcript_index": "rnaseq", "transcript_index_info": "rnaseq", "quantify_samples": "rnaseq",
+    "explain_pseudoalignment": "rnaseq",
 }
 # Functions that pass raw bytes between calls: a person runs them from the
 # interface; an agent or an MCP client cannot call them with JSON.
@@ -85,9 +94,9 @@ _BYTES = {
     "read_fasta_batch", "read_fastq_batch", "minhash_signatures", "sort_merge_bytes", "read_and_merge_kmer_files", "decode_kmers",
     "build_debruijn_graph", "assemble_debruijn", "build_bloom_filter", "extract_mutations", "decode_kmers_128", "test_giant_kmer",
 }
-# Human-genome tools: their results describe a person (screens 16-21, 28).
-_HUMAN_PAGES = {"kin", "anc", "findings", "pgx", "chrom", "lookup", "tmb"}
-_NOT_PERSONAL = {"gene_regions"}  # gene coordinates from an annotation, no person in it
+# Human-genome tools: their results describe a person (screens 16-21, 28, 30).
+_HUMAN_PAGES = {"kin", "anc", "findings", "pgx", "chrom", "lookup", "tmb", "assoc"}
+_NOT_PERSONAL = {"gene_regions", "association_power"}  # gene coordinates from an annotation, no person in it
 
 # Parameters that name a file the function writes.
 OUTPUT_PARAMS = {
@@ -99,11 +108,31 @@ OUTPUT_PARAMS = {
 _LISTS = {
     "paths", "vcfs", "genomes", "inputs", "bams", "fastqs", "samples", "databases", "a", "b", "variants", "groups", "af_fields",
     "an_fields", "treatment", "control", "sequences", "dna_sequences", "genes", "regions", "names", "labels", "callable_beds",
-    "exclude", "classes", "control_sgrnas", "control_genes", "rank_names", "host", "offsets",
+    "exclude", "classes", "control_sgrnas", "control_genes", "rank_names", "host", "offsets", "drugs",
+    "covariates", "categorical", "ids", "kinds", "negative_controls",
+}
+# Parameters that take something other than paths or names: their own schema.
+_PATHS = {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]}
+_SCHEMA_OVERRIDES = {
+    ("quantify_samples", "samples"): {
+        "type": "array", "description": "one object per sample (r2 for paired-end; condition writes samples.tsv)",
+        "items": {"type": "object", "properties": {"name": {"type": "string"}, "r1": {"type": "string"}, "r2": {"type": "string"},
+                                                   "condition": {"type": "string"}}, "required": ["r1"]}},
+    ("contaminant_screen", "samples"): {
+        "type": "array", "description": "one object per sample; r1 and r2 a path or a list of lanes (r2 for paired-end)",
+        "items": {"type": "object", "properties": {"name": {"type": "string"}, "r1": _PATHS, "r2": _PATHS}, "required": ["name", "r1"]}},
+    ("contaminant_screen", "spike_ins"): {
+        "anyOf": [{"type": "string", "description": "a TSV: sample, organism, amount, unit"},
+                  {"type": "array", "items": {"type": "object", "properties": {
+                      "sample": {"type": "string"}, "organism": {"type": "string"}, "amount": {"type": "number"},
+                      "unit": {"type": "string"}}, "required": ["organism", "amount"]}}]},
+    ("build_screen_database", "references"): {
+        "type": "array", "description": "one item per genome: a FASTA path, or a list of paths (one genome in several files)",
+        "items": _PATHS},
 }
 _NUMBERS = re.compile(r"^(min_|max_|k$|memory_mb$|seed$|scaled$|threshold|rarefy|curve_|permutations$|bootstrap|block_bp$|window_|"
                       r"distance$|left$|right$|both$|padding$|overlap$|trunc_len|mismatches$|three_prime|alpha$|lfc_|quality_cutoff|"
-                      r"phred_offset$|size_mb$|num_hashes$|length$|bootstraps$|curve_steps$|thin_bp$)")
+                      r"phred_offset$|size_mb$|num_hashes$|length$|bootstraps$|curve_steps$|thin_bp$|allele_freq$|effect$|n$|fragment_length$|fragment_sd$)")
 
 
 def _schema_for(name: str, default) -> dict:
@@ -147,7 +176,7 @@ def catalog(include_bytes: bool = True) -> list[dict]:
             if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
                 continue
             default = None if p.default is inspect.Parameter.empty else p.default
-            props[p.name] = _schema_for(p.name, default)
+            props[p.name] = _SCHEMA_OVERRIDES.get((name, p.name)) or _schema_for(p.name, default)
             if p.default is inspect.Parameter.empty:
                 required.append(p.name)
             if p.name in OUTPUT_PARAMS:

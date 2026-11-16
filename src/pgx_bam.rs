@@ -1173,7 +1173,7 @@ fn call_cyp2d6_bam_vcf(
 
     // Case 3: Diploid (CN=2) or Gene Duplication (CN>=3)
     let Some((a1, a2, used_phasing)) = resolve_cyp2d6_diploid(cyp, &obs_list, &pool.fragments) else {
-        let vcf_only = call_combinatorial_gene(gene, &obs_list, evidence.clone(), notes.clone(), pheno_table, "vcf_bam", false);
+        let vcf_only = call_combinatorial_gene(gene, &obs_list, evidence.clone(), notes.clone(), pheno_table, "vcf_bam", false, None);
         return Ok(GeneOutcome {
             source: "vcf+bam".to_string(),
             copy_number: Some(cn_whole_raw.round().clamp(1.0, 8.0)),

@@ -114,7 +114,7 @@ helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
-POOL = dict(helpers[1], **examples[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl)
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
 
 # The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
 # no key, nothing leaves the machine. It answers by the kind of request.
@@ -631,6 +631,8 @@ SCREENS = {
     "findings": (ui.findings_page_form, ui.findings_page_backend, "form_findings", "findings_task"),
     "pgx": (ui.pgx_page_form, ui.pgx_page_backend, "form_pgx", "pgx_engine"),
     "lookup": (ui.lookup_page_form, ui.lookup_page_backend, "form_lookup", "lookup_task"),
+    "assoc": (ui.assoc_page_form, ui.assoc_page_backend, "form_assoc", "assoc_task"),
+    "contam": (ui.contam_page_form, ui.contam_page_backend, "form_contam", "contam_task"),
     "kin": (ui.kin_page_form, ui.kin_page_backend, "form_kin", "kin_task"),
     "chrom": (ui.chrom_page_form, ui.chrom_page_backend, "form_chrom", "chrom_task"),
     "anc": (ui.anc_page_form, ui.anc_page_backend, "form_anc", "anc_task"),
@@ -732,8 +734,31 @@ EXPECT = {
                                                 "IPD-IMGT/HLA 3.66.0"],
     ("pgx", "MMGEN's engine (mmgen-pgx)", 2): ["CYP2C19", "*1/*2", "also possible", "*2/*35 (Poor Metabolizer)",
                                                 "was chosen as the highest-scoring diplotype"],
+    ("pgx", "A group of people and a protocol's medicines (mmgen-pgx)", 0): [
+        "Pharmacogenomics of a group", "HG001", "HG007", "No CPIC guideline in the tables for", "gabapentin", "enoxaparin",
+        "gene not called", "Each medicine for each person", "clopidogrel", "Each gene for each person", "Each person's ancestry"],
     ("lookup", "Look up variants in relatives (cascade testing)", 0): ["carries it", "does not carry it"],
     ("lookup", "Allele counts at a position (BAM)", 0): ["Depth"],
+    ("assoc", "Test variants against an outcome", 0): ["People analysed", "115", "2 genotyped but not in the table", "1 without age",
+                                                       "rs12190259", "Effect and significance of each allele", "What this study can detect"],
+    ("assoc", "Test variants against an outcome", 1): ["rs12190259", "rs2030324"],
+    ("assoc", "Test variants against an outcome", 2): ["yes is the event; 74 with it, 43 without", "firth 1", "odds ratio [95% CI]",
+                                                       "with the rarer outcome"],
+    ("assoc", "Test variants against an outcome", 3): ["p (family-wise)", "Freedman-Lane"],
+    ("assoc", "Study power: how many people?", 0): ["People needed for 80% power", "164", "none in the range searched", "simulated"],
+    ("assoc", "Study power: how many people?", 1): ["Power against the size of the study", "237"],
+    ("assoc", "Study power: how many people?", 2): ["11,025", "5.00e-08"],
+    ("rnaseq", "Build a transcript index", 0): ["Transcript index", "269", "140", "equivalence classes"],
+    ("rnaseq", "Quantify from FASTQ (pseudoalignment)", 0): ["Quantified from the reads", "100.0%", "control_1", "treated_3",
+                                                             "gene_counts.tsv", "The 15 most expressed genes", "(estimated)"],
+    ("rnaseq", "Quantify from FASTQ (pseudoalignment)", 1): ["Quantified from the reads", "(given)", "single"],
+    ("rnaseq", "See how one read is pseudoaligned", 0): ["unique", "DEMO0080-202", "Gene80", "each k-mer"],
+    ("rnaseq", "Differential expression", 2): ["Gene7", "Gene19", "Gene33", "Gene12", "Gene48", "Gene71"],
+    ("contam", "Screen samples for adventitious agents", 0): ["🔴 detected", "⚪ background", "🟡 below threshold", "✅ recovered",
+                                                              "Synthetic mycoplasma", "concentrated", "reagent_blank (negative control)"],
+    ("contam", "Screen samples for adventitious agents", 1): ["Synthetic reagent bacterium", "screen_without_blank.html",
+                                                              "No negative control was given"],
+    ("contam", "Build a screening database", 0): ["Screening database", "Synthetic mycoplasma", "minimizers", "host"],
     ("kin", "Relatedness of several people", 0): ["parent and child", "HG002"],
     ("kin", "Trio and paternity test", 0): ["is not excluded", "Combined paternity index"],
     ("kin", "Trio and paternity test", 1): ["is excluded"],
@@ -749,6 +774,8 @@ EXPECT = {
     ("rnaseq", "Count reads per gene", 0): ["Reads counted", "ctrl_1", "treat_2"],
     ("rnaseq", "Differential expression", 0): ["gene03", "gene10", "Volcano plot", "MA plot"],
     ("rnaseq", "Differential expression", 1): ["3,013 up, 2,539 down", "CACNB2", "Volcano plot"],
+    ("rnaseq", "Test gene sets", 0): ["Gene sets", "GLUCOCORTICOID_RESPONSE", "⬆️ up", "HOUSEKEEPING", "competitive"],
+    ("rnaseq", "Test gene sets", 1): ["built-in: spinal_cord_injury", "laminin_receptors", "glial_scar_cspgs", "regeneration_associated"],
     ("crispr", "Count guides in reads", 0): ["Guides counted", "58.1%"],
     ("crispr", "Rank genes (MAGeCK RRA)", 0): ["ACTR8", "Negative selection"],
     ("crispr", "Rank genes (MAGeCK RRA)", 1): ["RPL3", "7,115 genes"],
@@ -777,11 +804,17 @@ EXPECT = {
 }
 # The warnings a form stops with; an example must not hit any of them.
 STOPS = ("Select ", "cannot be", "must be", "Type the", "Type an", "is needed")
+# Words of a stop that are, in these examples, the engine's own warning (what the example shows).
+STOPS_ALLOWED = {("contam", "Screen samples for adventitious agents", 1): {"cannot be"}}
 before = set(os.listdir("."))
 EXAMPLES = examples[1]["EXAMPLES"]
 check("every screen has examples", {p for p, _ in EXAMPLES} == set(SCREENS), sorted({p for p, _ in EXAMPLES} ^ set(SCREENS)))
 for (page, task), items in EXAMPLES.items():
     form_cell, backend_cell, form_name, task_var = SCREENS[page]
+    if page == "pgx" and task.startswith("A group"):
+        backend_cell = ui.pgx_group_backend  # the group has a cell of its own
+    if page == "rnaseq" and task in ("Build a transcript index", "Quantify from FASTQ (pseudoalignment)", "See how one read is pseudoaligned"):
+        backend_cell = ui.rnaseq_fastq_backend  # the tasks that start from the reads
     picker = next(k for k in form_cell.refs if k.endswith("_example"))
     for i, (label, _about, _values) in enumerate(items):
         flat = [x for v in _values.values() for x in (v if isinstance(v, list) else [v])]
@@ -820,7 +853,8 @@ for (page, task), items in EXAMPLES.items():
         page_text = shown(rb)
         missing = [e for e in EXPECT.get((page, task, i), []) if e not in page_text]
         # The engine's own HTML report is embedded at the end: its texts are not the screen's warnings.
-        hit = [s for s in STOPS if s in page_text.split("The engine's full report")[0]]
+        hit = [s for s in STOPS if s in page_text.split("The engine's full report")[0]
+               and s not in STOPS_ALLOWED.get((page, task, i), ())]
         check(name, about_shown and not isinstance(rb, BaseException) and "ERROR" not in page_text and not hit and not missing,
               f"about shown: {about_shown}; stops: {hit}; missing: {missing}; {page_text[:400]}")
 check("the examples write only inside mmgen_examples/", set(os.listdir(".")) - before <= {"mmgen_examples"},

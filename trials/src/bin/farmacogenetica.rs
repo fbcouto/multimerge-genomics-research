@@ -69,6 +69,9 @@ mod indice;
 #[path = "../../../src/referencia.rs"]
 #[allow(dead_code)]
 mod referencia;
+#[path = "../../../src/ancestralidade.rs"]
+#[allow(dead_code)]
+mod ancestralidade;
 #[path = "../../../src/farmacogenetica.rs"]
 mod farmacogenetica;
 
@@ -202,6 +205,24 @@ fn add_mini_cyp2c19(src: &Path, dst: &Path) {
         json!({"name": name, "is_reference": is_ref, "clinical_function": "Normal function", "activity_value": null,
                "activity_label": null, "pop_freqs": f, "variants": vars})
     };
+    // MININAT2W: same layout, frequencies that disagree between groups: *1/*16 is the
+    // common pair in European, *4/*5 in East Asian; their plain means tie (0.25 each).
+    let mut gw = json!({
+        "gene": "MININAT2W", "chrom": "chr11", "model": "star_allele", "ploidy": "diploid",
+        "lookup_method": "PHENOTYPE", "reference_allele": "*1", "diplotype_choice": "frequency",
+        "positions": [], "alleles": [
+            nat_allele("*1", true, json!([]), freqs(0.5, 0.01)),
+            nat_allele("*4", false, json!([{"pos_id": 0, "accepted": ["G"]}]), freqs(0.01, 0.5)),
+            nat_allele("*5", false, json!([{"pos_id": 1, "accepted": ["A"]}]), freqs(0.01, 0.5)),
+            nat_allele("*16", false, json!([{"pos_id": 0, "accepted": ["G"]}, {"pos_id": 1, "accepted": ["A"]}]), freqs(0.5, 0.01)),
+        ],
+    });
+    for (id, p, rs, r, a) in [(0usize, 2000u64, "rs95", "A", "G"), (1, 2100, "rs96", "G", "A")] {
+        let mut v = pos(id, p, rs, r, a);
+        v["chrom"] = json!("chr11");
+        gw["positions"].as_array_mut().unwrap().push(v);
+    }
+    genes["genes"].as_array_mut().unwrap().push(gw);
     for (gname, chrom, choice) in [("MININAT2", "chr8", true), ("MININAT2B", "chr9", false)] {
         let npos = |id: usize, p: u64, rs: &str, r: &str, a: &str| {
             let mut v = pos(id, p, rs, r, a);
@@ -225,7 +246,7 @@ fn add_mini_cyp2c19(src: &Path, dst: &Path) {
         genes["genes"].as_array_mut().unwrap().push(g);
     }
     let mut phen = read_json("phenotypes.json");
-    for gname in ["MININAT2", "MININAT2B"] {
+    for gname in ["MININAT2", "MININAT2B", "MININAT2W"] {
         phen["genes"][gname] = json!({"lookup_method": "PHENOTYPE", "rules": [
             {"counts": {"Normal function": 2}, "phenotype": "Rapid Metabolizer", "activity_score": null}]});
     }
@@ -678,6 +699,56 @@ fn main() {
         })),
         "NAT2-shaped: the note says the call is by frequency and what the score would pick",
     );
+    // 7e. The person's ancestry weights the groups: MININAT2W picks *1/*16 for a European,
+    //     *4/*5 for an East Asian; without ancestry the means tie and the score decides.
+    let natw_vcf = h.p("mini_natw.vcf");
+    write_text(
+        &natw_vcf,
+        "##fileformat=VCFv4.2\n\
+         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n\
+         chr11\t2000\trs95\tA\tG\t50\tPASS\t.\tGT\t0/1\n\
+         chr11\t2100\trs96\tG\tA\t50\tPASS\t.\tGT\t0/1\n",
+    );
+    let anc = |pairs: &[(&str, f64)]| -> Option<std::collections::BTreeMap<String, f64>> {
+        Some(pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect())
+    };
+    let w_run = |tag: &str, a: Option<std::collections::BTreeMap<String, f64>>| -> serde_json::Value {
+        serde_json::from_str(
+            &run(&natw_vcf, &h.p(&format!("out_natw_{tag}")), &PgxOptions { tables: Some(mini.clone()), ancestry: a, ..Default::default() })
+                .unwrap()
+                .json_text,
+        )
+        .unwrap()
+    };
+    let w_none = w_run("none", None);
+    let w_eur = w_run("eur", anc(&[("EUR", 1.0)]));
+    let w_eas = w_run("eas", anc(&[("EAS", 0.9), ("European", 0.1)]));
+    h.check(gene_by_name(&w_none, "MININAT2W")["diplotype"].as_str() == Some("*1/*16"), "ancestry: without it the group means tie and the score picks *1/*16");
+    h.check(gene_by_name(&w_eur, "MININAT2W")["diplotype"].as_str() == Some("*1/*16"), "ancestry: a European person gets *1/*16");
+    h.check(
+        gene_by_name(&w_eas, "MININAT2W")["diplotype"].as_str() == Some("*4/*5")
+            && w_eas["x_ancestry"]["cpic_group_weights"]["East Asian"].as_f64().is_some_and(|w| (w - 0.9).abs() < 1e-12)
+            && gene_by_name(&w_eas, "MININAT2W")["notes"].as_array().unwrap().iter()
+                .any(|n| n.as_str().is_some_and(|s| s.contains("weighted by the person's ancestry: East Asian 0.90, European 0.10"))),
+        "ancestry: a mostly East Asian person gets *4/*5, and the note and x_ancestry say why",
+    );
+    h.check(
+        w_none.get("x_ancestry").is_none() && w_eur["x_ancestry"]["source"].as_str() == Some("given"),
+        "ancestry: x_ancestry only when an ancestry is given",
+    );
+    h.expect_err(
+        run(&natw_vcf, &h.p("out_natw_bad"), &PgxOptions { tables: Some(mini.clone()), ancestry: anc(&[("Martian", 1.0)]), ..Default::default() }),
+        &["Martian", "AFR, AMR, EAS, EUR, SAS"],
+        "ancestry: an unknown group is an error that lists the accepted ones",
+    );
+    match farmacogenetica::ancestry_group_weights(&anc(&[("AFR", 0.5), ("AMR", 0.5)]).unwrap()) {
+        Ok(w) => h.check(
+            (w["Sub-Saharan African"] - 0.25).abs() < 1e-12 && (w["African American/Afro-Caribbean"] - 0.25).abs() < 1e-12 && (w["Latino"] - 0.5).abs() < 1e-12,
+            "AFR splits over the two African CPIC groups; AMR is Latino",
+        ),
+        Err(e) => h.check(false, &format!("ancestry_group_weights: {e}")),
+    };
+
     let ns = gene_by_name(&v_nat, "MININAT2B");
     h.check(
         ns["diplotype"].as_str() == Some("*1/*16") && ns["x_chosen_by"].as_str() == Some("score") && ns.get("x_frequency").is_none(),
@@ -854,6 +925,74 @@ fn main() {
     } else {
         println!("NOTE  skipping real bundle check ({} not present)", real_bundle_dir.display());
     }
+
+    // 13. A group of people and the medicines of a protocol (pgx_cohort).
+    let cohort_dir = h.p("cohort");
+    let cohort = run_cohort(
+        &[unphased_vcf.clone(), phased_vcf.clone()],
+        &cohort_dir,
+        &CohortOptions {
+            tables: Some(fixture.clone()),
+            drugs: Some(vec!["syndrug_a".into(), "Warfarin".into(), "codeine".into(), "gabapentin".into()]),
+            ..Default::default()
+        },
+    );
+    h.check(cohort.is_ok(), "pgx_cohort runs on two VCFs");
+    let vc: serde_json::Value = serde_json::from_str(&cohort.unwrap_or_else(|e| panic!("{e}"))).unwrap();
+    let names: Vec<&str> = vc["people"].as_array().unwrap().iter().filter_map(|p| p["person"].as_str()).collect();
+    h.check(names == vec!["S1", "S1 (phased.vcf)"], "two people; the repeated sample name gets its file name");
+    let med = |person: &str, drug: &str| -> Vec<serde_json::Value> {
+        vc["medicines"].as_array().unwrap().iter().filter(|m| m["person"] == person && m["medicine"] == drug).cloned().collect()
+    };
+    h.check(
+        med("S1", "syndrug_a").iter().any(|m| m["status"] == "recommendation" && m["recommendation"] == "Use reduced starting dose of syndrug_a.")
+            && med("S1 (phased.vcf)", "syndrug_a").iter().any(|m| m["recommendation"] == "Avoid syndrug_a due to poor metabolism."),
+        "each person gets the recommendation of their own call (*1/*4: reduced dose; *2/*3: avoid)",
+    );
+    h.check(med("S1", "warfarin").iter().any(|m| m["status"] == "recommendation"), "medicine names matched without case (Warfarin)");
+    h.check(
+        med("S1", "codeine").iter().any(|m| m["status"] == "gene not called"
+            && m["recommendation"].as_str().is_some_and(|s| s.contains("CYP2D6") && s.contains("BAM"))),
+        "codeine: CYP2D6 not called without the reads, and the reason says so",
+    );
+    h.check(
+        med("S1", "gabapentin").iter().any(|m| m["status"] == "no guideline")
+            && vc["medicines_without_guideline"].as_array().is_some_and(|a| a.len() == 1 && a[0] == "gabapentin"),
+        "gabapentin: no guideline in the tables",
+    );
+    let med_tsv = std::fs::read_to_string(vc["files"]["medicines"].as_str().unwrap()).unwrap_or_default();
+    let gen_tsv = std::fs::read_to_string(vc["files"]["genes"].as_str().unwrap()).unwrap_or_default();
+    h.check(
+        med_tsv.starts_with("person\tmedicine\tstatus\t") && med_tsv.lines().count() == 1 + 2 * 4
+            && gen_tsv.starts_with("person\tvcf\tgene\tcalled\t") && gen_tsv.contains("S1\t") && gen_tsv.contains("SYNG_STAR\ttrue\t*1/*4\t"),
+        "cohort_medicines.tsv (2 people x 4 medicines) and cohort_genes.tsv written",
+    );
+    h.check(
+        vc["people"].as_array().unwrap().iter().all(|p| p["result_json"].as_str().is_some_and(|f| Path::new(f).exists())),
+        "one result.json per person",
+    );
+    let multi = h.p("cohort_multi.vcf");
+    write_text(
+        &multi,
+        "##fileformat=VCFv4.2\n\
+         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tP1\tP2\n\
+         chr1\t100\trs1000\tA\tG\t50\tPASS\t.\tGT\t0/1\t0/0\n\
+         chr1\t120\trs1001\tC\tT\t50\tPASS\t.\tGT\t0/1\t0/0\n",
+    );
+    let vm: serde_json::Value = serde_json::from_str(
+        &run_cohort(&[multi.clone()], &h.p("cohort_m"), &CohortOptions { tables: Some(fixture.clone()), samples: Some(vec!["P2".into()]), ..Default::default() })
+            .unwrap(),
+    )
+    .unwrap();
+    h.check(
+        vm["people"].as_array().map(|a| a.len()) == Some(1) && vm["people"][0]["person"] == "P2" && vm["medicines_requested"].is_null(),
+        "multi-sample VCF: samples= keeps P2 only; without drugs=, every recommendation",
+    );
+    h.expect_err(
+        run_cohort(&[multi.clone()], &h.p("cohort_x"), &CohortOptions { tables: Some(fixture.clone()), samples: Some(vec!["NOPE".into()]), ..Default::default() }),
+        &["NOPE"],
+        "a sample in no VCF: clear error",
+    );
 
     run_v2_bam_tests(&mut h, &fixture, &repo_root, real_hla_dir);
 

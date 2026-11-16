@@ -5,6 +5,8 @@
 **Reference schema:** `pgx_result.schema.json` (JSON Schema Draft 2020-12)
 **Validation suite:** [trials/python/validate_pgx.py](../trials/python/validate_pgx.py), [trials/python/smoke.py](../trials/python/smoke.py), [trials/src/bin/farmacogenetica.rs](../trials/src/bin/farmacogenetica.rs)
 
+**Engine 1.2.0 (MMGEN 2.2.0)** adds one option: the NAT2 frequencies can be weighted by the person's ancestry (`ancestry`, or `ancestry_panel` to estimate it). Without it the calls are those of engine 1.1.0, so the numbers below still hold; on the seven Genome in a Bottle genomes, with the ancestry estimated from the 1000 Genomes panel, the NAT2 calls are the same.
+
 This report replaces the first one (engine 1.0.0). Engine 1.1.0 **chooses the diplotype as PharmCAT does** (section 2): by the Named Allele Matcher score, and for NAT2 by population frequency. Engine 1.0.0 left a gene uncalled when the positions read allowed answers with different effects. Every number below comes from runs of the 2.1.0 wheel (2026-11-16, Windows, CPU only).
 
 ---
@@ -52,6 +54,19 @@ For each gene, every diplotype whose two alleles fit the genotypes read is a can
 - the call records it in `x_chosen_by: "frequency"` and `x_frequency`, and the note gives what the score alone would have picked.
 
 In the GIAB sets this gives PharmCAT's NAT2 calls: HG001 `*4/*5` (0.136, against 3.8 × 10⁻⁴ for `*1/*16`) and HG003 `*5/*6` (0.157, against 1.4 × 10⁻⁵ for `*1/*30`).
+
+**The person's ancestry.** The plain mean treats every CPIC group alike. When the person's ancestry is known it weights them instead:
+- it can be given as proportions (`ancestry={"EUR": 0.6, "AFR": 0.3, "AMR": 0.1}`, by 1000 Genomes superpopulation or by CPIC group name);
+- or estimated from the person's own VCF with a reference panel (`ancestry_panel=`, the same estimator as screen 17).
+
+The superpopulations map to the CPIC groups:
+- AFR → Sub-Saharan African and African American/Afro-Caribbean, split evenly;
+- AMR → Latino;
+- EAS → East Asian;
+- EUR → European;
+- SAS → Central/South Asian.
+
+The weights are renormalized over the groups that have both alleles' frequencies. The result records what was used (`x_ancestry`), and the note names the weights. This matters most in admixed populations, such as Brazil's, where no single group fits.
 
 **Why only NAT2.** With the frequency rule applied to every star-allele gene, the GIAB sets give 145 `EXACT` instead of 149:
 - **gain:** it fixes CYP2B6 of HG003 (`*5/*6`, which the trio confirms);

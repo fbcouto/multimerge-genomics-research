@@ -301,7 +301,9 @@ NEW = ["relatedness", "trio_analysis", "runs_of_homozygosity", "genetic_sex", "b
        "pharmcat_prepare", "pharmcat_run", "count_reads", "differential_expression", "crispr_count", "crispr_test",
        "sketch_references", "gather", "classify_reads", "find_resistance_genes", "genome_distances", "sketch_distances",
        "tree_from_matrix", "viral_mutations", "in_silico_pcr", "amplicon_asvs", "train_classifier", "classify_asvs",
-       "alpha_diversity", "beta_diversity", "taxa_composition", "tumor_mutational_burden"]
+       "alpha_diversity", "beta_diversity", "taxa_composition", "tumor_mutational_burden", "gene_set_test", "pgx_cohort",
+       "genotype_association", "association_power", "build_screen_database", "describe_screen_database",
+       "contaminant_screen", "build_transcript_index", "transcript_index_info", "quantify_samples", "explain_pseudoalignment"]
 check("every function of the newer modules is there", all(hasattr(mmg, f) for f in NEW), [f for f in NEW if not hasattr(mmg, f)])
 rng = random.Random(7)
 DNA = lambda n: "".join(rng.choice("ACGT") for _ in range(n))
@@ -348,6 +350,59 @@ de = mmg.differential_expression(counts, design, "condition", "ctrl")
 pl_ = de["plot"]
 up = [g for g, l, q in zip(pl_["gene"], pl_["log2_fold_change"], pl_["padj"]) if l is not None and q is not None and l > 2 and q < 0.01]
 check("differential_expression: the planted gene is up, ~8x", up == ["gene7"], str(up))
+de_table = p("rna_de.tsv")
+mmg.differential_expression(counts, design, "condition", "ctrl", output=de_table)
+top_genes = [g for g, _ in sorted(zip(pl_["gene"], pl_["stat"]), key=lambda t: -(t[1] if t[1] is not None else -1e9))[:6]]
+sets = write("rna_sets.gmt", ["TOP\tthe six highest statistics\t" + "\t".join(top_genes), "NOTHING\tnone of these genes\tNOPE1\tNOPE2\tNOPE3"])
+gs = mmg.gene_set_test(de_table, sets)
+by_set = {s["set"]: s for s in gs["sets"]}
+check("gene_set_test: a set of the highest statistics goes up; a set of absent genes is not tested",
+      by_set["TOP"]["z"] is not None and by_set["TOP"]["z"] > 3 and by_set["TOP"]["fdr"] < 0.05 and by_set["NOTHING"]["pvalue"] is None,
+      str(gs["sets"])[:300])
+check("gene_set_test: the built-in spinal cord injury collection loads (11 sets)", len(mmg.gene_set_test(de_table)["sets"]) == 11)
+
+# Genotype x outcome: the simulated teaching cohort of the package (a planted
+# effect in rs12190259), and the power of a 5-person study.
+from multimerge_genomics.demos import association as _assoc_demo
+_assoc_demo.write_demo(p("assoc"))
+_ga = mmg.genotype_association(p("assoc/cohort.vcf.gz"), p("assoc/phenotypes.tsv"), "recovery_score",
+                               covariates=["age", "sex", "center", "anc_afr", "anc_eas"], output=p("assoc/out.tsv"))
+_ga_hits = [r["id"] for r in _ga["rows"] if r["fdr"] is not None and r["fdr"] < 0.05]
+check("genotype_association: 115 people, 40 alleles, the planted variant the only FDR < 0.05, and the notice",
+      _ga["people"]["analysed"] == 115 and _ga["variants"]["tested"] == 40 and _ga_hits == ["rs12190259"]
+      and "notice" in _ga and os.path.exists(p("assoc/out.tsv")), f"{_ga['people']} {_ga_hits}")
+_ap = mmg.association_power(0.25, effect=2.0, n=5)
+check("association_power: 5 people cannot detect an odds ratio of 2", _ap["power"] < 0.1 and _ap["n_needed"] > 100, str(_ap.get("text"))[:200])
+
+# Contaminant screen: the simulated raw material of the package and its blank.
+import csv as _csv
+from multimerge_genomics.demos import contaminants as _contam_demo
+_cd = _contam_demo.write_demo(p("contam"))
+_crefs = list(_csv.DictReader(open(p("contam/references.tsv"), encoding="utf-8"), delimiter="\t"))
+_cdb = mmg.build_screen_database([p("contam/" + r["file"]) for r in _crefs], p("contam/demo.mmgscreen"),
+                                 kinds=[r["kind"] for r in _crefs], names=[r["name"] for r in _crefs])
+_cs = mmg.contaminant_screen([("raw_material", p("contam/raw_material_R1.fq.gz"), p("contam/raw_material_R2.fq.gz")),
+                              {"name": "reagent_blank", "r1": p("contam/reagent_blank_R1.fq.gz"), "r2": p("contam/reagent_blank_R2.fq.gz")}],
+                             p("contam/demo.mmgscreen"), negative_controls=["reagent_blank"], spike_ins=p("contam/spike_ins.tsv"),
+                             output_html=p("contam/screen.html"))
+_calls = {s["name"]: {o["name"]: o["call"] for o in s["organisms"]} for s in _cs["samples"]}
+check("contaminant_screen: the calls the demo plants (detected, background, below threshold), a report and the notice",
+      all(_calls[s].get(o) == c for s, exp in _cd["expected"].items() for o, c in exp.items())
+      and os.path.exists(p("contam/screen.html")) and "notice" in _cs and len(_cdb["sha256"]) == 64, str(_calls)[:300])
+
+# RNA-seq from FASTQ: the simulated transcriptome, quantified and compared.
+from multimerge_genomics.demos import rnaseq_fastq as _quant_demo
+_quant_demo.write_demo(p("quant"))
+_qi = mmg.build_transcript_index(p("quant/transcripts.fa"), p("quant/transcripts.idx"))
+_qs = [{"name": n, "r1": p(f"quant/{n}_R1.fastq.gz"), "r2": p(f"quant/{n}_R2.fastq.gz"), "condition": n.split("_")[0]}
+       for n in ("control_1", "control_2", "control_3", "treated_1", "treated_2", "treated_3")]
+_qr = mmg.quantify_samples(p("quant/transcripts.idx"), _qs, p("quant/out"))
+_qde = mmg.differential_expression(_qr["files"]["gene_counts"], _qr["files"]["samples"], "condition", "control")
+check("quantify_samples: 269 transcripts, every pair pseudoaligned, and differential expression finds the 3 up and 3 down",
+      _qi["transcripts"] == 269 and min(s["pseudoaligned_pct"] for s in _qr["samples"]) > 99.5 and _qde["up"] == 3 and _qde["down"] == 3,
+      f"{_qi['transcripts']} {[s['pseudoaligned_pct'] for s in _qr['samples']]} {_qde['up']} {_qde['down']}")
+_qe = mmg.explain_pseudoalignment(p("quant/transcripts.idx"), "GGTCTCCCAACCGATCACGTTGTGTTAAGTGTTTTAACGCGATACGGGTCATTGAGATAGATTTACACGAGACTA")
+check("explain_pseudoalignment: a read of Gene80 fits its two isoforms", _qe["status"] == "multi" and _qe["genes"] == ["Gene80"], str(_qe)[:200])
 
 # CRISPR screen: 40 genes x 4 guides; the guides of ESS1 drop out.
 crows = []
@@ -479,6 +534,11 @@ try:
     check("mmgen_pgx_run: GRCh37 VCF raises error", False, "no error raised")
 except RuntimeError as _e:
     check("mmgen_pgx_run: GRCh37 VCF raises clear error", "GRCh37" in str(_e) and "GRCh38" in str(_e), str(_e))
+_coh = mmg.pgx_cohort([_pgx_vcf], p("pgx_cohort"), tables=_fx_tables, drugs="syndrug_a, gabapentin")
+check("pgx_cohort: one person, a medicine with a recommendation and one without a guideline, and the notice",
+      any(m["medicine"] == "syndrug_a" and m["status"] == "recommendation" for m in _coh["medicines"])
+      and _coh["medicines_without_guideline"] == ["gabapentin"] and os.path.exists(_coh["files"]["medicines"])
+      and "no responsibility" in _coh.get("notice", ""), str(_coh)[:300])
 
 # Pharmacogenetics v2 (BAM+VCF CYP2D6 + Class I HLA + outside_calls.tsv)
 def _synth_hla_dna(seed, length=240):

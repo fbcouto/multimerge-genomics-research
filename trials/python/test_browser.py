@@ -236,6 +236,8 @@ MENU = {
     27: ("27. 16S Amplicons: Taxonomy & Diversity", "27. 16S Amplicons: Taxonomy & Diversity"),
     28: ("28. Tumor Mutational Burden (TMB)", "28. Tumor Mutational Burden (TMB)"),
     29: ("29. AI Assistant", "29. AI Assistant"),
+    30: ("30. Genotype & Outcome", "30. Genotype & Outcome: Association and Power"),
+    31: ("31. Contaminant Screening", "31. Contaminant Screening: Adventitious Agents"),
 }
 RESEARCH_DEMO = os.environ.get("MMG_RESEARCH_DEMO")
 # The human-genome examples need the demo data and PharmCAT (see test_ui.py).
@@ -811,6 +813,14 @@ try:
              lambda t: number(t, "Runs:") == 2, None),
             (22, "Differential expression", "The four simulated samples: treated against control", "Compare", "Genes tested|ERROR",
              lambda t: "gene03" in t, None),
+            (30, "Test variants against an outcome", "Recovery score, adjusted for age, sex, hospital and ancestry", "📐 Test",
+             "People analysed|ERROR", lambda t: "rs12190259" in t and "115" in t, "mmgen_examples/association/phenotypes.association.tsv"),
+            (30, "Study power: how many people?", "Five patients: can anything be detected?", "Compute the power", "Study power|ERROR",
+             lambda t: "164" in t, None),
+            (31, "Screen samples for adventitious agents", "A raw material and its reagent blank (simulated)", "🛡️ Screen",
+             "organisms with reads|ERROR", lambda t: "background" in t and "recovered" in t, "mmgen_examples/contaminants/screen.html"),
+            (22, "Quantify from FASTQ (pseudoalignment)", "The six samples, paired-end, with their conditions", "📊 Quantify",
+             "Quantified from the reads|ERROR", lambda t: "treated_3" in t, "mmgen_examples/rnaseq_fastq/quant/gene_counts.tsv"),
         ]
         if RESEARCH_DEMO and os.path.exists(RESEARCH_DEMO):
             flows += [

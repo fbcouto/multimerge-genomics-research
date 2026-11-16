@@ -4,6 +4,8 @@
 
 `mmgen-pgx` v2 extends the verified pure-Rust GRCh38 pharmacogenetics engine (`src/farmacogenetica.rs`, `docs/PGX_V1_VALIDATION.md`) with BAM+VCF structural and star-allele calling in `src/pgx_bam.rs`, adding **`CYP2D6`** (copy-number, deletion/duplication/hybrid SV detection, BAM pileup filling, and read-pair phasing) and Class I **`HLA`** (**`HLA-A`**, **`HLA-B`**, **`HLA-C`**) alongside the 19 VCF-based CPIC genes (`23` total pharmacogenes when `bam` is provided, plus `2` non-clinical genetic trait panels), together with PharmCAT `-po` outside-call export (`outside_calls.tsv`).
 
+Engine 1.2.0 (MMGEN 2.2.0) adds only the optional ancestry weighting of the NAT2 frequencies, which does not touch CYP2D6 or HLA: the results below hold for it.
+
 Updated 2026-11-16 for engine 1.1.0 (MMGEN 2.1.0), after two changes. The VCF genes are now chosen as PharmCAT chooses them: by the Named Allele Matcher score, and NAT2 by population frequency (see `docs/PGX_V1_VALIDATION.md`, section 2). And **the tables pin the IPD-IMGT/HLA release** used for HLA typing (3.66.0, each FASTA checked by SHA-256; section 2.3). With the 2.1.0 wheels built from that code, the three suites passed with zero failures:
 
 - **Rust integration & unit binary** (`trials/src/bin/farmacogenetica.rs`): `110 passed, 0 failed` with the real data (`PGX_V2_BAM`, `MMGEN_HLA_DIR`, `MMG_HUMAN_GENOMES`), `94 passed` without it: all v1 assertions, the scoring, synthetic BAM CNV/hybrid/HLA/error guards, the IPD-IMGT/HLA pin, and real `HG002` `v4.2.1` + `v5.0q` BAM+VCF integration checks.

@@ -39,10 +39,10 @@ cat = ai.catalog()
 names = {t["name"] for t in cat}
 check("every engine function is in the catalog", names == {n for n in dir(mmg._native) if not n.startswith("_") and callable(getattr(mmg._native, n))},
       sorted(names ^ {n for n in dir(mmg._native) if not n.startswith("_")}))
-check("86 functions", len(cat) == 86, len(cat))
+check("92 functions", len(cat) == 92, len(cat))
 check("every function but engine_info has a screen", all(t["screen"] for t in cat if t["name"] != "engine_info"),
       [t["name"] for t in cat if not t["screen"]])
-check("12 pass raw bytes", sum(not t["json_callable"] for t in cat) == 12)
+check("13 pass raw bytes", sum(not t["json_callable"] for t in cat) == 13)
 sg = next(t for t in cat if t["name"] == "sort_genomic")
 check("sort_genomic: required and typed parameters", sg["input_schema"]["required"] == ["paths", "output"]
       and sg["input_schema"]["properties"]["index"] == {"type": "boolean"} and sg["screen"] == 9 and sg["outputs"] == ["output"], sg["input_schema"])

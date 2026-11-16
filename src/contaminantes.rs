@@ -2475,6 +2475,9 @@ pub struct OrganismResult {
     pub window_bp: u32,
     pub breadth: f64,
     pub breadth_any: f64,
+    /// One character per genome window, for the coverage plot: '2' hit by
+    /// its unique reads, '1' only by reads it shares (tied), '0' not hit.
+    pub window_map: String,
     pub expected_windows: f64,
     pub dispersion: Option<f64>,
     pub unique_fraction: Option<f64>,
@@ -2655,6 +2658,7 @@ struct SampleRaw {
     ties: HashMap<Vec<u32>, u64>,
     windows: Vec<u32>,
     windows_any: Vec<u32>,
+    window_maps: Vec<String>,
     distinct: Vec<u64>,
     specific: Vec<u64>,
     seconds: f64,
@@ -2682,6 +2686,7 @@ fn run_sample(db: &ScreenDb, s: &ScreenSample, p: &ReadParams) -> Result<SampleR
         ties: HashMap::new(),
         windows: vec![0; n_refs],
         windows_any: vec![0; n_refs],
+        window_maps: vec![String::new(); n_refs],
         distinct: vec![0; n_refs],
         specific: vec![0; n_refs],
         seconds: 0.0,
@@ -2723,6 +2728,10 @@ fn run_sample(db: &ScreenDb, s: &ScreenSample, p: &ReadParams) -> Result<SampleR
             let (s, e) = (r.first_window as usize, (r.first_window + r.windows) as usize);
             raw.windows[i] = marks.win_unique.count(s, e);
             raw.windows_any[i] = marks.win_any.count(s, e);
+            // o mapa das janelas, para o grafico de cobertura do genoma
+            raw.window_maps[i] = (s..e)
+                .map(|g| if marks.win_unique.get(g) { '2' } else if marks.win_any.get(g) { '1' } else { '0' })
+                .collect();
         }
     }
     let nk = db.keys.len();
@@ -2840,6 +2849,7 @@ fn organism_rows(db: &ScreenDb, raw: &SampleRaw, o: &ScreenOptions) -> Vec<Organ
             window_bp: r.window_bp,
             breadth: if r.windows > 0 { f64::from(windows) / f64::from(r.windows) } else { 0.0 },
             breadth_any: if r.windows > 0 { f64::from(raw.windows_any[i]) / f64::from(r.windows) } else { 0.0 },
+            window_map: raw.window_maps[i].clone(),
             expected_windows: expected,
             dispersion,
             unique_fraction,
@@ -3247,6 +3257,7 @@ fn empty_row(r: &ScreenRefInfo) -> OrganismResult {
         window_bp: r.window_bp,
         breadth: 0.0,
         breadth_any: 0.0,
+        window_map: String::new(),
         expected_windows: 0.0,
         dispersion: None,
         unique_fraction: None,
@@ -3318,7 +3329,7 @@ fn limits_of_detection(rows: &[SpikeResult], rate: f64) -> Vec<LodResult> {
 impl OrganismResult {
     fn json(&self) -> String {
         format!(
-            "{{\"name\":{},\"kind\":{},\"role\":{},\"call\":{},\"genome_bp\":{},\"unique_reads\":{},\"tied_reads\":{},\"won_reads\":{},\"shared_reads\":{},\"reads\":{},\"weak_reads\":{},\"rpm\":{},\"unique_rpm\":{},\"distinct_kmers\":{},\"specific_kmers\":{},\"index_kmers\":{},\"windows\":{},\"windows_any\":{},\"genome_windows\":{},\"window_bp\":{},\"breadth\":{},\"breadth_any\":{},\"expected_windows\":{},\"dispersion\":{},\"unique_fraction\":{},\"identity\":{},\"shared_with\":{},\"reasons\":{},\"flags\":{},\"blank\":{},\"blank_rpm\":{},\"blank_ratio\":{},\"spiked_amount\":{},\"spiked_unit\":{},\"recovery\":{}}}",
+            "{{\"name\":{},\"kind\":{},\"role\":{},\"call\":{},\"genome_bp\":{},\"unique_reads\":{},\"tied_reads\":{},\"won_reads\":{},\"shared_reads\":{},\"reads\":{},\"weak_reads\":{},\"rpm\":{},\"unique_rpm\":{},\"distinct_kmers\":{},\"specific_kmers\":{},\"index_kmers\":{},\"windows\":{},\"windows_any\":{},\"genome_windows\":{},\"window_bp\":{},\"breadth\":{},\"breadth_any\":{},\"window_map\":{},\"expected_windows\":{},\"dispersion\":{},\"unique_fraction\":{},\"identity\":{},\"shared_with\":{},\"reasons\":{},\"flags\":{},\"blank\":{},\"blank_rpm\":{},\"blank_ratio\":{},\"spiked_amount\":{},\"spiked_unit\":{},\"recovery\":{}}}",
             js(&self.name),
             js(self.kind.name()),
             js(if self.kind == AgentKind::Spike { "control" } else { "agent" }),
@@ -3341,6 +3352,7 @@ impl OrganismResult {
             self.window_bp,
             jr(self.breadth, 6),
             jr(self.breadth_any, 6),
+            js(&self.window_map),
             jr(self.expected_windows, 3),
             jo(self.dispersion, 4),
             jo(self.unique_fraction, 4),

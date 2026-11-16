@@ -12,7 +12,7 @@
   --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
-  --track: #cde2fb; --warning: #fab219; --good: #0ca30c;
+  --track: #cde2fb; --warning: #fab219; --good: #0ca30c; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) .viz-root {
@@ -21,7 +21,7 @@
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
-    --track: #184f95; --warning: #fab219; --good: #0ca30c;
+    --track: #184f95; --warning: #fab219; --good: #0ca30c; --critical: #d03b3b;
   }
 }
 :root[data-theme="dark"] .viz-root {
@@ -30,7 +30,7 @@
   --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
-  --track: #184f95; --warning: #fab219; --good: #0ca30c;
+  --track: #184f95; --warning: #fab219; --good: #0ca30c; --critical: #d03b3b;
 }
 html, body { margin: 0; }
 body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -357,11 +357,17 @@ footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
     var top = Math.max(40, Math.ceil(Math.max.apply(null, P.q90) / 5) * 5);
     chart(charts, {
       title: "Quality along the read",
-      caption: "Phred quality at each position of the read: the median, and the bands that hold the middle 50% and 80% of the bases." +
+      caption: "Phred quality at each position of the read: the median, and the bands that hold the middle 50% and 80% of the bases. " +
+        "The background marks the zones FastQC uses: good (Q 28 and up), reasonable (20 to 28) and poor (below 20); where the lower " +
+        "band enters the poor zone is where quality trimming (fastq_trim's quality_cutoff) will cut." +
         (D.max_length > n ? " Only the first " + full(n) + " positions are shown." : ""),
       legend: [{ n: 1, text: "Median" }, { band: 0.32, text: "25th to 75th percentile" }, { band: 0.12, text: "10th to 90th percentile" }],
       xMin: 1, xMax: Math.max(2, n), yMax: top, xWhole: true, yWhole: true, xTitle: "Position in the read", height: 280,
-      draw: function (g, sx, sy) {
+      draw: function (g, sx, sy, plot) {
+        [[28, top, "var(--good)"], [20, 28, "var(--warning)"], [0, 20, "var(--critical)"]].forEach(function (z) {
+          var y0 = sy(Math.min(z[1], top)), y1 = sy(z[0]);
+          sv("rect", { x: plot.left, y: y0, width: plot.width, height: Math.max(0, y1 - y0), fill: z[2], opacity: 0.07 }, g);
+        });
         sv("path", { d: band(pos, P.q10, P.q90, sx, sy), "class": "f1", opacity: 0.12 }, g);
         sv("path", { d: band(pos, P.q25, P.q75, sx, sy), "class": "f1", opacity: 0.2 }, g);
         sv("path", { d: path(pos, P.q50, sx, sy), "class": "line s1" }, g);
@@ -456,17 +462,26 @@ footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
 
   // ---------- 5. GC per read ----------
   var gc = D.gc_histogram || [], gx = gc.map(function (_, i) { return i; }), gcTotal = gc.reduce(function (a, b) { return a + b; }, 0) || 1;
+  // The normal curve with the reads' mean and SD: the shape one library from one genome should have (as FastQC draws it).
+  var gcMean = gx.reduce(function (a, x) { return a + x * gc[x]; }, 0) / gcTotal;
+  var gcSd = Math.sqrt(gx.reduce(function (a, x) { return a + (x - gcMean) * (x - gcMean) * gc[x]; }, 0) / gcTotal) || 1;
+  var gcNorm = gx.map(function (x) { return gcTotal * Math.exp(-0.5 * Math.pow((x - gcMean) / gcSd, 2)) / (gcSd * Math.sqrt(2 * Math.PI)); });
+  var gcDev = gx.reduce(function (a, x) { return a + Math.abs(gc[x] - gcNorm[x]); }, 0) / gcTotal * 100;
   chart(pair, {
     title: "GC content per read",
-    caption: "How many reads have each GC percentage. One smooth peak is the usual shape; a second peak can mean contamination.",
-    xMin: 0, xMax: 100, yMax: Math.max.apply(null, gc) || 1, yWhole: true, xSuffix: "%", xTitle: "GC content of the read",
+    caption: "How many reads have each GC percentage, against the normal curve with the same mean and SD. One smooth peak on the curve is " +
+      "the usual shape; a shoulder or a second peak can mean contamination by another organism (or adapter dimers). Deviation from the " +
+      "curve: " + fixed(gcDev, 1) + "% of the reads (FastQC warns above 15% and fails above 30%).",
+    legend: [{ n: 1, text: "Reads" }, { n: 2, text: "Normal, same mean and SD" }],
+    xMin: 0, xMax: 100, yMax: Math.max(Math.max.apply(null, gc), Math.max.apply(null, gcNorm)) || 1, yWhole: true, xSuffix: "%", xTitle: "GC content of the read",
     draw: function (g, sx, sy, plot) {
       sv("path", { d: path(gx, gc, sx, sy) + "L" + sx(100).toFixed(1) + " " + plot.bottom + "L" + sx(0).toFixed(1) + " " + plot.bottom + "Z", "class": "f1", opacity: 0.1 }, g);
       sv("path", { d: path(gx, gc, sx, sy), "class": "line s1" }, g);
+      sv("path", { d: path(gx, gcNorm, sx, sy), "class": "line s2", "stroke-dasharray": "5 4" }, g);
     },
     snap: function (x) { return Math.min(100, Math.max(0, Math.round(x))); },
-    tip: function (x) { return { x: x, head: "GC " + x + "%", dots: [{ y: gc[x], n: 1 }], rows: [{ name: "Reads", value: full(gc[x]), n: 1 }, { name: "Share", value: fixed(gc[x] / gcTotal * 100, 2) + "%" }] }; },
-    table: { head: ["GC %", "Reads"], rows: function () { return gx.filter(function (x) { return gc[x]; }).map(function (x) { return [x, full(gc[x])]; }); } }
+    tip: function (x) { return { x: x, head: "GC " + x + "%", dots: [{ y: gc[x], n: 1 }, { y: gcNorm[x], n: 2 }], rows: [{ name: "Reads", value: full(gc[x]), n: 1 }, { name: "Normal curve", value: full(gcNorm[x]), n: 2 }, { name: "Share", value: fixed(gc[x] / gcTotal * 100, 2) + "%" }] }; },
+    table: { head: ["GC %", "Reads", "Normal curve"], rows: function () { return gx.filter(function (x) { return gc[x]; }).map(function (x) { return [x, full(gc[x]), full(gcNorm[x])]; }); } }
   });
 
   // ---------- 6. read lengths ----------

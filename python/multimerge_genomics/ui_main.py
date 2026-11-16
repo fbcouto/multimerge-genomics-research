@@ -24,7 +24,9 @@ def imports():
         mmg = _Recorder(_engine)
     except ImportError:
         mmg = _engine
-    return asyncio, mmg, mo, np, os, pl, re
+    # The diagnostic figures (SVG), shared by the screens and usable in scripts.
+    from multimerge_genomics import figures as figs
+    return asyncio, figs, mmg, mo, np, os, pl, re
 
 
 @app.cell
@@ -271,6 +273,26 @@ def file_helpers(mmg, mo, os, re):
             "counselor). Analyze only the genomes of people who have agreed to it: genetic data are sensitive "
             "personal data, about the person and about their relatives."), kind="danger")
 
+    def svg_download(svg, name, title=None):
+        """A button that saves a chart as a standalone SVG file (vector, for a paper)."""
+        body = svg if "xmlns=" in svg else svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
+        if title and "<title>" not in body[:300]:
+            body = body.replace(">", f"><title>{title}</title>", 1)
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "figure"
+        return mo.download(data=body.encode("utf-8"), filename=f"{safe}.svg", mimetype="image/svg+xml", label="⬇️ SVG")
+
+    def figure_panel(svg, name, note=None):
+        """A figure of `figs` with a button that saves it as SVG (vector, for a
+        paper) and, below it, what to look for."""
+        if not svg:
+            return None
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60] or "figure"
+        parts = [mo.Html(svg), mo.download(data=svg.encode("utf-8"), filename=f"{safe}.svg", mimetype="image/svg+xml",
+                                           label="⬇️ SVG")]
+        if note:
+            parts.append(mo.md(f"*{note}*"))
+        return mo.vstack(parts, gap=0.25)
+
     def make_form(widgets, submit):
         """A form with one field per line and plain labels (no JSON tree)."""
         template = "\n\n".join("{" + key + "}" for key in widgets)
@@ -392,7 +414,7 @@ def file_helpers(mmg, mo, os, re):
                   + "</div>")
         svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width: {W}px; font: 12px system-ui, sans-serif;" role="img" '
                f'aria-label="{title}">' + "".join(parts) + "</svg>")
-        return mo.vstack([mo.md(f"**{title}**"), mo.Html(legend + svg)])
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(legend + svg), svg_download(svg, title.split(":")[0].lower(), title)], gap=0.25)
 
     def spectrum_chart(histogram):
         """Bars of the abundance spectrum: how many distinct k-mers were seen once,
@@ -462,7 +484,7 @@ def file_helpers(mmg, mo, os, re):
                      f'fill-opacity="0.8">distinct k-mers (log scale)</text>')
         svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width: {W}px; font: 12px system-ui, sans-serif;" role="img" '
                f'aria-label="Abundance spectrum: the number of distinct k-mers seen each number of times">' + "".join(parts) + "</svg>")
-        items = [mo.md("**Abundance spectrum**"), mo.Html(svg)]
+        items = [mo.md("**Abundance spectrum**"), mo.Html(svg), svg_download(svg, "kmer_spectrum", "Abundance spectrum")]
         if beyond:
             items.append(mo.md(f"*{beyond:,} distinct k-mer(s) seen more than {x_max:,} times are left out of the chart; the table below has them.*"))
         return mo.vstack(items)
@@ -529,7 +551,7 @@ def file_helpers(mmg, mo, os, re):
         parts.append(f'<text x="{X(bar) + 6:.1f}" y="{yb + 4}" fill="currentColor" fill-opacity="0.8">{bar:g} ({unit})</text>')
         svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width: {W}px; font: 12px system-ui, sans-serif;" role="img" '
                f'aria-label="{_html.escape(title)}">' + "".join(parts) + "</svg>")
-        return mo.vstack([mo.md(f"**{title}**"), mo.Html(svg)])
+        return mo.vstack([mo.md(f"**{title}**"), mo.Html(svg), svg_download(svg, "tree", title)], gap=0.25)
 
     return (
         EXAMPLES_DIR,
@@ -547,7 +569,9 @@ def file_helpers(mmg, mo, os, re):
         files_with,
         human_notice,
         make_form,
+        figure_panel,
         output_name,
+        svg_download,
         pair_fastqs,
         preview_panel,
         python_call,
@@ -578,7 +602,7 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
     # Downloaded from the GitHub release the first time an example needs them,
     # unless the zip is already in this folder. The 16S data (the mothur MiSeq
     # SOP) carry no explicit licence and are not published.
-    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/"
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/"
     DEMO_PACKS = {
         "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
                   "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
@@ -1613,8 +1637,11 @@ def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
         ("lookup", "Allele counts at a position (BAM)"): [
             ("Reads over a heterozygous SNP (simulated)",
              "80 simulated reads cover chr1:25,000 of the toy genome; about 40% carry the ALT allele, as a heterozygous variant "
-             "looks. A few bases there have quality 2 and are left out by the quality filter.",
-             {"bam": _E + "pileup_demo.bam", "position": "chr1:25000", "min_baseq": 13}),
+             "looks. A few bases there have quality 2 and are left out by the quality filter. Below the counts, the reads as a "
+             "genome browser draws them, against the toy genome, with the checks of strand bias and of the place of the ALT "
+             "base in the reads.",
+             {"bam": _E + "pileup_demo.bam", "position": "chr1:25000", "min_baseq": 13, "reference": _E + "toy_genome.fa",
+              "annotation": _E + "annotation.gff3"}),
         ],
     })
 
@@ -2086,7 +2113,7 @@ def qc_page_form(example_for, files_with, get_page, make_form, mo, qc_example):
 
 
 @app.cell
-async def qc_page_backend(asyncio, beside, chosen, form_qc, get_page, mmg, mo, pl, split_name, warn):
+async def qc_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_qc, get_page, mmg, mo, pl, split_name, warn):
     mo.stop(get_page() != "qc")
     mo.stop(form_qc.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
@@ -2116,7 +2143,7 @@ async def qc_page_backend(asyncio, beside, chosen, form_qc, get_page, mmg, mo, p
             _out_name = beside(_paths[0], f"{_base_name}_K{_k}.arrow")
             _df.write_ipc(_out_name)
 
-        _panel = mo.vstack([
+        _blocks = [
             mo.callout(mo.md(f"""
             ### ✅ Batch processed successfully!
             * **Files read:** `{len(_paths)}`
@@ -2124,7 +2151,29 @@ async def qc_page_backend(asyncio, beside, chosen, form_qc, get_page, mmg, mo, p
             * **Distinct k-mers extracted:** `{len(_kmer_bytes) // 16:,}`
             * **Arrow file written:** `{_out_name}`
             """), kind="success")
-        ])
+        ]
+        if not _is_fasta:
+            # Reads: the k-mer spectrum says, before any assembly, the error rate, the coverage, the genome size and
+            # whether the genome is diploid with heterozygous sites.
+            with mo.status.spinner("Counting how often each k-mer was seen (the spectrum)..."):
+                _kk = min(int(_k), 31)
+                _kk -= 1 if _kk % 2 == 0 else 0  # canonical k-mers need an odd k
+                _cnt = await asyncio.to_thread(mmg.count_kmers, _paths, None, k=_kk)
+            _model = figs.spectrum_model(_cnt["histogram"], k=_cnt["k"])
+            _rows = []
+            if _model.get("genome_size"):
+                _rows = [("Coverage peak", f"`{_model['peak']}×`" + (f" (heterozygous peak at `{_model['het_peak']}×`)" if _model.get("het_peak") and _model["het_peak"] != _model["peak"] else "")),
+                         ("Genome size, from the spectrum", f"`{figs.fmt_bp(_model['genome_size'])}`"),
+                         ("Error k-mers", f"`{100 * (_model['error_fraction'] or 0):.1f}%` of the k-mers counted")]
+            _blocks.append(mo.hstack([
+                figure_panel(figs.kmer_spectrum(_cnt["histogram"], title=f"K-mer spectrum of the reads (k = {_cnt['k']}, log scale)", model=_model),
+                             "reads_kmer_spectrum",
+                             "The tall bars at the left are k-mers seen once or twice: sequencing errors. The hump is the genome, "
+                             "at its coverage. Too few reads put the hump into the errors; a second hump at half the coverage is a "
+                             "diploid genome with heterozygous sites. Screen 13 counts larger files and shows the linear scale."),
+                mo.md(facts(_rows) if _rows else "*No coverage peak apart from the errors: too few reads, or too much variation, to read the spectrum.*"),
+            ], widths=[2, 1], wrap=True))
+        _panel = mo.vstack(_blocks)
 
     except Exception as e:
         _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
@@ -2341,7 +2390,7 @@ def assembly_page_form(assembly_example, example_for, files_with, get_page, make
 
 
 @app.cell
-async def assembly_page_backend(asyncio, beside, chosen, form_assembly, get_page, mmg, mo, os, pl, warn):
+async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_assembly, get_page, mmg, mo, os, pl, warn):
     mo.stop(get_page() != "assembly")
     mo.stop(form_assembly.value is None, mo.md("🧩 *Waiting for the assembly button...*"))
 
@@ -2392,6 +2441,22 @@ async def assembly_page_backend(asyncio, beside, chosen, form_assembly, get_page
             mo.md(f"#### 📋 Top {len(_top_contigs)} longest contigs (unitigs):"),
             _table_ui
         ])
+        if hasattr(mmg, "unitig_graph"):
+            with mo.status.spinner("Laying out the assembly graph..."):
+                _g = await asyncio.to_thread(mmg.unitig_graph, _kmer_bytes, _k_size, 2000)
+            _sm = _g["summary"]
+            _facts_g = [("Unitigs / edges / components", f"`{_sm['nodes']:,}` / `{_sm['edges']:,}` / `{_sm['components']:,}`"
+                         + (f" ({_sm['circular_components']} circular)" if _sm.get("circular_components") else "")),
+                        ("N50 / longest", f"`{_sm['n50']:,}` / `{_sm['longest']:,}` bases"),
+                        ("Tips / bubbles / repeats", f"`{_sm['tips']:,}` / `{_sm['bubbles']:,}` / `{_sm['repeats']:,}`")]
+            if _sm.get("dropped_nodes"):
+                _facts_g.append(("Not drawn", f"`{_sm['dropped_nodes']:,}` unitigs of the smallest components"))
+            _panel = mo.vstack([_panel, mo.md("#### 🕸️ The assembly graph\n" + facts(_facts_g)), figure_panel(
+                figs.assembly_graph(_g, title=f"Assembly graph (k = {_k_size})"), "assembly_graph",
+                "As Bandage draws it. One long line: the genome assembled in one piece; a ring: a circular molecule. "
+                "Tips are dead ends, usually sequencing errors; bubbles are two parallel paths (a SNP between two "
+                "copies, or an error); repeats are where the path can go two ways — where an assembly breaks. Reads "
+                "from both strands give two mirror-image components: these k-mers are not canonical.")])
 
     except Exception as e:
         _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
@@ -2720,7 +2785,7 @@ def scaffold_page_form(example_for, files_with, get_page, make_form, mo, scaffol
 
 
 @app.cell
-async def scaffold_page_backend(asyncio, chosen, form_scaffold, get_page, mmg, mo, warn):
+async def scaffold_page_backend(asyncio, chosen, figs, figure_panel, form_scaffold, get_page, mmg, mo, warn):
     mo.stop(get_page() != "scaffold")
     mo.stop(form_scaffold.value is None, mo.md("🏗️ *Waiting for a FASTA file...*"))
 
@@ -2763,6 +2828,13 @@ async def scaffold_page_backend(asyncio, chosen, form_scaffold, get_page, mmg, m
             *(A circular genome means the tail of a sequence joined its own head exactly.)*
             """), kind="success")
         ])
+        if hasattr(mmg, "overlap_graph"):
+            _og = await asyncio.to_thread(mmg.overlap_graph, contigs, int(_overlap), 2000)
+            _panel = mo.vstack([_panel, figure_panel(
+                figs.assembly_graph(_og, title=f"Contigs joined by their ends (overlap {_overlap})"), "overlap_graph",
+                "Each contig a line, coloured by the scaffold it ends up in; an arrow from the end of one contig to the start "
+                "of the next. A loop of contigs is a circular molecule. Grey dashed links overlap but were not joined (the "
+                "scaffolder needs an overlap of exactly the length given)."), mo.md(_og.get("text", "").replace("\n", "  \n"))])
 
     except Exception as e:
         _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
@@ -3657,7 +3729,7 @@ def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, get_page
 
 
 @app.cell
-async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_kmercount, get_page, mmg, mo, os, python_call, size_of, spectrum_chart, warn):
+async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, figs, figure_panel, form_kmercount, get_page, mmg, mo, os, python_call, size_of, spectrum_chart, warn):
     mo.stop(get_page() != "kmercount")
     mo.stop(form_kmercount.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_kmercount.value
@@ -3688,9 +3760,25 @@ async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_pan
         if _out:
             _rows.append(("Table", f"`{_r['written']:,}` line(s) in `{os.path.abspath(_out)}` ({size_of(_out)})"))
         _items = [mo.callout(mo.md("### 🔢 Counted\n" + facts(_rows)), kind="success")]
+        _model = figs.spectrum_model(_r["histogram"], k=_r["k"])
+        if _model.get("genome_size") and _r["canonical"]:
+            _est = [("Coverage peak", f"`{_model['peak']}×`" + (f", with a heterozygous peak at `{_model['het_peak']}×`" if _model.get("het_peak") and _model["het_peak"] != _model["peak"] else "")),
+                    ("Genome size (from the spectrum)", f"`{figs.fmt_bp(_model['genome_size'])}`" + (" (one haplotype)" if _model.get("het_peak") else "")),
+                    ("Error k-mers", f"`{100 * (_model['error_fraction'] or 0):.1f}%` of all k-mers counted (below the valley at {_model['valley']}×)"),
+                    ("Repeats", f"`{100 * (_model['repeat_fraction'] or 0):.1f}%` of the solid k-mers are seen more than 2.5 × the peak")]
+            if _model.get("heterozygosity") is not None:
+                _est.append(("Heterozygosity (rough)", f"`{100 * _model['heterozygosity']:.2f}%`"))
+            _items.append(mo.callout(mo.md("### 🔭 What the spectrum says\n" + facts(_est) + "\n\n" + "; ".join(_model["notes"]) +
+                                           ". Read from the peaks, as one reads GenomeScope's plot; GenomeScope fits a model and "
+                                           "is the reference for a published estimate."), kind="info"))
         _chart = spectrum_chart(_r["histogram"])
         if _chart is not None:
-            _items.append(_chart)
+            _items.append(mo.hstack([
+                figure_panel(figs.kmer_spectrum(_r["histogram"], title="Spectrum (log scale): errors on the left, repeats on the right", model=_model),
+                             "kmer_spectrum_log"),
+                figure_panel(figs.kmer_spectrum(_r["histogram"], title="Spectrum (linear): the coverage peaks", log_y=False, model=_model),
+                             "kmer_spectrum_linear"),
+            ], widths="equal", wrap=True))
             _items.append(mo.ui.table([{"times seen": _c, "distinct k-mers": _n} for _c, _n in _r["histogram"]],
                                       selection=None, pagination=True, page_size=10, label="The spectrum as a table"))
         _items.append(code_panel(f"result = {python_call('count_kmers', _paths, _out, **_kw)}", 'print(result["text"])'))
@@ -3956,7 +4044,7 @@ def kin_page_form(NO_FILE, btn_refresh_kin, example_for, files_under, get_page, 
 
 
 @app.cell
-async def kin_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, form_kin, get_page, kin_task, mmg, mo, python_call, warn, words):
+async def kin_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, figs, figure_panel, form_kin, get_page, kin_task, mmg, mo, python_call, warn, words):
     mo.stop(get_page() != "kin")
     mo.stop(form_kin.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_kin.value
@@ -3988,6 +4076,13 @@ async def kin_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel
                 "relationship": _names.get(_p["relationship"], _p["relationship"]), "sites": _p["sites"],
                 "IBS0 / both heterozygous": round(_p["ibs0_ratio"], 4) if _p["ibs0_ratio"] is not None else "",
             } for _p in _pairs], selection=None, pagination=True, page_size=15, label="Every pair, most related first"))
+            _items.append(figure_panel(
+                figs.king_plot([(_p["kinship"], _p["ibs0_ratio"], f"{_who(_p['a'])} – {_who(_p['b'])}",
+                                 _names.get(_p["relationship"], _p["relationship"])) for _p in _pairs]),
+                "kinship_ibs0",
+                "Parent and child share an allele at nearly every site (IBS0 near 0) with kinship near 0.25; full siblings have "
+                "the same kinship but some IBS0. A pair between the bands deserves a second look (a contaminated or swapped "
+                "sample, or ancestry far from the others: KING-robust kinship turns negative between populations)."))
             if _r["autosomes"] < 10:
                 _items.append(warn(f"Only {_r['autosomes']} autosome(s): the relationship classes are tentative. A whole genome tells them apart much better."))
             _items.append(code_panel(f"r = {python_call('relatedness', _vcfs if len(_vcfs) > 1 else _vcfs[0], **_kw)}", 'print(r["text"])'))
@@ -4124,7 +4219,7 @@ def anc_page_form(NO_FILE, anc_example, anc_folder, anc_task, btn_refresh_anc, e
 
 
 @app.cell
-async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_panel, error_panel, facts, form_anc, get_page, mmg, mo, python_call, split_name, warn, words):
+async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_anc, get_page, mmg, mo, python_call, split_name, warn, words):
     mo.stop(get_page() != "anc")
     mo.stop(form_anc.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_anc.value
@@ -4157,10 +4252,37 @@ async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_
                 _rows.append(_row)
             _warns = sorted({_w for _x in _r for _w in _x["warnings"]})
             _items = [mo.callout(mo.md("### 🌍 Ancestry proportions\n" + facts([("People", f"`{len(_r)}`"), ("Panel groups", ", ".join(_groups))])), kind="success"),
+                      figure_panel(figs.structure_plot([(_x["sample"] or _x["vcf"], _x["proportions"]) for _x in _r], _groups),
+                                   "ancestry_structure",
+                                   "One bar per person, sorted by the main group. Proportions are relative to the panel's groups: "
+                                   "ancestry from outside them (e.g. Middle Eastern against the five 1000 Genomes groups) shows as a "
+                                   "mixture of the nearest ones."),
                       mo.ui.table(_rows, selection=None, pagination=True, page_size=15, label="Proportions (± bootstrap standard error)")]
             for _w in _warns[:5]:
                 _items.append(warn(_w))
-            _items.append(code_panel(f"r = {python_call('estimate_ancestry', _v['panel'], _target, **_kw)}", 'for x in r:\n    print(x["text"])'))
+            # The PCA picture: the people projected on clouds simulated from the panel's frequencies.
+            if hasattr(mmg, "ancestry_pca"):
+                try:
+                    with mo.status.spinner("Projecting the people on the panel's groups (PCA)..."):
+                        _pca = await asyncio.to_thread(mmg.ancestry_pca, _v["panel"], _target, **_kw)
+                    _ve = _pca.get("variance_explained") or [0, 0]
+                    _ref_pts = [(_x["pcs"][0], _x["pcs"][1], _x["group"], _x["group"]) for _x in _pca["reference"] if _x.get("pcs")]
+                    _people = [(_x["pcs"][0], _x["pcs"][1], _x["name"]) for _x in _pca["people"] if _x.get("pcs")]
+                    _items.append(figure_panel(
+                        figs.group_scatter(_ref_pts, f"PC1 ({100 * _ve[0]:.1f}%)", f"PC2 ({100 * _ve[1]:.1f}%)" if len(_ve) > 1 else "PC2",
+                                           f"The people on the panel's groups (PCA of {_pca['sites_used']:,} sites)", extra_points=_people),
+                        "ancestry_pca",
+                        "Each cloud is a group simulated from the panel's allele frequencies (real people of a group spread "
+                        "2 to 4 times more: the clouds ignore linkage and the structure inside each group). A person between two "
+                        "clouds has ancestry from both; one far from every cloud has ancestry the panel does not hold."))
+                    _items.append(mo.ui.table([{"person": _x["name"], "closest group": _x.get("closest_group") or "",
+                                                "distance (cloud spreads)": round(_x["distance"], 1) if _x.get("distance") is not None else "",
+                                                "sites observed": _x.get("sites_observed")} for _x in _pca["people"]],
+                                              selection=None, label="Each person's place in the PCA"))
+                except Exception as _perr:
+                    _items.append(mo.md(f"*The PCA could not be drawn: {_perr}*"))
+            _items.append(code_panel(f"r = {python_call('estimate_ancestry', _v['panel'], _target, **_kw)}", 'for x in r:\n    print(x["text"])',
+                                     f"pca = {python_call('ancestry_pca', _v['panel'], _target, **_kw)}"))
         elif anc_task.value == "Polygenic score":
             mo.stop(not chosen(_v["scoring"]), warn("Select a scoring file (download one from pgscatalog.org: the harmonized GRCh38 file)."))
             if _v["panel"] != "none":
@@ -4285,7 +4407,7 @@ def chrom_page_form(NO_FILE, btn_refresh_chrom, chrom_example, chrom_folder, chr
 
 
 @app.cell
-async def chrom_page_backend(asyncio, chosen, chrom_task, code_panel, error_panel, facts, form_chrom, get_page, mmg, mo, python_call, warn):
+async def chrom_page_backend(asyncio, chosen, chrom_task, code_panel, error_panel, facts, figs, figure_panel, form_chrom, get_page, mmg, mo, python_call, warn):
     mo.stop(get_page() != "chrom")
     mo.stop(form_chrom.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_chrom.value
@@ -4331,6 +4453,12 @@ async def chrom_page_backend(asyncio, chosen, chrom_task, code_panel, error_pane
                  if _r["method"] == "window" else "strict: any heterozygous call ends a run"),
             ]
             _items = [mo.callout(mo.md("### 🧫 Runs of homozygosity\n" + facts(_rows)), kind="success")]
+            _runs_k = [(_x["chrom"], _x["start0"], _x["end"]) if isinstance(_x, dict) else (_x[0], _x[1], _x[2]) for _x in _r["runs"]]
+            _items.append(figure_panel(
+                figs.karyogram(_runs_k), "runs_of_homozygosity",
+                "A few long runs on several chromosomes: the parents share a recent ancestor; many short runs everywhere: an old, "
+                "small population; one chromosome covered end to end: possibly uniparental disomy. A chromosome the file does not "
+                "cover shows no runs — no data is not the same as no homozygosity."))
             if _r["runs"]:
                 _runs = []
                 for _x in _r["runs"]:
@@ -4574,7 +4702,7 @@ def pgx_page_download(btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, error_p
     PGX_TABLES_VERSION = "cpic-v1.61.0"
     PGX_TABLES_DIR = f"mmgen_tools/pgx/{PGX_TABLES_VERSION}"
     PGX_TABLES_ZIP = f"mmgen_pgx_tables_{PGX_TABLES_VERSION}.zip"
-    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/" + PGX_TABLES_ZIP
+    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/" + PGX_TABLES_ZIP
     PGX_TABLES_SHA256 = "e329b8ec6e8567dc2570cd3823a96401e54135b3a5545305fb05c7265caa1f85"
     PGX_HLA_FILES = ("A_gen.fasta", "B_gen.fasta", "C_gen.fasta")
     # The IPD-IMGT/HLA release the tables pin in bam_genes.json (the engine uses no other):
@@ -4771,7 +4899,7 @@ def pgx_page_form(NO_FILE, PHARMCAT_DIR, btn_refresh_pgx, example_for, files_und
 
 
 @app.cell
-async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_pgx, get_page, mmg, mo, os, pgx_engine, pgx_hla_dir, pgx_tables_dir, python_call, re, split_name, warn):
+async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_pgx, get_page, mmg, mo, os, pgx_engine, pgx_hla_dir, pgx_tables_dir, python_call, re, split_name, warn):
     mo.stop(get_page() != "pgx")
     mo.stop(pgx_engine.value.startswith("A group"))  # the cell below runs that one
     mo.stop(form_pgx.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
@@ -4889,6 +5017,52 @@ async def pgx_page_backend(asyncio, beside, chosen, code_panel, error_panel, fac
         if _how:
             _items.append(mo.md("#### How each call was made: the positions read"))
             _items.append(mo.accordion(_how))
+        # CYP2D6 from the reads: the copy number along the gene and its pseudogene, against diploid control regions.
+        _tabdir_cn = _kw.get("tables")
+        if _kw.get("bam") and _tabdir_cn and hasattr(mmg, "depth_profile") and os.path.exists(os.path.join(_tabdir_cn, "bam_genes.json")):
+            try:
+                import json as _json_cn
+                with open(os.path.join(_tabdir_cn, "bam_genes.json"), encoding="utf-8") as _fh:
+                    _cnv = _json_cn.load(_fh)["cyp2d6"]["cnv_regions"]
+                _w, _p = _cnv["target_whole"], _cnv["paralog"]
+                _lo, _hi = min(_w["start"], _p["start"]) - 3000, max(_w["end"], _p["end"]) + 3000
+                with mo.status.spinner("Measuring the depth over CYP2D6, CYP2D7 and the control regions..."):
+                    _loc = await asyncio.to_thread(mmg.depth_profile, _kw["bam"], f"{_w['chrom']}:{_lo}-{_hi}", 500)
+                    _ctl = await asyncio.to_thread(mmg.depth_profile, _kw["bam"],
+                                                   [f"{_c['chrom']}:{_c['start']}-{_c['end']}" for _c in _cnv["controls"]], 1000)
+                _means = sorted(_r0["mean"] for _r0 in _ctl["regions"] if _r0.get("reads"))
+                if _means:
+                    _med = _means[len(_means) // 2] if len(_means) % 2 else (_means[len(_means) // 2 - 1] + _means[len(_means) // 2]) / 2
+                    _bins = [tuple(_b0) for _b0 in _loc["regions"][0]["bins"]]
+                    _items.append(figure_panel(
+                        figs.copy_number_profile(_bins, _med, features=[
+                            ("CYP2D6", _w["start"], _w["end"]), ("exon 9", _cnv["target_ex9"]["start"], _cnv["target_ex9"]["end"]),
+                            ("CYP2D7 (pseudogene)", _p["start"], _p["end"])],
+                            title=f"CYP2D6 copies along the gene (2 × depth / median of {len(_means)} control regions, {_med:.0f}×)"),
+                        "cyp2d6_copy_number",
+                        "About 2 copies all along CYP2D6: no deletion or duplication. The whole gene at 1 copy: one copy deleted "
+                        "(*5); at 3 or more: a duplication (×N). Only part of the gene changed — the exon 9 end apart from the "
+                        "5' end — is a hybrid with CYP2D7 (*36, *68). The CYP2D7 pseudogene is the comparison next to it."))
+            except Exception as _cerr:
+                _items.append(mo.md(f"*The CYP2D6 copy-number plot could not be drawn: {_cerr}*"))
+        # Genes with alternatives: the positions that tell the candidates apart, and what was read there.
+        _amb = [_g for _g in _called if _g.get("x_alternatives")]
+        _tabdir = _kw.get("tables")
+        if _amb and _tabdir and os.path.exists(os.path.join(_tabdir, "genes.json")):
+            import json as _json_pgx
+            with open(os.path.join(_tabdir, "genes.json"), encoding="utf-8") as _fh:
+                _gtab = {_x["gene"]: _x for _x in _json_pgx.load(_fh)["genes"]}
+            _mat = {}
+            for _g in _amb:
+                if _g["gene"] in _gtab:
+                    _mat[f"{_g['gene']}: {_g['diplotype']} or " + ", ".join(_a["diplotype"] for _a in _g["x_alternatives"][:4])] = figure_panel(
+                        figs.pgx_evidence(_g, _gtab[_g["gene"]]), f"pgx_evidence_{_g['gene']}")
+            if _mat:
+                _items.append(mo.md("#### Why some calls have alternatives: the evidence matrix\n\n"
+                                    "*Rows: the positions that define the candidate alleles; a filled cell is a base the allele "
+                                    "requires. The last column is what was read. Unphased variants, or positions not read, leave "
+                                    "more than one pair of alleles possible.*"))
+                _items.append(mo.accordion(_mat))
         _items.append(mo.callout(mo.md(
             "**Reading the result.** A phenotype such as *poor metabolizer* says how fast an enzyme is expected to work, not what to "
             "prescribe. **Any change to a treatment is a decision for the prescriber, with a laboratory-confirmed result.**"), kind="warn"))
@@ -5057,13 +5231,23 @@ def lookup_page_form(NO_FILE, btn_refresh_lookup, example_for, files_under, get_
             "alt": mo.ui.text(value=_ex.get("alt", ""), placeholder="blank: the most frequent other allele; or T, C>T, CAG>C", label="Allele to measure:"),
             "min_mapq": mo.ui.number(start=0, stop=255, step=1, value=_ex.get("min_mapq", 0), label="Minimum mapping quality:"),
             "min_baseq": mo.ui.number(start=0, stop=93, step=1, value=_ex.get("min_baseq", 13), label="Minimum base quality:"),
+            "reference": mo.ui.dropdown(options={"(none: mismatches from the reads' MD tags)": "none",
+                                                 **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}},
+                                        value=label_of({"(none: mismatches from the reads' MD tags)": "none",
+                                                        **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}},
+                                                       _ex.get("reference", "none"), "(none: mismatches from the reads' MD tags)"),
+                                        label="Reference genome (FASTA), for the browser view:", full_width=True),
+            "annotation": mo.ui.dropdown(options={"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}},
+                                         value=label_of({"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}},
+                                                        _ex.get("annotation", "none"), "(none)"),
+                                         label="Genes (GFF/GTF), drawn above the reads:", full_width=True),
         }, "🧮 Count")
     mo.vstack([_x for _x in (_about, form_lookup) if _x is not None])
     return (form_lookup,)
 
 
 @app.cell
-async def lookup_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, form_lookup, get_page, lookup_task, mmg, mo, python_call, warn):
+async def lookup_page_backend(asyncio, bed_next_to, chosen, code_panel, error_panel, facts, figs, figure_panel, form_lookup, get_page, lookup_task, mmg, mo, python_call, warn):
     mo.stop(get_page() != "lookup")
     mo.stop(form_lookup.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_lookup.value
@@ -5138,7 +5322,55 @@ async def lookup_page_backend(asyncio, bed_next_to, chosen, code_panel, error_pa
                     "reverse": _a.get("reverse", 0), "fraction": f"{100 * _a.get('fraction', 0):.1f}%",
                 } for _a in _r["alleles"]], selection=None, label="Alleles"))
             _items.append(mo.md("*About 50% of the reads with an allele is what a heterozygous variant looks like, about 100% a homozygous one; a few percent is usually noise — or, in a tumor, a low-fraction somatic variant.*"))
-            _items.append(code_panel(f"r = {python_call('pileup', _v['bam'], _v['position'].strip(), **_kw)}"))
+            _code = [f"r = {python_call('pileup', _v['bam'], _v['position'].strip(), **_kw)}"]
+            # The reads themselves, as a genome browser shows them.
+            if hasattr(mmg, "region_reads"):
+                _kw_v = {"flank": 60}
+                if _v["reference"] != "none":
+                    _kw_v["reference"] = _v["reference"]
+                if int(_v["min_mapq"] or 0):
+                    _kw_v["min_mapq"] = int(_v["min_mapq"])
+                if int(_v["min_baseq"] or 0) != 13:
+                    _kw_v["min_baseq"] = int(_v["min_baseq"] or 0)
+                _view = await asyncio.to_thread(mmg.region_reads, _v["bam"], _v["position"].strip(), **_kw_v)
+                _feats = []
+                if _v["annotation"] != "none":
+                    import gzip as _gz_ann
+                    _reg = _view["region"]
+                    _chrom_alias = {_reg["chrom"], _reg["chrom"][3:] if _reg["chrom"].startswith("chr") else "chr" + _reg["chrom"]}
+                    _op = _gz_ann.open if _v["annotation"].endswith(".gz") else open
+                    with _op(_v["annotation"], "rt", encoding="utf-8", errors="replace") as _fh:
+                        for _line in _fh:
+                            if _line.startswith("#"):
+                                continue
+                            _f = _line.rstrip("\n").split("\t")
+                            if len(_f) < 9 or _f[0] not in _chrom_alias or _f[2] not in ("gene", "exon", "CDS"):
+                                continue
+                            _fs, _fe = int(_f[3]), int(_f[4])
+                            if _fe < _reg["start"] or _fs > _reg["end"]:
+                                continue
+                            _attrs = dict(_x.split("=", 1) for _x in _f[8].split(";") if "=" in _x)
+                            _feats.append((_attrs.get("Name") or _attrs.get("gene") or _attrs.get("ID") or _f[2], _fs, _fe, _f[6], _f[2]))
+                _pos = int(_v["position"].strip().split(":")[1].replace(",", "").split("-")[0])
+                _sb = figs.strand_and_position(_view, _pos, (_v["alt"] or "").strip().upper()[-1:] or None)
+                _items.append(figure_panel(figs.genome_browser(_view, features=_feats), "reads_at_position",
+                                           "Hover a read, a base or a coverage bar for its details. Reads with mapping quality 0 are faint; "
+                                           "so are mismatches in bases of quality below 20."))
+                if _sb.get("alt"):
+                    _rows_sb = [("Allele checked", f"`{_sb['ref']}>{_sb['alt']}` at {_pos:,}")]
+                    if _sb.get("alt_forward") is not None:
+                        _rows_sb.append(("Reads with it: forward / reverse", f"`{_sb['alt_forward']}` / `{_sb['alt_reverse']}`; with the reference: `{_sb['ref_forward']}` / `{_sb['ref_reverse']}`"))
+                    if _sb.get("fisher_p") is not None:
+                        _rows_sb.append(("Strand bias", f"Fisher's p = `{_sb['fisher_p']:.3g}`, SOR = `{_sb['sor']:.2f}` (GATK filters SOR > 3 for SNVs)"))
+                    if _sb.get("alt_reads_drawn"):
+                        _rows_sb.append(("Where in the reads", f"median `{_sb['alt_median_distance_to_end']:.0f}` bases from the nearest end; "
+                                                               f"`{100 * _sb['alt_within_10_of_end']:.0f}%` within 10 bases of an end ({_sb['alt_reads_drawn']} reads drawn)"))
+                    _bad = (_sb.get("sor") or 0) > 3 or (_sb.get("alt_within_10_of_end") or 0) > 0.5
+                    _items.append(mo.callout(mo.md("### 🔬 Is it real? The usual checks\n" + facts(_rows_sb) +
+                                                   ("\n\n⚠️ **One of the checks points to an artefact**: confirm it independently." if _bad else "")),
+                                             kind="warn" if _bad else "info"))
+                _code.append(f"view = {python_call('region_reads', _v['bam'], _v['position'].strip(), **_kw_v)}")
+            _items.append(code_panel(*_code))
             _panel = mo.vstack(_items)
         except Exception as _err:
             _panel = error_panel(_err)
@@ -5249,7 +5481,7 @@ def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, 
 
 
 @app.cell
-async def assoc_page_backend(asyncio, assoc_task, chosen, code_panel, error_panel, facts, form_assoc, get_page, mmg, mo, output_name, python_call, scatter_chart, warn, words):
+async def assoc_page_backend(asyncio, assoc_task, chosen, code_panel, error_panel, facts, figs, figure_panel, form_assoc, get_page, mmg, mo, output_name, python_call, scatter_chart, warn, words):
     mo.stop(get_page() != "assoc")
     mo.stop(form_assoc.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_assoc.value
@@ -5351,22 +5583,28 @@ async def assoc_page_backend(asyncio, assoc_task, chosen, code_panel, error_pane
             if _table:
                 _items.append(mo.ui.table(_table, selection=None, pagination=True, page_size=15,
                                           label="Each allele tested, from the smallest p" + (" (the first 500)" if len(_rows) > 500 else "")))
-                import math as _math
-                _pts, _labels = [], []
-                for _x in _rows:
-                    if _x.get("p") is None or _x.get("beta") is None or _x["p"] <= 0:
-                        continue
-                    _sig = _x.get("fdr") is not None and _x["fdr"] < 0.05
-                    _kind = ("up" if _x["beta"] > 0 else "down") if _sig else "ns"
-                    _pts.append((_x["beta"], -_math.log10(_x["p"]), _kind, f"{_x['id']}: p {_num(_x['p'])}, FDR {_num(_x.get('fdr'))}"))
-                for _x in _rows[:8]:
-                    if _x.get("p") and _x.get("beta") is not None and _x["p"] > 0:
-                        _labels.append((_x["beta"], -_math.log10(_x["p"]), _x["id"]))
-                _chart = scatter_chart(_pts, "log odds ratio per copy" if _binary else "effect per copy (units of the outcome)",
-                                       "−log10 p", "Effect and significance of each allele", labels=_labels, vlines=(0,),
-                                       names={"up": "FDR < 0.05, higher with the ALT allele", "down": "FDR < 0.05, lower with the ALT allele", "ns": "FDR ≥ 0.05"})
-                if _chart is not None:
-                    _items.append(_chart)
+                _lam = figs.genomic_inflation([_x.get("p") for _x in _rows])
+                _qq = figure_panel(figs.qq_plot([_x.get("p") for _x in _rows]), "association_qq",
+                                   "Points along the dashed line: the test behaves as it should under no effect. The whole cloud "
+                                   "lifted above it (λGC well above 1) means inflation — population structure, relatives, or a "
+                                   "test that does not fit the data; with few tests, λGC is only a rough guide.")
+                _top = _rows[:15]
+                if _binary:
+                    _fr = figs.forest([(_x["id"], _x.get("or"), _x.get("or_low"), _x.get("or_high"), _x.get("method")) for _x in _top],
+                                      title="Odds ratio of the alleles with the smallest p (95% CI)", null=1.0, log=True,
+                                      x_label="odds ratio per copy")
+                else:
+                    _fr = figs.forest([(_x["id"], _x.get("beta"), _x.get("ci_low"), _x.get("ci_high"), _x.get("method")) for _x in _top],
+                                      title="Effect of the alleles with the smallest p (95% CI)", x_label="effect per copy (units of the outcome)")
+                _fp = figure_panel(_fr, "association_forest", "An interval that crosses the dashed line is compatible with no effect; "
+                                   "a wide one means few carriers.")
+                _items.append(mo.hstack([_x for _x in (_qq, _fp) if _x is not None], widths="equal", wrap=True))
+                if len({str(_x["chrom"]) for _x in _rows}) > 1 or len(_rows) > 50:
+                    _items.append(figure_panel(figs.manhattan(_rows), "association_manhattan",
+                                               "Each allele at its chromosome and position; orange: FDR < 0.05; dashed: the Bonferroni threshold."))
+                if _lam is not None and _lam > 1.1 and len(_rows) >= 100:
+                    _items.append(warn(f"λGC = {_lam:.2f}: the p-values are inflated across the board. Adjust for ancestry "
+                                       "(screen 17 gives the proportions) and check for relatives (screen 16) before trusting the hits."))
             _items.append(mo.accordion({"📄 The engine's full report": mo.plain_text(_r.get("text", ""))}))
             if _r.get("output"):
                 _items.append(mo.md(f"The table was written to `{_r['output']}`."))
@@ -5573,7 +5811,7 @@ def rnaseq_page_form(NO_FILE, btn_refresh_rnaseq, example_for, files_under, get_
 
 
 @app.cell
-async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, form_rnaseq, get_page, mmg, mo, python_call, rnaseq_task, scatter_chart, split_name, warn, words):
+async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_rnaseq, get_page, mmg, mo, np, python_call, rnaseq_task, scatter_chart, split_name, warn, words):
     mo.stop(get_page() != "rnaseq")
     # the tasks that start from the reads are run by rnaseq_fastq_backend
     mo.stop(rnaseq_task.value in ("Build a transcript index", "Quantify from FASTQ (pseudoalignment)", "See how one read is pseudoaligned"))
@@ -5704,6 +5942,69 @@ async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, 
             ) if _c is not None]
             if _charts:
                 _items.append(mo.hstack(_charts, widths="equal", wrap=True))
+            # Diagnostics: are the samples what the design says (PCA, distances), and is the test calibrated (p-values)?
+            _diag = []
+            try:
+                import gzip as _gz
+                _opener = _gz.open if str(_v["counts"]).endswith(".gz") else open
+                with _opener(_v["counts"], "rt", encoding="utf-8") as _fh:
+                    _head = _fh.readline().rstrip("\n").split("\t")
+                    _mat = [_line.rstrip("\n").split("\t") for _line in _fh if _line.strip()]
+                _cols = [_head.index(_s0) for _s0 in _r["samples"]]
+                _X = np.array([[float(_row[_c]) for _c in _cols] for _row in _mat], dtype=float)
+                _X = np.log2(_X / np.array(_r["size_factors"])[None, :] + 1.0)
+                _keep = _X.mean(axis=1) > 0
+                _X = _X[_keep]
+                _var = _X.var(axis=1)
+                _sel = _X[np.argsort(-_var)[:500]]
+                _C = _sel - _sel.mean(axis=1, keepdims=True)
+                _U, _S, _Vt = np.linalg.svd(_C, full_matrices=False)
+                _pv = _S ** 2 / max(float((_S ** 2).sum()), 1e-12)
+                _sampletab = {}
+                with open(_v["samples"], encoding="utf-8") as _fh:
+                    _sh = _fh.readline().rstrip("\n").split("\t")
+                    _ci = _sh.index(_cond) if _cond in _sh else 1
+                    for _line in _fh:
+                        _f = _line.rstrip("\n").split("\t")
+                        if len(_f) > _ci:
+                            _sampletab[_f[0]] = _f[_ci]
+                _pts = [(float(_Vt[0][_j] * _S[0]), float(_Vt[1][_j] * _S[1]) if len(_S) > 1 else 0.0, _sampletab.get(_s0, "—"), _s0)
+                        for _j, _s0 in enumerate(_r["samples"])]
+                _diag.append(figure_panel(
+                    figs.group_scatter(_pts, f"PC1 ({100 * _pv[0]:.0f}% of the variance)",
+                                       f"PC2 ({100 * _pv[1]:.0f}%)" if len(_pv) > 1 else "PC2", "Samples: PCA of the 500 most variable genes",
+                                       label_points=len(_pts) <= 16),
+                    "rnaseq_sample_pca",
+                    "Samples of the same condition should sit together. A sample among the other group may be swapped or "
+                    "mislabeled; a split along PC1 that follows a batch, a donor or a cell line, not the condition, is a factor to "
+                    "add to the design."))
+                _D = np.sqrt(((_sel[:, :, None] - _sel[:, None, :]) ** 2).sum(axis=0))
+                _order = sorted(range(len(_r["samples"])), key=lambda _j: (_sampletab.get(_r["samples"][_j], ""), _r["samples"][_j]))
+                _labs = [f"{_r['samples'][_j]} ({_sampletab.get(_r['samples'][_j], '—')})" for _j in _order]
+                _diag.append(figure_panel(
+                    figs.heatmap([[float(_D[_a, _b]) for _b in _order] for _a in _order], _labs, _labs,
+                                 title="Distances between samples", value_label="Euclidean distance (log2 normalized counts)", reverse=True),
+                    "rnaseq_sample_distances", "Darker is closer. Blocks along the diagonal should match the conditions."))
+            except Exception as _derr:
+                _diag.append(mo.md(f"*The sample diagnostics could not be drawn: {_derr}*"))
+            try:
+                with open(_out, encoding="utf-8") as _fh:
+                    _th = _fh.readline().rstrip("\n").split("\t")
+                    _pi = _th.index("pvalue")
+                    _pvals = []
+                    for _line in _fh:
+                        _f = _line.rstrip("\n").split("\t")
+                        if len(_f) > _pi and _f[_pi] not in ("", "NA", "nan", "None"):
+                            _pvals.append(float(_f[_pi]))
+                _diag.append(figure_panel(
+                    figs.histogram(_pvals, bins=20, title="p-values of the genes tested", x_label="p-value", lo=0, hi=1),
+                    "rnaseq_pvalues",
+                    "Expected: flat, with a peak at the left for the genes that change. A hump in the middle or a peak at the "
+                    "right means the test does not fit the data (outliers, a missing factor, too few replicates)."))
+            except Exception:
+                pass
+            if _diag:
+                _items.append(mo.hstack(_diag, widths="equal", wrap=True))
             for _w in _r["warnings"][:5]:
                 _items.append(warn(_w))
             _args = {_k: _x for _k, _x in _kw.items() if _k != "output"}
@@ -6349,7 +6650,7 @@ def outbreak_page_form(NO_FILE, btn_refresh_outbreak, example_for, files_under, 
 
 
 @app.cell
-async def outbreak_page_backend(asyncio, chosen, code_panel, error_panel, facts, form_outbreak, get_page, mmg, mo,
+async def outbreak_page_backend(asyncio, chosen, code_panel, error_panel, facts, figs, figure_panel, form_outbreak, get_page, mmg, mo,
                                 outbreak_task, python_call, tree_chart, warn):
     mo.stop(get_page() != "outbreak")
     mo.stop(form_outbreak.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
@@ -6436,6 +6737,12 @@ async def outbreak_page_backend(asyncio, chosen, code_panel, error_panel, facts,
 
             def _aa(_x):
                 return [_c["label"] for _c in _x["aa_substitutions"] + _x["aa_deletions"]] + [_c["label"] for _c in _x["aa_insertions"]]
+
+            if _ok:
+                _items.append(figure_panel(
+                    figs.viral_genomes(_r), "viral_mutations",
+                    "Each genome against the reference, as Nextclade draws it. A dark grey block is a stretch the sequencing did "
+                    "not read (Ns, an amplicon dropout), not a deletion: a real deletion is red and usually shared by a lineage."))
 
             _items.append(mo.ui.table([{
                 "genome": _x["name"],
@@ -6614,8 +6921,8 @@ def amplicon_page_form(NO_FILE, amplicon_example, amplicon_folder, amplicon_task
 
 
 @app.cell
-async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_panel, error_panel, facts, form_amplicon, get_page,
-                                mmg, mo, os, python_call, warn):
+async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_amplicon,
+                                get_page, mmg, mo, os, python_call, warn):
     mo.stop(get_page() != "amplicon")
     mo.stop(form_amplicon.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_amplicon.value
@@ -6752,6 +7059,25 @@ async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_pan
                                         "confidence (last rank)": f"{_a['confidence'][len(_a['lineage']) - 1]:.2f}" if _a["lineage"] else ""}
                                        for _a in _A], selection=None, pagination=True, page_size=15, label="Taxonomy"))
             _code = [f"r = {python_call('classify_asvs', _v['fasta'], _v['model'], _out, **_kw)}"]
+            # Reads per ASV (from the feature table, when given) for the sunburst; else each ASV counts once.
+            _reads = {}
+            if _v["table"] != "none":
+                try:
+                    with open(_v["table"], encoding="utf-8") as _fh:
+                        _fh.readline()
+                        for _line in _fh:
+                            _f = _line.rstrip("\n").split("\t")
+                            _reads[_f[0]] = sum(float(_z) for _z in _f[1:] if _z.strip())
+                except (OSError, ValueError):
+                    _reads = {}
+            _skip = 1 if _ranks and _ranks[0].lower() in ("kingdom", "domain") else 0
+            _lin = [(tuple(_a["lineage"][_skip:]), _reads.get(_a["id"], 0 if _reads else 1)) for _a in _A]
+            _items.append(figure_panel(
+                figs.sunburst(_lin, title="Taxonomy" + (" (share of the reads)" if _reads else " (share of the ASVs: no table given)"),
+                              ranks=[_k.lower() for _k in _ranks[_skip:]]),
+                "taxonomy_sunburst",
+                "From the centre outwards, one ring per rank; an arc's angle is its share. 'unclassified' is where the "
+                "classifier's confidence fell below the threshold: the reference has no close relative at that rank."))
             if _v["table"] != "none":
                 _c = await asyncio.to_thread(mmg.taxa_composition, _v["table"], _out, rank=_v["rank"], top=8)
                 _items.append(mo.md(f"**Composition of each sample, by {_c['rank'].lower()}** (the 8 most abundant; the rest as Other):"))
@@ -6795,9 +7121,14 @@ async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_pan
             _pc = _b["pcoa"]
             if _pc["coordinates"] and len(_pc["coordinates"][0]) >= 2:
                 _pe = _pc["proportion_explained"]
-                _items.append(_scatter([(_c[0], _c[1], _group.get(_s, "—"), _s) for _s, _c in zip(_b["samples"], _pc["coordinates"])],
+                _items.append(figure_panel(
+                    figs.group_scatter([(_c[0], _c[1], _group.get(_s, "—"), _s) for _s, _c in zip(_b["samples"], _pc["coordinates"])],
                                        f"PCo1 ({100 * _pe[0]:.1f}%)", f"PCo2 ({100 * _pe[1]:.1f}%)",
-                                       "Principal coordinates: samples close together have similar communities"))
+                                       "Principal coordinates: samples close together have similar communities"),
+                    "beta_pcoa",
+                    "Each ellipse holds about 95% of its group if the points were normally spread (groups of three or more). "
+                    "Separate ellipses with little overlap go with a significant PERMANOVA; a group much more spread than "
+                    "another can also make PERMANOVA significant (it tests location and dispersion together)."))
             _items.append(code_panel(f"a = {python_call('alpha_diversity', _v['table'], **_kw_a)}",
                                      f"b = {python_call('beta_diversity', _v['table'], **_kw_b)}"))
         else:
@@ -7011,7 +7342,7 @@ def contam_page_form(NO_FILE, btn_refresh_contam, contam_example, contam_folder,
 
 
 @app.cell
-async def contam_page_backend(asyncio, beside, chosen, code_panel, contam_task, error_panel, facts, form_contam, get_page, mmg, mo, os, pair_fastqs, python_call, split_name, warn, words):
+async def contam_page_backend(asyncio, beside, chosen, code_panel, contam_task, error_panel, facts, figs, figure_panel, form_contam, get_page, mmg, mo, os, pair_fastqs, python_call, split_name, warn, words):
     mo.stop(get_page() != "contam")
     mo.stop(form_contam.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_contam.value
@@ -7087,6 +7418,12 @@ async def contam_page_backend(asyncio, beside, chosen, code_panel, contam_task, 
                 if _table:
                     _items.append(mo.ui.table(_table, selection=None, pagination=True, page_size=12,
                                               label=f"{_s['name']}: the organisms with reads"))
+                    _items.append(figure_panel(
+                        figs.genome_windows(_s["organisms"], title=f"{_s['name']}: where the reads fall on each genome"),
+                        f"screen_{_s['name']}_windows",
+                        "One cell per genome window. Reads of a real infection spread over the genome; a few lit windows in "
+                        "one place are a vector element, an integrated fragment or a gene shared with other organisms — the "
+                        "breadth rule turns those into 'below threshold'."))
                 else:
                     _items.append(mo.md(f"*{_s['name']}: no read matched any agent or control of the database.*"))
             if _r.get("spike_results"):

@@ -232,6 +232,24 @@ mmg.convert_file(p("x.bam"), p("back.sam"))
 back = read(p("back.sam"))
 check("SAM -> sorted BAM -> SAM", back[2:] == [read(sam)[3], read(sam)[2]] and "SO:coordinate" in back[0], str(back))
 check("query_region on a BAM", [l.split("\t")[0] for l in mmg.query_region(p("x.bam"), "chr1:100-100")] == ["r1"])
+# The genome browser's data: the reads of a window, their depth, and the reference bases.
+_ref_fa = write("browser_ref.fa", [">chr1", "A" * 99 + "ACGTA" + "C" * 896])
+_view = mmg.region_reads(p("x.bam"), "chr1:95-110", reference=_ref_fa)
+_r1 = next(r for r in _view["reads"] if r["name"] == "r1")
+check("region_reads: the read, its place and its row, the coverage, the reference",
+      _r1["start"] == 100 and _r1["end"] == 104 and _r1["mismatches"] == [] and _view["reference"].startswith("AAAAA")
+      and any(c[0] == 100 and c[1] == 1 for c in _view["coverage"]), str(_view)[:300])
+_dp = mmg.depth_profile(p("x.bam"), "chr1:100-104", bin=5)
+check("depth_profile: one read over five bases is depth 1", abs(_dp["regions"][0]["bins"][0][2] - 1.0) < 1e-9, str(_dp)[:200])
+check("fetch_sequence", mmg.fetch_sequence(_ref_fa, "chr1:100-104") == "ACGTA")
+# The assembly graph: one random sequence is one isolated unitig; two contigs that overlap make one scaffold.
+_rnd = random.Random(11)
+_seq = "".join(_rnd.choice("ACGT") for _ in range(400))
+_g = mmg.unitig_graph(mmg.read_fasta_batch([write("one.fa", [">s", _seq])], 31), 31)
+check("unitig_graph: one sequence, one isolated unitig of its length", _g["summary"]["nodes"] == 1 and _g["nodes"][0]["length"] == 400
+      and _g["nodes"][0]["kind"] == "isolated", str(_g["summary"]))
+_og = mmg.overlap_graph([_seq[:250], _seq[230:]], 20)
+check("overlap_graph: two contigs that overlap by 20 bases, joined", len(_og["edges"]) == 1 and _og["edges"][0]["used"], str(_og)[:300])
 mmg.convert_file(p("sorted.vcf"), p("sorted.vcf.parquet"))
 mmg.convert_file(p("sorted.vcf.parquet"), p("from_parquet.vcf"))
 check("VCF -> Parquet -> VCF", read(p("from_parquet.vcf")) == read(p("sorted.vcf")))
@@ -303,7 +321,8 @@ NEW = ["relatedness", "trio_analysis", "runs_of_homozygosity", "genetic_sex", "b
        "tree_from_matrix", "viral_mutations", "in_silico_pcr", "amplicon_asvs", "train_classifier", "classify_asvs",
        "alpha_diversity", "beta_diversity", "taxa_composition", "tumor_mutational_burden", "gene_set_test", "pgx_cohort",
        "genotype_association", "association_power", "build_screen_database", "describe_screen_database",
-       "contaminant_screen", "build_transcript_index", "transcript_index_info", "quantify_samples", "explain_pseudoalignment"]
+       "contaminant_screen", "build_transcript_index", "transcript_index_info", "quantify_samples", "explain_pseudoalignment",
+       "ancestry_pca", "region_reads", "depth_profile", "fetch_sequence", "unitig_graph", "overlap_graph"]
 check("every function of the newer modules is there", all(hasattr(mmg, f) for f in NEW), [f for f in NEW if not hasattr(mmg, f)])
 rng = random.Random(7)
 DNA = lambda n: "".join(rng.choice("ACGT") for _ in range(n))

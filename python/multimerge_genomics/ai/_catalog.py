@@ -58,9 +58,9 @@ SCREEN_BY_PAGE = {s[1]: s for s in SCREENS}
 _PAGE_OF = {
     "read_fasta_batch": "qc", "read_fastq_batch": "qc", "test_giant_kmer": "qc",
     "minhash_signatures": "cluster", "sort_merge_bytes": "cluster", "read_and_merge_kmer_files": "cluster", "decode_kmers": "cluster",
-    "build_debruijn_graph": "assembly", "assemble_debruijn": "assembly",
+    "build_debruijn_graph": "assembly", "assemble_debruijn": "assembly", "unitig_graph": "assembly",
     "build_bloom_filter": "variant", "extract_mutations": "variant", "decode_kmers_128": "variant",
-    "translate_proteins": "annotation", "build_scaffolds": "scaffold",
+    "translate_proteins": "annotation", "build_scaffolds": "scaffold", "overlap_graph": "scaffold",
     "multimerge_vcf": "vcf",
     "sort_genomic": "sort", "index_file": "sort", "query_region": "sort", "bed_merge": "sort", "bed_intersect": "sort",
     "bed_subtract": "sort", "bed_complement": "sort", "bed_closest": "sort", "bed_coverage": "sort", "bed_slop": "sort",
@@ -69,11 +69,11 @@ _PAGE_OF = {
     "fastq_stats": "fastq", "fastq_report": "fastq", "fastq_trim": "fastq",
     "count_kmers": "kmercount", "convert_file": "convert", "parquet_options": "convert",
     "relatedness": "kin", "trio_analysis": "kin",
-    "build_panel": "anc", "panel_from_frequencies": "anc", "estimate_ancestry": "anc", "polygenic_score": "anc",
+    "build_panel": "anc", "panel_from_frequencies": "anc", "estimate_ancestry": "anc", "polygenic_score": "anc", "ancestry_pca": "anc",
     "clinvar_findings": "findings", "gene_regions": "findings",
     "pharmcat_prepare": "pgx", "pharmcat_run": "pgx", "pgx_run": "pgx", "mmgen_pgx_run": "pgx", "pgx_cohort": "pgx",
     "genetic_sex": "chrom", "runs_of_homozygosity": "chrom",
-    "variant_lookup": "lookup", "pileup": "lookup",
+    "variant_lookup": "lookup", "pileup": "lookup", "region_reads": "lookup", "depth_profile": "lookup", "fetch_sequence": "lookup",
     "count_reads": "rnaseq", "differential_expression": "rnaseq", "gene_set_test": "rnaseq",
     "crispr_count": "crispr", "crispr_test": "crispr",
     "sketch_references": "meta", "gather": "meta", "classify_reads": "meta",
@@ -92,7 +92,7 @@ _PAGE_OF = {
 # interface; an agent or an MCP client cannot call them with JSON.
 _BYTES = {
     "read_fasta_batch", "read_fastq_batch", "minhash_signatures", "sort_merge_bytes", "read_and_merge_kmer_files", "decode_kmers",
-    "build_debruijn_graph", "assemble_debruijn", "build_bloom_filter", "extract_mutations", "decode_kmers_128", "test_giant_kmer",
+    "build_debruijn_graph", "assemble_debruijn", "unitig_graph", "build_bloom_filter", "extract_mutations", "decode_kmers_128", "test_giant_kmer",
 }
 # Human-genome tools: their results describe a person (screens 16-21, 28, 30).
 _HUMAN_PAGES = {"kin", "anc", "findings", "pgx", "chrom", "lookup", "tmb", "assoc"}

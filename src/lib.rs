@@ -52,6 +52,11 @@ pub mod parentesco;
 // Paineis de frequencias por populacao, ascendencia (EM supervisionado) e
 // escore poligenico (arquivos do PGS Catalog).
 pub mod ancestralidade;
+// PCA de ascendencia: nuvens simuladas das frequencias do painel e as pessoas projetadas.
+pub mod pca_ancestralidade;
+// Navegador genomico (leituras de uma regiao, profundidade, sequencia) e o grafo da montagem.
+pub mod navegador;
+pub mod grafo_montagem;
 // Pesquisa: contagem de leituras por gene e expressao diferencial (DESeq2).
 pub mod expressao;
 pub mod conjuntos;
@@ -2790,6 +2795,178 @@ fn explain_pseudoalignment(py: Python<'_>, index: &str, read: &str, read2: Optio
     json_para_py(py, &j)
 }
 
+/// A PCA picture of ancestry, to show next to the bar chart of
+/// `estimate_ancestry`: the people projected onto the reference groups of a
+/// frequency panel (`build_panel`, `panel_from_frequencies`). A panel holds
+/// allele frequencies, not people, so each group is drawn as a cloud of
+/// `per_group` individuals SIMULATED from its frequencies (each site drawn
+/// independently): the clouds show the drift between the groups, not real
+/// individuals, and real populations spread 2 to 4 times more. The axes are
+/// a PCA of one simulated sample; the clouds are a second sample projected
+/// exactly as the people are (least squares on the sites each person has,
+/// so missing sites do not pull a person toward 0). Experimental, for
+/// teaching and research only: a position describes genetic similarity to
+/// the panel's groups, not an identity.
+///
+/// - `vcfs`, `samples`, `callable_beds`, `absent_is_ref`, `pass_only`: the
+///   people, as in `estimate_ancestry`.
+/// - `max_sites`: at most this many panel SNVs, spread evenly along the
+///   genome (at least `min_distance_bp` apart), observed in the people, with
+///   a minor-allele frequency of at least `min_maf` (mean of the groups).
+/// - `per_group`: simulated individuals per group. `components`: groups - 1
+///   of them hold the structure. The same `seed` gives the same result.
+/// - `sites_output`: a TSV of the sites used, their standardization and the
+///   axes, to project other people later.
+///
+/// Returns a dictionary: `groups`, `sites_used`, `variance_explained`,
+/// `shrinkage`, `reference` (`group`, `pcs` per simulated individual),
+/// `centroids` (`group`, `pcs`, `sd`), `people` (`name`, `vcf`, `pcs`,
+/// `sites_observed`, `missing_fraction`, `closest_group`, `distance`),
+/// `warnings`, `text`, `notice`.
+#[pyfunction]
+#[pyo3(signature = (panel, vcfs, samples=None, callable_beds=None, max_sites=5000, per_group=100, components=4, seed=1,
+                    min_maf=0.05, min_distance_bp=1000, absent_is_ref=true, pass_only=true, sites_output=None))]
+#[allow(clippy::too_many_arguments)]
+fn ancestry_pca(
+    py: Python<'_>,
+    panel: &str,
+    vcfs: &Bound<'_, PyAny>,
+    samples: Option<&Bound<'_, PyAny>>,
+    callable_beds: Option<&Bound<'_, PyAny>>,
+    max_sites: usize,
+    per_group: usize,
+    components: usize,
+    seed: u64,
+    min_maf: f64,
+    min_distance_bp: u64,
+    absent_is_ref: bool,
+    pass_only: bool,
+    sites_output: Option<String>,
+) -> PyResult<Py<PyAny>> {
+    let pessoas = pessoas_anc(py, vcfs, samples, callable_beds)?;
+    let op = pca_ancestralidade::PcaOptions {
+        max_sites,
+        per_group,
+        components,
+        seed,
+        min_maf,
+        min_distance_bp,
+        absent_is_ref,
+        pass_only,
+        sites_output,
+        ..Default::default()
+    };
+    let r = py.allow_threads(|| pca_ancestralidade::ancestry_pca_persons(panel, &pessoas, &op)).map_err(erro_py)?;
+    let d = json_para_py(py, &r.json())?;
+    d.bind(py).set_item("notice", AVISO)?;
+    Ok(d)
+}
+
+/// The reads of a BAM (or SAM) over a stretch of the genome, ready to draw
+/// as a genome browser does (IGV-like): for each read its aligned blocks
+/// (the gaps between them are deletions and introns), mismatches,
+/// insertions, deletions, soft and hard clips, mate, and the row it is drawn
+/// in; and the coverage of every position (depth, A, C, G, T, deletions,
+/// insertions), counted as `pileup` counts it, also per strand. Uses the
+/// .bai when there is one.
+///
+/// - `region`: "chr1:1000-1200" (1-based, end included; at most 100,000
+///   bases), or "chr1:1000" for a window of `flank` bases on each side.
+/// - `reference`: the FASTA the reads were aligned to; mismatches are
+///   computed against it. Without it, they come from each read's MD tag.
+/// - `max_reads`: most reads returned; more than that, a fixed sample
+///   (mates kept together). The coverage always counts every read.
+/// - `min_mapq`, `exclude_flags`: which reads count (as samtools mpileup
+///   -q / --ff); `min_baseq`: bases below it are left out of the coverage.
+#[pyfunction]
+#[pyo3(signature = (alignments, region, reference=None, max_reads=500, min_mapq=0, min_baseq=13, exclude_flags=0xF04, flank=60))]
+#[allow(clippy::too_many_arguments)]
+fn region_reads(
+    py: Python<'_>,
+    alignments: &str,
+    region: &str,
+    reference: Option<String>,
+    max_reads: usize,
+    min_mapq: u8,
+    min_baseq: u8,
+    exclude_flags: u16,
+    flank: u64,
+) -> PyResult<Py<PyAny>> {
+    let op = navegador::ReadsOptions { reference, max_reads, min_mapq, min_baseq, exclude_flags, flank };
+    let r = py.allow_threads(|| navegador::region_reads(alignments, region, &op)).map_err(erro_py)?;
+    json_para_py(py, &r)
+}
+
+/// Mean read depth in bins of `bin` bases over each region, for
+/// copy-number plots (e.g. CYP2D6 and CYP2D7 against control regions):
+/// only aligned bases count (no deletions, introns or clipped bases);
+/// duplicates, secondary and QC-failed reads are left out. Each region
+/// also gets its mean and the median of its bins.
+///
+/// - `regions`: "chr22:42126499-42130881", or a list of them; "chr22" is the
+///   whole sequence.
+#[pyfunction]
+#[pyo3(signature = (alignments, regions, bin=1000, min_mapq=0))]
+fn depth_profile(py: Python<'_>, alignments: &str, regions: &Bound<'_, PyAny>, bin: u32, min_mapq: u8) -> PyResult<Py<PyAny>> {
+    let regioes = lista_de_textos(Some(regions), "regions")?;
+    let r = py.allow_threads(|| navegador::depth_profile(alignments, &regioes, bin, min_mapq)).map_err(erro_py)?;
+    json_para_py(py, &r)
+}
+
+/// The bases (uppercase) of a region of a FASTA: "chr1:1000-1200",
+/// "chr1:1000", "chr1:1000-" (to the end) or "chr1" (at most 10 Mb). Works
+/// with or without a .fai, and with .gz; "chr1" and "1" are matched.
+#[pyfunction]
+fn fetch_sequence(py: Python<'_>, fasta: &str, region: &str) -> PyResult<String> {
+    py.allow_threads(|| navegador::fetch_sequence(fasta, region)).map_err(erro_py)
+}
+
+/// The assembly graph of a set of k-mers (16 bytes each, as returned by
+/// `read_fasta_batch` / `read_fastq_batch`), ready to draw like Bandage: the
+/// compacted De Bruijn graph, whose nodes are the unitigs (the stretches
+/// without a branch, the same sequences `assemble_debruijn` returns) and whose
+/// edges are the (k-1)-base overlaps between them.
+///
+/// Returns a dict: `summary` (unitigs, edges, components, N50, tips, bubbles,
+/// repeats, and what was left out), `text` (the same in plain words), `nodes`
+/// (`id`, `length`, `kmers`, `gc`, `in_degree`, `out_degree`, `circular`,
+/// `kind`, `component`, and the drawing: `x`, `y`, `size`, `path`), `edges`
+/// (`from`, `to`, `overlap`), `components` and `layout` (`width`, `height`,
+/// `unit`). `kind` is "tip" (a dead end shorter than 2k bases off a fork,
+/// usually a sequencing error), "bubble" (one of parallel paths shorter than
+/// 3k bases between the same two nodes: a SNP or an error), "repeat"
+/// (entered from two places and left to two), "isolated" or "".
+///
+/// - `max_nodes`: with more unitigs than this, only the largest components
+///   are drawn; the summary says what was left out.
+///
+/// The layout is the same on every run.
+#[pyfunction]
+#[pyo3(signature = (kmer_bytes, k, max_nodes=2000))]
+fn unitig_graph(py: Python<'_>, kmer_bytes: &[u8], k: u8, max_nodes: usize) -> PyResult<Py<PyAny>> {
+    let kmers = como_u128(kmer_bytes);
+    let texto = py.allow_threads(|| grafo_montagem::unitig_graph(&kmers, k, max_nodes)).map_err(erro_py)?;
+    json_para_py(py, &texto)
+}
+
+/// The overlap graph of contigs, ready to draw: one node per contig (in the
+/// order given), an edge from A to B when the last bases of A are the first
+/// bases of B (same strand), with the longest such overlap of at least
+/// `min_overlap` bases. Each edge says whether it is a join
+/// `build_scaffolds(sequences, overlap=min_overlap)` looks for (an overlap of
+/// exactly that many bases: `scaffold_rule`) and whether it made it (`used`);
+/// `scaffolds` lists the contigs of each scaffold it builds, in order, with
+/// its length and whether it closed into a circle. Same drawing keys and
+/// `max_nodes` as `unitig_graph`.
+#[pyfunction]
+#[pyo3(signature = (sequences, min_overlap, max_nodes=2000))]
+fn overlap_graph(py: Python<'_>, sequences: Vec<String>, min_overlap: usize, max_nodes: usize) -> PyResult<Py<PyAny>> {
+    let texto = py
+        .allow_threads(|| grafo_montagem::overlap_graph_with_limit(&sequences, min_overlap, max_nodes))
+        .map_err(erro_py)?;
+    json_para_py(py, &texto)
+}
+
 /// Counts the guides of a pooled CRISPR screen in FASTQ files, as `mageck
 /// count` does: each read's guide is found at its offset (found from the first
 /// reads when not given) and matched to the library exactly (or with one
@@ -3539,6 +3716,12 @@ fn multimerge_genomics(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(transcript_index_info, m)?)?;
     m.add_function(wrap_pyfunction!(quantify_samples, m)?)?;
     m.add_function(wrap_pyfunction!(explain_pseudoalignment, m)?)?;
+    m.add_function(wrap_pyfunction!(ancestry_pca, m)?)?;
+    m.add_function(wrap_pyfunction!(region_reads, m)?)?;
+    m.add_function(wrap_pyfunction!(depth_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(fetch_sequence, m)?)?;
+    m.add_function(wrap_pyfunction!(unitig_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(overlap_graph, m)?)?;
     m.add_function(wrap_pyfunction!(crispr_count, m)?)?;
     m.add_function(wrap_pyfunction!(crispr_test, m)?)?;
     m.add_function(wrap_pyfunction!(sketch_references, m)?)?;

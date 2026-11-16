@@ -741,7 +741,8 @@ try:
             api = mmg.count_kmers(["pair_R1.fastq.gz", "pair_R2.fastq.gz"], "api_kmers.tsv.gz", k=31)
             check("count: the totals, and the table as count_kmers writes it",
                   number(t, "Distinct k-mers:") == api["distinct_kmers"] and records("kmers.tsv.gz") == records("api_kmers.tsv.gz"), (t or "")[-300:])
-            check("count: the spectrum chart is drawn", pg.locator("svg[aria-label^='Abundance spectrum']").count() >= 1)
+            check("count: the spectrum charts are drawn (log and linear)", pg.locator("svg[aria-label^='Spectrum (log scale)']").count() >= 1
+                  and pg.locator("svg[aria-label^='Spectrum (linear)']").count() >= 1)
 
         print("== screen 14: formats & conversion")
         with page(browser) as pg:

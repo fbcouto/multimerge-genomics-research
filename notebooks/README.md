@@ -22,10 +22,10 @@ paragraph with the version and the parameters used; how to adapt it; references.
 ## How to run them
 
 **On Google Colab** (nothing to install): click the badge, then *Runtime > Run all*. The first cell installs
-MMGEN from the [v2.2.0 release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.2.0) (about a minute); the data cell downloads the demo pack it needs
+MMGEN from the [v2.3.0 release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.3.0) (about a minute); the data cell downloads the demo pack it needs
 once (about 45 MB each).
 
-**On your computer**: install the MMGEN wheel for your system from the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.2.0)
+**On your computer**: install the MMGEN wheel for your system from the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.3.0)
 (`python -m pip install <the .whl file>`), plus `python -m pip install jupyter matplotlib pandas`, and open the
 notebook with Jupyter in a working folder. The notebooks write the demo files to `data/` and their results to
 `results/<notebook name>/`, both in the folder where they run.
@@ -65,7 +65,7 @@ table above.
 
 ## The demo data
 
-Two packs, attached to the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.2.0); each has a `README.md` with the sources and licenses:
+Two packs, attached to the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.3.0); each has a `README.md` with the sources and licenses:
 
 * `mmgen_demo_human_v3.zip`: the Genome in a Bottle (NIST) benchmark calls of seven public genomes (HG001-HG007, volunteers
   who consented to open sharing) cut to chromosome 22 and the genes of some clinical panels, with their callable

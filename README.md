@@ -25,7 +25,7 @@ MMGEN is free (Apache 2.0). If it is useful to you, you can [support its develop
 * **Checked against the tools it replaces.** `fastq_trim` writes the same reads as cutadapt (0 differences in 128,800 reads over 84 option combinations); BAM files are read back by an independent reader, using our own `.bai`; Parquet files are read by pyarrow and polars, and theirs by us.
 * **No GPU required.** Every GPU path has a CPU twin that returns the same result, bit for bit. With a GPU, the Bloom filter is 3× to 8× faster.
 * **One wheel per platform.** The extension is built against Python's stable ABI and serves every Python from 3.10 on.
-* **Tested.** 10,915 Rust tests, plus Python tests that drive the API with real data, compare it with independent tools, and drive the interface in a real browser.
+* **Tested.** 11,744 Rust tests, plus Python tests that drive the API with real data, compare it with independent tools, and drive the interface in a real browser.
 
 What the validator says about one of the example files of the Colab notebook, which has defects planted on purpose:
 
@@ -160,6 +160,37 @@ An assistant built on Claude, Anthropic's AI, for students who know the question
 
 The same pieces are open to Python, in `multimerge_genomics.ai`: `catalog()` and `tool_definitions()` (every tool as a Claude tool definition), `Assistant` (`explain`, `plan` and their streaming forms), `Agent` (the approval loop), `Recorder` (the session record) and `check_script` (an answer's Python checked against the catalog).
 
+## 🔎 Diagnostic figures
+
+The screens draw the figures in which the usual artefacts show — what a summary number hides. They are not decoration. Each figure has a **⬇️ SVG** button (a vector file for a paper) and a line on what to look for:
+
+| Screen | Figure | What it reveals |
+| :--- | :--- | :--- |
+| 3, 7 | **Assembly graph**, as Bandage draws it: the unitigs (or the contigs) and their overlaps | tips (sequencing errors), bubbles (a SNP or an error), repeats (where an assembly breaks), rings (circular molecules) |
+| 1, 13 | **K-mer spectrum**, log and linear, read as GenomeScope's plot is read | the error k-mers, the coverage peak, a second peak at half of it (a diploid genome with heterozygous sites), and from them the genome size, the repeats and a rough heterozygosity, before any assembly |
+| 12 | **FASTQ report**: quality bands over FastQC's good / reasonable / poor zones; base composition; GC per read against the normal curve | where to trim; primer bias at the start, adapters at the end; a second GC peak (contamination by another organism) |
+| 16 | **Kinship against IBS0** (the KING plot) with the degree thresholds | parent and child against siblings; pairs between the bands (a swapped or contaminated sample) |
+| 17 | **STRUCTURE-style bars** and a **PCA** of the people on the panel's groups (clouds simulated from the panel's frequencies) | admixture; ancestry the panel does not hold (a person far from every cloud) |
+| 19 | **Evidence matrix** of a pharmacogene with alternative calls: positions × candidate star alleles, and what was read; with the reads, **CYP2D6 copies along the gene** against diploid controls | which unphased or unread position leaves more than one diplotype possible; a deletion (*5), a duplication, or a hybrid with CYP2D7 (only part of the gene changed) |
+| 21 | **Genome browser** (IGV-like) over a position of a BAM: reference, genes, coverage coloured where the bases differ, reads by strand with their mismatches, clips, deletions and insertions; strand bias (Fisher, SOR) and the place of the ALT base in the reads | a real variant against an artefact: on one strand only, only near read ends, only in clipped or low-quality bases, only in reads with mapping quality 0 |
+| 20 | **Karyogram** of the runs of homozygosity | a few long runs (related parents), many short ones (an old, small population), a whole chromosome (uniparental disomy) |
+| 22 | Volcano and MA plots; **PCA of the samples**, **distances between samples**, **histogram of the p-values** | a swapped sample, a batch effect, a test that does not fit the data |
+| 26 | **Genomes along the reference**, as Nextclade draws them | a real deletion (red, shared by a lineage) against a stretch not read (grey, an amplicon dropout) |
+| 27 | **Sunburst** of the taxonomy; **PCoA with 95% ellipses** | the composition rank by rank; group separation against group dispersion |
+| 30 | **QQ plot** with λGC, **forest plot**, **Manhattan plot** | inflation (population structure, relatives) against true signals; how wide the intervals are |
+| 31 | **Where the reads fall on each genome**, window by window | an infection (reads spread over the genome) against a vector element or a shared gene (a few windows in one place) |
+
+The same figures are open to scripts and notebooks, as standalone SVG with no plotting library:
+
+```python
+import multimerge_genomics as mmg
+from multimerge_genomics import figures
+
+r = mmg.genotype_association("cohort.vcf.gz", "phenotypes.tsv", "recovery_score", covariates=["age", "sex"])
+figures.save(figures.qq_plot([x["p"] for x in r["rows"]]), "qq.svg")
+figures.save(figures.manhattan(r["rows"]), "manhattan.svg")
+```
+
 ## 🎒 Two ways to run it
 
 | | **On your computer** | **On Google Colab** |
@@ -176,21 +207,21 @@ python -m venv mmgen
 mmgen\Scripts\activate           # Windows   (macOS, Linux: source mmgen/bin/activate)
 
 # Windows, without an NVIDIA GPU (or with one: the CUDA build below)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/multimerge_genomics-2.2.0-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-win_amd64.whl"
 # Windows, with an NVIDIA GPU (CUDA 11.8 build; also runs without one)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/multimerge_genomics-2.2.0-1cuda-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-1cuda-cp310-abi3-win_amd64.whl"
 # Linux (CUDA build; also runs without a GPU; glibc 2.28 or newer)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/multimerge_genomics-2.2.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 # macOS, Apple Silicon (M1 and later)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/multimerge_genomics-2.2.0-cp310-abi3-macosx_11_0_arm64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-macosx_11_0_arm64.whl"
 # macOS, Intel
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.2.0/multimerge_genomics-2.2.0-cp310-abi3-macosx_10_12_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.3.0/multimerge_genomics-2.3.0-cp310-abi3-macosx_10_12_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.2.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.2.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The packages are those of the release [v2.3.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.3.0): the macOS packages and the Windows one without CUDA are built by the project's continuous integration, which also tests them; an older Linux (glibc 2.17) can use the CPU-only `manylinux_2_17` package of the same release.
 
 ### On Google Colab: free or paid, your choice
 
@@ -211,7 +242,7 @@ Either way, the files you write on Colab are gone when the session ends: downloa
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Ready-made packages of the release v2.2.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
+Ready-made packages of the release v2.3.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -244,7 +275,7 @@ To build a wheel instead: `maturin build --release --locked -o dist`, then `pip 
 import multimerge_genomics as mmg
 
 print(mmg.engine_info())
-# {'version': '2.2.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
+# {'version': '2.3.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
 
 # What is wrong with this file?
 report = mmg.validate_file("sample.vcf.gz")
@@ -367,12 +398,16 @@ The server answers only inside the Colab machine (`127.0.0.1`); Colab's own prox
 | `variant_lookup(variants, vcfs, ...)` / `pileup(bam, position, alt=None)` | A variant in each relative's VCF / the allele counts at a position of a BAM |
 | `pgx_run(vcf, output_dir, sample=None, callable_bed=None, bam=None, reference=None, engine="mmgen-pgx", tables=None, jar=None, ..., ancestry=None, ancestry_panel=None)` | Star alleles, phenotypes, activity scores, CYP2D6 copy number and HLA types (with `bam`), guideline recommendations, and the positions behind each call; `ancestry` (e.g. `{"EUR": 0.6, "AFR": 0.4}`) or `ancestry_panel` weights the population frequencies NAT2 is chosen by; the same dictionary for `engine="mmgen-pgx"` and `engine="pharmcat"` (`mmgen_pgx_run` = MMGEN's engine alone) *(experimental; not medical advice)* |
 | `pgx_cohort(vcfs, output_dir, callable_beds=None, samples=None, drugs=None, ...)` | MMGEN's engine for a group of people and the medicines of a protocol: for each person and medicine, the recommendation or why there is none (gene not called, or no CPIC guideline); `cohort_genes.tsv` and `cohort_medicines.tsv` *(experimental; not medical advice)* |
+| `ancestry_pca(panel, vcfs, samples=None, callable_beds=None, max_sites=5000, per_group=100, components=4, seed=1, ...)` | The people projected on a PCA of the panel's groups (each group a cloud simulated from its frequencies), with each person's closest group *(experimental)* |
 | `genotype_association(vcfs, phenotypes, outcome, covariates=None, outcome_type="auto", model="additive", ids=None, regions=None, min_maf=0.01, firth="auto", permutations=0, output=None, ...)` | Each allele against an outcome in a cohort (linear, logistic or Firth regression, adjusted for covariates), with FDR, permutation and family-wise p-values, who was left out and why, and the detectable effect *(experimental)* |
 | `association_power(allele_freq, effect=None, n=None, outcome="binary", case_fraction=0.5, alpha=0.05, tests=1, ...)` | The power of an association study, the people needed, and the smallest detectable effect (analytic, or simulated with `simulations`) |
 | `pharmcat_prepare(vcf, output, positions, ...)` / `pharmcat_run(vcf, output_dir, jar, ...)` | PharmCAT's input from a VCF / PharmCAT run on it, with its calls per gene *(experimental; not medical advice)* |
 | `build_transcript_index(fasta, output, k=31, gene_map=None, ...)` / `transcript_index_info(index)` | The pseudoalignment index of a transcriptome (cDNA FASTA; genes from the headers, a GTF/GFF3 or a table) / what an index holds |
 | `quantify_samples(index, samples, output_dir, fragment_length=None, fragment_sd=None, ...)` | RNA-seq quantification from FASTQ (pseudoalignment and EM, as kallisto): counts and TPM per transcript and per gene, and `gene_counts.tsv` for `differential_expression` |
 | `explain_pseudoalignment(index, read, read2=None)` | How one read (or pair) is pseudoaligned, k-mer by k-mer: for teaching |
+| `region_reads(alignments, region, reference=None, max_reads=500, min_mapq=0, min_baseq=13, flank=60)` | The reads of a stretch of a BAM ready to draw as a genome browser does (blocks, mismatches, clips, insertions, deletions, rows) and the coverage of every position, counted as `pileup` counts it |
+| `depth_profile(alignments, regions, bin=1000, min_mapq=0)` / `fetch_sequence(fasta, region)` | Mean depth in bins over regions (copy-number plots) / the reference bases of a region |
+| `unitig_graph(kmer_bytes, k, max_nodes=2000)` / `overlap_graph(sequences, min_overlap, max_nodes=2000)` | The assembly graph (unitigs and their overlaps, with tips, bubbles, repeats and a layout) / the graph of contigs joined by their ends, as `build_scaffolds` joins them |
 | `count_reads(bams, annotation, output=None, feature_type="exon", attribute=None, strandedness="unstranded", ...)` | Reads per gene from BAM files and a GFF/GTF |
 | `differential_expression(counts, samples, condition, reference, output=None, treated=None, factors=None, alpha=0.1, ...)` | Differential expression by the DESeq2 method: log2 fold change, Wald p-value, adjusted p-value |
 | `gene_set_test(results, gene_sets="spinal_cord_injury", output=None, statistic="stat", alpha=0.1, min_size=3, require_padj=True)` | Gene sets against a differential-expression table (rank-sum test, as limma's `wilcoxGST`, among the genes that passed the expression filter): each set up, down, or changing either way; GMT, set/gene table, or the built-in spinal cord injury sets |
@@ -453,6 +488,9 @@ cargo run --release --bin conjuntos   # 19 tests: gene-set tests (rank-sum, as l
 cargo run --release --bin quantificacao  # 197 tests: transcript index, pseudoalignment, EM (kallisto's method)
 cargo run --release --bin associacao  # 419 tests: genotype-outcome association (linear, logistic, Firth), permutations, power
 cargo run --release --bin contaminantes  # 120 tests: adventitious-agent screen (host depletion, breadth, blanks, spike-ins)
+cargo run --release --bin navegador   # 370 tests: reads of a region, coverage (equal to pileup), depth profiles, reference bases
+cargo run --release --bin grafo_montagem  # 260 tests: unitig graph (equal to the assembler's unitigs), overlap graph, layout
+cargo run --release --bin pca_ancestralidade  # 199 tests: eigensolver, PCA, projection, simulated reference
 cargo run --release --bin crispr      # 237 tests: guide counting, MAGeCK's gene ranking (give MAGeCK's data folder for more)
 cargo run --release --bin microbio    # 192 tests: sketches, species abundance, read classification, resistance genes
 cargo run --release --bin surto       # 184 tests: genome distances and trees, viral mutations, in-silico PCR
@@ -475,7 +513,7 @@ Every Rust test compares the output with an independent reference written in the
 
 ## 🚧 Status and known limitations
 
-MMGEN 2.2.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
+MMGEN 2.3.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
 
 * **The k-mer modules 1–7 work in memory, and their k-mers are strand-specific.** Assembly and variant detection suit same-strand input, such as an assembled reference against a mutated copy of it. `count_kmers` (module 13) is the exception: any size, canonical.
 * **Variant detection reports k-mers**, not VCF records.
@@ -518,7 +556,7 @@ The course name and the student's name are the seed: the same pair always gives 
 
 If MMGEN helps your research or your teaching, please cite it (GitHub's *Cite this repository* button gives the same, from [CITATION.cff](CITATION.cff)):
 
-> Couto F. *MMGEN: MultiMerge Genomics* (version 2.2.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
+> Couto F. *MMGEN: MultiMerge Genomics* (version 2.3.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
 
 The DOI always resolves to the latest version on Zenodo, where each version has its own DOI too. Please also cite the methods a tool reproduces (DESeq2, KING, MAGeCK, sourmash, Nextclade, cutadapt...), named in the sections above.
 

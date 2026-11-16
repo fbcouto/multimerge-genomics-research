@@ -40,6 +40,10 @@ ui_path = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.
 spec = importlib.util.spec_from_file_location("ui_main", ui_path)
 ui = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ui)
+# The figures from the same tree as the interface (the installed package may be older).
+_fspec = importlib.util.spec_from_file_location("mmgen_figures", os.path.join(os.path.dirname(ui_path), "figures.py"))
+figs = importlib.util.module_from_spec(_fspec)
+_fspec.loader.exec_module(figs)
 
 # Work in an empty folder: the screens list the files of the current directory.
 T = tempfile.mkdtemp(prefix="mmg_interface_")
@@ -110,11 +114,11 @@ check("app.run() without error", not isinstance(r, BaseException), repr(r)[:300]
 import builtins
 import gzip
 
-helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os)
+helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os, re=re)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
-POOL = dict(helpers[1], **examples[1], asyncio=asyncio, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
 
 # The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
 # no key, nothing leaves the machine. It answers by the kind of request.
@@ -576,7 +580,7 @@ r = cell_run(ui.kmercount_page_backend, get_page=lambda: "kmercount",
 api_counts = mmg.count_kmers(["pair_R1.fastq.gz", "pair_R2.fastq.gz"], "api_kmers.tsv.gz", k=21, min_count=2)
 same_output("  the table is what count_kmers writes", "kmers.tsv.gz", "api_kmers.tsv.gz")
 check("  the panel shows the totals, the spectrum chart and its table",
-      f"{api_counts['distinct_kmers']:,}" in shown(r) and "<svg" in raw(r) and "Abundance spectrum" in shown(r) and "times seen" in shown(r), shown(r)[:400])
+      f"{api_counts['distinct_kmers']:,}" in shown(r) and "<svg" in raw(r) and "Spectrum (log scale)" in shown(r) and "Spectrum (linear)" in shown(r) and "times seen" in shown(r), shown(r)[:400])
 
 print("== screen 14: formats & conversion")
 
@@ -697,14 +701,15 @@ OPS = ("merge", "intersect", "subtract", "complement", "closest", "coverage", "s
 # What the result of some examples must say (in the page text, without tags).
 EXPECT = {
     ("qc", None, 0): ["Distinct k-mers extracted: 29,970"],
+    ("qc", None, 1): ["K-mer spectrum of the reads", "Genome size, from the spectrum"],
     ("cluster", None, 0): ["Groups found: 3", "species_A (20)", "species_B (20)", "species_C (20)"],
     ("cluster", None, 1): ["kpneumoniae_KPNIH1_KPC-3", "saureus_USA300_MRSA"],
-    ("assembly", None, 0): ["Longest contig: 30,000 bp"],
+    ("assembly", None, 0): ["Longest contig: 30,000 bp", "The assembly graph", "Assembly graph (k = 31)", "isolated (a whole sequence)"],
     ("variant", None, 0): ["only in the patient): 93"],
     ("annotation", None, 0): ["MSTHEGENEISREAD"],
     ("annotation", None, 1): ["MSTHEGENEIS"],
     ("annotation", None, 2): ["MSTMKVKMKFLEKLI"],
-    ("scaffold", None, 0): ["Longest continuous sequence: 20,000 bases", "Circular genomes detected: 1"],
+    ("scaffold", None, 0): ["Longest continuous sequence: 20,000 bases", "Circular genomes detected: 1", "Contigs joined by their ends"],
     ("scaffold", None, 1): ["Longest continuous sequence: 24,000 bases", "Circular genomes detected: 0"],
     ("vcf", None, 0): ["Variants written: 600"],
     ("vcf", None, 1): ["Variants written: 600"],
@@ -724,23 +729,26 @@ EXPECT = {
     ("vcftools", "Normalize", 1): ["Indels left-aligned: 3"],
     ("fastq", "Quality report", 0): ["Illumina Universal"],
     ("fastq", "Trim reads", 1): ["Pairs in / kept"],
-    ("kmercount", None, 0): ["peak:"],
+    ("kmercount", None, 0): ["peak:", "What the spectrum says", "Genome size (from the spectrum)", "Spectrum (linear)"],
     ("convert", None, 1): ['parquet_options(numbers="text")'],
     ("findings", "ClinVar findings", 0): ["F11", "Pathogenic", "1 in one copy"],
     ("findings", "Gene panel from an annotation", 0): ["BRCA1", "Genes found: 13 of 13"],
     ("pgx", "PharmCAT", 0): ["CYP2C19", "Positions read", "PharmCAT data", "Genes called"],
     ("pgx", "MMGEN's engine (mmgen-pgx)", 0): ["CYP2C19", "mmgen-pgx", "Genes called", "G6PD", "absent from the VCF"],
     ("pgx", "MMGEN's engine (mmgen-pgx)", 1): ["CYP2D6", "*2/*4", "copy number", "*35:08/*38:01", "outside-call file",
+                                                "CYP2D6 copies along the gene",
                                                 "IPD-IMGT/HLA 3.66.0"],
-    ("pgx", "MMGEN's engine (mmgen-pgx)", 2): ["CYP2C19", "*1/*2", "also possible", "*2/*35 (Poor Metabolizer)",
+    ("pgx", "MMGEN's engine (mmgen-pgx)", 2): ["CYP2C19", "*1/*2", "also possible", "*2/*35 (Poor Metabolizer)", "the evidence matrix",
+                                                "rs4244285",
                                                 "was chosen as the highest-scoring diplotype"],
     ("pgx", "A group of people and a protocol's medicines (mmgen-pgx)", 0): [
         "Pharmacogenomics of a group", "HG001", "HG007", "No CPIC guideline in the tables for", "gabapentin", "enoxaparin",
         "gene not called", "Each medicine for each person", "clopidogrel", "Each gene for each person", "Each person's ancestry"],
     ("lookup", "Look up variants in relatives (cascade testing)", 0): ["carries it", "does not carry it"],
-    ("lookup", "Allele counts at a position (BAM)", 0): ["Depth"],
+    ("lookup", "Allele counts at a position (BAM)", 0): ["Depth", "Is it real? The usual checks", "Strand bias", "Where in the reads",
+                                                         "chr1:24,940-25,060"],
     ("assoc", "Test variants against an outcome", 0): ["People analysed", "115", "2 genotyped but not in the table", "1 without age",
-                                                       "rs12190259", "Effect and significance of each allele", "What this study can detect"],
+                                                       "rs12190259", "QQ plot of the p-values", "λGC", "Effect of the alleles with the smallest p", "What this study can detect"],
     ("assoc", "Test variants against an outcome", 1): ["rs12190259", "rs2030324"],
     ("assoc", "Test variants against an outcome", 2): ["yes is the event; 74 with it, 43 without", "firth 1", "odds ratio [95% CI]",
                                                        "with the rarer outcome"],
@@ -755,24 +763,26 @@ EXPECT = {
     ("rnaseq", "See how one read is pseudoaligned", 0): ["unique", "DEMO0080-202", "Gene80", "each k-mer"],
     ("rnaseq", "Differential expression", 2): ["Gene7", "Gene19", "Gene33", "Gene12", "Gene48", "Gene71"],
     ("contam", "Screen samples for adventitious agents", 0): ["🔴 detected", "⚪ background", "🟡 below threshold", "✅ recovered",
+                                                              "where the reads fall on each genome", "4/20 windows",
                                                               "Synthetic mycoplasma", "concentrated", "reagent_blank (negative control)"],
     ("contam", "Screen samples for adventitious agents", 1): ["Synthetic reagent bacterium", "screen_without_blank.html",
                                                               "No negative control was given"],
     ("contam", "Build a screening database", 0): ["Screening database", "Synthetic mycoplasma", "minimizers", "host"],
-    ("kin", "Relatedness of several people", 0): ["parent and child", "HG002"],
+    ("kin", "Relatedness of several people", 0): ["parent and child", "HG002", "Kinship against IBS0"],
     ("kin", "Trio and paternity test", 0): ["is not excluded", "Combined paternity index"],
     ("kin", "Trio and paternity test", 1): ["is excluded"],
     ("kin", "Trio and paternity test", 2): ["is not excluded"],
     ("chrom", "Genetic sex", 0): ["XX"],
     ("chrom", "Genetic sex", 1): ["XY"],
     ("chrom", "Genetic sex", 2): ["Undetermined"],
-    ("chrom", "Runs of homozygosity", 0): ["Runs: 2", "as plink --homozyg"],
+    ("chrom", "Runs of homozygosity", 0): ["Runs: 2", "as plink --homozyg", "Runs of homozygosity along the chromosomes"],
     ("chrom", "Runs of homozygosity", 2): ["Runs: 2", "strict: any heterozygous call ends a run"],
-    ("anc", "Ancestry", 0): ["HG005", "EAS", "best single group"],
+    ("anc", "Ancestry", 0): ["HG005", "EAS", "best single group", "STRUCTURE-style"],
     ("anc", "Polygenic score", 0): ["percentile in EUR", "PGS000004"],
     ("anc", "Build a reference panel", 0): ["Panel written", "AFR, AMR, EAS, EUR, SAS"],
     ("rnaseq", "Count reads per gene", 0): ["Reads counted", "ctrl_1", "treat_2"],
-    ("rnaseq", "Differential expression", 0): ["gene03", "gene10", "Volcano plot", "MA plot"],
+    ("rnaseq", "Differential expression", 0): ["gene03", "gene10", "Volcano plot", "MA plot", "Samples: PCA of the 500 most variable genes",
+                                                "Distances between samples", "p-values of the genes tested"],
     ("rnaseq", "Differential expression", 1): ["3,013 up, 2,539 down", "CACNB2", "Volcano plot"],
     ("rnaseq", "Test gene sets", 0): ["Gene sets", "GLUCOCORTICOID_RESPONSE", "⬆️ up", "HOUSEKEEPING", "competitive"],
     ("rnaseq", "Test gene sets", 1): ["built-in: spinal_cord_injury", "laminin_receptors", "glial_scar_cspgs", "regeneration_associated"],
@@ -789,12 +799,14 @@ EXPECT = {
     ("outbreak", "Distances and a tree", 0): ["Tree built", "rooted on", "B.1.617.2_Delta", "Newick"],
     ("outbreak", "Distances and a tree", 1): ["KPNIH1 (ST258)", "30684/NJST258_2 (ST258)", "Closest pair"],
     ("outbreak", "Distances and a tree", 2): ["saureus_USA300_MRSA", "ANI (%) of every pair"],
-    ("outbreak", "Mutations of viral genomes", 0): ["Mutations found", "20 of 20 aligned", "S:D614G", "ORF1b:P314L", "S:N501Y"],
+    ("outbreak", "Mutations of viral genomes", 0): ["Mutations found", "20 of 20 aligned", "S:D614G", "ORF1b:P314L", "S:N501Y",
+                                                     "Mutations along the genome"],
     ("outbreak", "In-silico PCR", 0): ["PCR done", "CDC_N1", "CDC_N2", "40 of 100", "A_MN985325.1"],
     ("outbreak", "In-silico PCR", 1): ["mecA", "16S_V4", "533"],
     ("amplicon", "Amplicon variants (ASVs)", 0): ["ASVs found", "Mock", "F3D150", "ASV_1"],
-    ("amplicon", "Taxonomy", 0): ["ASVs classified", "Muribaculaceae", "Composition of each sample"],
-    ("amplicon", "Diversity", 0): ["Diversity measured", "PERMANOVA", "Early", "Late", "Principal coordinates", "Rarefaction curves"],
+    ("amplicon", "Taxonomy", 0): ["ASVs classified", "Muribaculaceae", "Composition of each sample", "Taxonomy (share of the reads)"],
+    ("amplicon", "Diversity", 0): ["Diversity measured", "PERMANOVA", "Early", "Late", "Principal coordinates", "Rarefaction curves",
+                                   "95% ellipse"],
     ("amplicon", "Diversity", 1): ["PERMANOVA", "Jaccard"],
     ("amplicon", "Train a classifier", 0): ["Classifier trained", "my_v4_classifier.model"],
     ("tmb", None, 0): ["TMB measured", "mutations per megabase", "HCC1395"],

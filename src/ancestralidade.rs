@@ -66,21 +66,21 @@ use std::io::BufRead;
 
 /// Line reader over bytes (no UTF-8 check on multi-gigabyte genotype
 /// files) that remembers the path and the line number for messages.
-struct Linhas {
-    caminho: String,
-    r: Box<dyn BufRead>,
-    buf: Vec<u8>,
-    n: usize,
+pub(crate) struct Linhas {
+    pub(crate) caminho: String,
+    pub(crate) r: Box<dyn BufRead>,
+    pub(crate) buf: Vec<u8>,
+    pub(crate) n: usize,
 }
 
 impl Linhas {
-    fn abre(caminho: &str) -> Result<Linhas, String> {
+    pub(crate) fn abre(caminho: &str) -> Result<Linhas, String> {
         Ok(Linhas { caminho: caminho.to_string(), r: abre_leitura(caminho)?, buf: Vec::with_capacity(1 << 16), n: 0 })
     }
 
     /// Reads the next line into `buf`, without its line ending. `false` at
     /// the end of the file.
-    fn le_em(&mut self, buf: &mut Vec<u8>) -> Result<bool, String> {
+    pub(crate) fn le_em(&mut self, buf: &mut Vec<u8>) -> Result<bool, String> {
         buf.clear();
         match self.r.read_until(b'\n', buf) {
             Ok(0) => Ok(false),
@@ -98,7 +98,7 @@ impl Linhas {
         }
     }
 
-    fn proxima(&mut self) -> Result<bool, String> {
+    pub(crate) fn proxima(&mut self) -> Result<bool, String> {
         let mut b = std::mem::take(&mut self.buf);
         let r = self.le_em(&mut b);
         self.buf = b;
@@ -106,12 +106,12 @@ impl Linhas {
     }
 }
 
-fn txt(b: &[u8]) -> String {
+pub(crate) fn txt(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
 /// The start of a line, for messages.
-fn trecho(b: &[u8]) -> String {
+pub(crate) fn trecho(b: &[u8]) -> String {
     let mut t = txt(&b[..b.len().min(60)]);
     if b.len() > 60 {
         t.push_str("...");
@@ -119,7 +119,7 @@ fn trecho(b: &[u8]) -> String {
     t.replace('\t', " ")
 }
 
-fn inteiro(b: &[u8]) -> Option<u64> {
+pub(crate) fn inteiro(b: &[u8]) -> Option<u64> {
     if b.is_empty() || b.len() > 18 {
         return None;
     }
@@ -134,11 +134,11 @@ fn inteiro(b: &[u8]) -> Option<u64> {
 }
 
 /// A finite number (`parse::<f64>` alone accepts "inf" and "nan").
-fn real(b: &[u8]) -> Option<f64> {
+pub(crate) fn real(b: &[u8]) -> Option<f64> {
     std::str::from_utf8(b).ok()?.trim().parse::<f64>().ok().filter(|x| x.is_finite())
 }
 
-fn e_acgt(c: u8) -> bool {
+pub(crate) fn e_acgt(c: u8) -> bool {
     matches!(c, b'A' | b'C' | b'G' | b'T')
 }
 
@@ -162,12 +162,12 @@ fn complementares(a: &[u8], b: &[u8]) -> bool {
     a.len() == 1 && b.len() == 1 && comp_base(a[0]) == b[0]
 }
 
-fn passa_filtro(f: &[u8]) -> bool {
+pub(crate) fn passa_filtro(f: &[u8]) -> bool {
     f == b"PASS" || f == b"." || f.is_empty()
 }
 
 /// Splits on tabs into reusable (start, end) pairs.
-fn divide(l: &[u8], out: &mut Vec<(usize, usize)>) {
+pub(crate) fn divide(l: &[u8], out: &mut Vec<(usize, usize)>) {
     out.clear();
     let mut ini = 0;
     for (i, &c) in l.iter().enumerate() {
@@ -181,18 +181,18 @@ fn divide(l: &[u8], out: &mut Vec<(usize, usize)>) {
 
 /// The eight fixed columns of a VCF record, borrowed from the line, and the
 /// rest (FORMAT and the samples, still joined by tabs; empty when absent).
-struct Fixas<'a> {
-    crom: &'a [u8],
-    pos: u64,
-    ref_: &'a [u8],
-    alt: &'a [u8],
-    filtro: &'a [u8],
-    info: &'a [u8],
-    resto: &'a [u8],
+pub(crate) struct Fixas<'a> {
+    pub(crate) crom: &'a [u8],
+    pub(crate) pos: u64,
+    pub(crate) ref_: &'a [u8],
+    pub(crate) alt: &'a [u8],
+    pub(crate) filtro: &'a [u8],
+    pub(crate) info: &'a [u8],
+    pub(crate) resto: &'a [u8],
 }
 
 /// `None`: not a record (fewer than 8 columns, or POS is not a number).
-fn fixas(l: &[u8]) -> Option<Fixas<'_>> {
+pub(crate) fn fixas(l: &[u8]) -> Option<Fixas<'_>> {
     let mut c: [&[u8]; 8] = [&[]; 8];
     let mut ini = 0usize;
     let mut resto: &[u8] = &[];
@@ -226,7 +226,7 @@ fn fixas(l: &[u8]) -> Option<Fixas<'_>> {
 
 /// Order of canonical names: 1..22 by number, X, Y, MT, then the rest in
 /// natural order.
-fn classe_crom(c: &str) -> (u8, u64) {
+pub(crate) fn classe_crom(c: &str) -> (u8, u64) {
     if !c.is_empty() && c.len() <= 6 && c.bytes().all(|b| b.is_ascii_digit()) {
         return (0, c.parse().unwrap_or(u64::MAX));
     }
@@ -238,21 +238,21 @@ fn classe_crom(c: &str) -> (u8, u64) {
     }
 }
 
-fn compara_crom(a: &str, b: &str) -> Ordering {
+pub(crate) fn compara_crom(a: &str, b: &str) -> Ordering {
     classe_crom(a).cmp(&classe_crom(b)).then_with(|| natural_cmp(a, b))
 }
 
 /// Canonical name of the last chromosome seen: inside a chromosome the name
 /// is not converted again.
 #[derive(Default)]
-struct Canon {
-    cru: Vec<u8>,
-    chave: String,
-    vazio: bool,
+pub(crate) struct Canon {
+    pub(crate) cru: Vec<u8>,
+    pub(crate) chave: String,
+    pub(crate) vazio: bool,
 }
 
 impl Canon {
-    fn de(&mut self, cru: &[u8]) -> &str {
+    pub(crate) fn de(&mut self, cru: &[u8]) -> &str {
         if !self.vazio || cru != self.cru.as_slice() {
             self.cru.clear();
             self.cru.extend_from_slice(cru);
@@ -263,7 +263,7 @@ impl Canon {
     }
 }
 
-fn erro_ordem(caminho: &str, linha: usize, o_que: &str) -> String {
+pub(crate) fn erro_ordem(caminho: &str, linha: usize, o_que: &str) -> String {
     format!(
         "{caminho}, line {linha}: {o_que}. The file must be sorted by position, with each chromosome in a single block. Sort it first -- sort_genomic([\"{caminho}\"], \"sorted.vcf.gz\", chrom_order=\"natural\") -- and use the sorted file."
     )
@@ -1141,17 +1141,17 @@ pub fn panel_from_frequencies(
 //  READING A PANEL
 // ---------------------------------------------------------------------
 
-struct ColunasPainel {
-    crom: usize,
-    pos: usize,
-    ref_: usize,
-    alt: usize,
-    af: Vec<usize>,
-    an: Vec<Option<usize>>,
-    grupos: Vec<String>,
+pub(crate) struct ColunasPainel {
+    pub(crate) crom: usize,
+    pub(crate) pos: usize,
+    pub(crate) ref_: usize,
+    pub(crate) alt: usize,
+    pub(crate) af: Vec<usize>,
+    pub(crate) an: Vec<Option<usize>>,
+    pub(crate) grupos: Vec<String>,
 }
 
-fn colunas_painel(caminho: &str, linha: &[u8]) -> Result<ColunasPainel, String> {
+pub(crate) fn colunas_painel(caminho: &str, linha: &[u8]) -> Result<ColunasPainel, String> {
     let nomes: Vec<String> = linha.split(|&b| b == b'\t').map(|c| txt(c).trim().trim_start_matches('#').to_string()).collect();
     let acha = |n: &str| nomes.iter().position(|x| x.eq_ignore_ascii_case(n));
     let (Some(crom), Some(pos), Some(ref_), Some(alt)) = (acha("chrom"), acha("pos"), acha("ref"), acha("alt")) else {
@@ -1179,7 +1179,7 @@ fn colunas_painel(caminho: &str, linha: &[u8]) -> Result<ColunasPainel, String> 
 }
 
 /// Reads the header of a panel and returns the reader at the first row.
-fn abre_painel(caminho: &str) -> Result<(Linhas, ColunasPainel), String> {
+pub(crate) fn abre_painel(caminho: &str) -> Result<(Linhas, ColunasPainel), String> {
     let mut l = Linhas::abre(caminho)?;
     loop {
         if !l.proxima()? {
@@ -1194,17 +1194,17 @@ fn abre_painel(caminho: &str) -> Result<(Linhas, ColunasPainel), String> {
 }
 
 /// One row of a panel, as written.
-struct LinhaPainel<'a> {
-    crom: &'a [u8],
-    pos: u64,
-    ref_: Vec<u8>,
-    alt: Vec<u8>,
-    af: Vec<f64>,
-    an: Vec<Option<u64>>,
+pub(crate) struct LinhaPainel<'a> {
+    pub(crate) crom: &'a [u8],
+    pub(crate) pos: u64,
+    pub(crate) ref_: Vec<u8>,
+    pub(crate) alt: Vec<u8>,
+    pub(crate) af: Vec<f64>,
+    pub(crate) an: Vec<Option<u64>>,
 }
 
 /// `Ok(None)`: a group has no frequency (`.`): the row is skipped.
-fn linha_painel<'a>(caminho: &str, n: usize, l: &'a [u8], sp: &[(usize, usize)], c: &ColunasPainel) -> Result<Option<LinhaPainel<'a>>, String> {
+pub(crate) fn linha_painel<'a>(caminho: &str, n: usize, l: &'a [u8], sp: &[(usize, usize)], c: &ColunasPainel) -> Result<Option<LinhaPainel<'a>>, String> {
     let max = [c.crom, c.pos, c.ref_, c.alt].into_iter().chain(c.af.iter().copied()).chain(c.an.iter().flatten().copied()).max().unwrap_or(0);
     if sp.len() <= max {
         return Err(format!("{caminho}, line {n}: {} column(s), fewer than the header line names.", sp.len()));
@@ -1385,12 +1385,12 @@ impl PainelSnv {
 // ---------------------------------------------------------------------
 
 /// A BED of callable regions, merged, by canonical chromosome name.
-struct Regioes {
-    mapa: HashMap<String, Vec<(u64, u64)>>,
+pub(crate) struct Regioes {
+    pub(crate) mapa: HashMap<String, Vec<(u64, u64)>>,
 }
 
 impl Regioes {
-    fn le(caminho: &str) -> Result<Regioes, String> {
+    pub(crate) fn le(caminho: &str) -> Result<Regioes, String> {
         let mut l = Linhas::abre(caminho)?;
         let mut mapa: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
         let mut canon = Canon::default();
@@ -1437,7 +1437,7 @@ impl Regioes {
     }
 
     /// Is the 1-based position inside a region?
-    fn contem(&self, crom: &str, pos1: u64) -> bool {
+    pub(crate) fn contem(&self, crom: &str, pos1: u64) -> bool {
         let Some(v) = self.mapa.get(crom) else { return false };
         if pos1 == 0 {
             return false;
@@ -1464,22 +1464,22 @@ pub struct Person {
 
 /// A genotype: allele indices; `n` = 0 missing, 1 haploid, 2 diploid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Gt {
-    a: [u8; 2],
-    n: u8,
+pub(crate) struct Gt {
+    pub(crate) a: [u8; 2],
+    pub(crate) n: u8,
 }
 
-const SEM_GT: Gt = Gt { a: [0, 0], n: 0 };
+pub(crate) const SEM_GT: Gt = Gt { a: [0, 0], n: 0 };
 
 impl Gt {
-    fn alelos(&self) -> &[u8] {
+    pub(crate) fn alelos(&self) -> &[u8] {
         &self.a[..self.n as usize]
     }
 }
 
 /// The GT subfield `ig` of a sample column. A partly missing call (`0/.`) is
 /// missing; more than two alleles is not read (missing).
-fn le_gt(campo: &[u8], ig: usize) -> Gt {
+pub(crate) fn le_gt(campo: &[u8], ig: usize) -> Gt {
     let gt = match campo.split(|&b| b == b':').nth(ig) {
         Some(x) => x,
         None => return SEM_GT,
@@ -1513,16 +1513,16 @@ fn le_gt(campo: &[u8], ig: usize) -> Gt {
 }
 
 /// A record of the person's VCF at a position of interest.
-struct RegPessoa {
-    ref_: Vec<u8>,
-    alts: Vec<Vec<u8>>,
-    filtro_ok: bool,
+pub(crate) struct RegPessoa {
+    pub(crate) ref_: Vec<u8>,
+    pub(crate) alts: Vec<Vec<u8>>,
+    pub(crate) filtro_ok: bool,
     /// One per selected sample.
-    gts: Vec<Gt>,
+    pub(crate) gts: Vec<Gt>,
 }
 
 impl RegPessoa {
-    fn alelo(&self, i: u8) -> Option<&[u8]> {
+    pub(crate) fn alelo(&self, i: u8) -> Option<&[u8]> {
         if i == 0 {
             Some(&self.ref_)
         } else {
@@ -1530,7 +1530,7 @@ impl RegPessoa {
         }
     }
 
-    fn indice(&self, a: &[u8]) -> Option<u8> {
+    pub(crate) fn indice(&self, a: &[u8]) -> Option<u8> {
         if self.ref_ == a {
             Some(0)
         } else {
@@ -1540,7 +1540,7 @@ impl RegPessoa {
 }
 
 /// What the person's file says at a target position, for one sample.
-enum Obs<'a> {
+pub(crate) enum Obs<'a> {
     /// The records at this position (the sample's GT is `gts[sample]`).
     Registros(&'a [RegPessoa]),
     /// No record, inside the callable regions (or `absent_is_ref`):
@@ -1553,7 +1553,7 @@ enum Obs<'a> {
     SobIndel,
 }
 
-fn resolve_amostras(vcf: &str, nomes: &[String], pedidas: &[Option<String>]) -> Result<Vec<usize>, String> {
+pub(crate) fn resolve_amostras(vcf: &str, nomes: &[String], pedidas: &[Option<String>]) -> Result<Vec<usize>, String> {
     let mut idx: HashMap<&str, usize> = HashMap::new();
     for (i, n) in nomes.iter().enumerate() {
         idx.entry(n.as_str()).or_insert(i);
@@ -1586,7 +1586,7 @@ fn resolve_amostras(vcf: &str, nomes: &[String], pedidas: &[Option<String>]) -> 
 
 /// GTs of the selected samples; `ordem` is (column, selected index) sorted
 /// by column.
-fn le_gts(resto: &[u8], ordem: &[(usize, usize)], ns: usize) -> Vec<Gt> {
+pub(crate) fn le_gts(resto: &[u8], ordem: &[(usize, usize)], ns: usize) -> Vec<Gt> {
     let mut gts = vec![SEM_GT; ns];
     let mut campos = resto.split(|&b| b == b'\t');
     let Some(formato) = campos.next() else { return gts };
@@ -1604,24 +1604,24 @@ fn le_gts(resto: &[u8], ordem: &[(usize, usize)], ns: usize) -> Vec<Gt> {
     gts
 }
 
-type Retorno<'f> = &'f mut dyn FnMut(&str, usize, usize, &Obs<'_>);
+pub(crate) type Retorno<'f> = &'f mut dyn FnMut(&str, usize, usize, &Obs<'_>);
 
-struct Juncao<'a, 'f> {
-    alvos: &'a HashMap<String, &'a [u64]>,
-    regioes: &'a [Option<&'a Regioes>],
-    absent_is_ref: bool,
-    f: Retorno<'f>,
-    chave: String,
-    posicoes: &'a [u64],
-    cursor: usize,
+pub(crate) struct Juncao<'a, 'f> {
+    pub(crate) alvos: &'a HashMap<String, &'a [u64]>,
+    pub(crate) regioes: &'a [Option<&'a Regioes>],
+    pub(crate) absent_is_ref: bool,
+    pub(crate) f: Retorno<'f>,
+    pub(crate) chave: String,
+    pub(crate) posicoes: &'a [u64],
+    pub(crate) cursor: usize,
     /// Last base covered by a longer allele of each sample.
-    del_fim: Vec<u64>,
-    grupo: Vec<RegPessoa>,
-    pos_grupo: u64,
+    pub(crate) del_fim: Vec<u64>,
+    pub(crate) grupo: Vec<RegPessoa>,
+    pub(crate) pos_grupo: u64,
 }
 
 impl Juncao<'_, '_> {
-    fn inicia(&mut self, chave: &str) {
+    pub(crate) fn inicia(&mut self, chave: &str) {
         self.chave = chave.to_string();
         self.posicoes = self.alvos.get(chave).copied().unwrap_or(&[]);
         self.cursor = 0;
@@ -1630,7 +1630,7 @@ impl Juncao<'_, '_> {
     }
 
     /// Targets before `limite` have no record: absent.
-    fn ausentes_ate(&mut self, limite: u64, presente: bool) {
+    pub(crate) fn ausentes_ate(&mut self, limite: u64, presente: bool) {
         while self.cursor < self.posicoes.len() && self.posicoes[self.cursor] < limite {
             let p = self.posicoes[self.cursor];
             for s in 0..self.del_fim.len() {
@@ -1652,7 +1652,7 @@ impl Juncao<'_, '_> {
 
     /// Hands the records of the current position to its targets, then
     /// notes the bases the longer alleles cover.
-    fn fecha_grupo(&mut self) {
+    pub(crate) fn fecha_grupo(&mut self) {
         if self.grupo.is_empty() {
             return;
         }
@@ -1676,7 +1676,7 @@ impl Juncao<'_, '_> {
 
 /// A record whose REF spans several bases covers the following positions
 /// for every sample that carries a non-REF allele (or has no call).
-fn marca_cobertura(del_fim: &mut [u64], pos: u64, len_ref: usize, gts: &[Gt]) {
+pub(crate) fn marca_cobertura(del_fim: &mut [u64], pos: u64, len_ref: usize, gts: &[Gt]) {
     if len_ref <= 1 {
         return;
     }
@@ -1688,14 +1688,14 @@ fn marca_cobertura(del_fim: &mut [u64], pos: u64, len_ref: usize, gts: &[Gt]) {
     }
 }
 
-struct ResumoJuncao {
-    nomes: Vec<String>,
+pub(crate) struct ResumoJuncao {
+    pub(crate) nomes: Vec<String>,
 }
 
 /// Streams `vcf` against the targets (sorted positions per canonical
 /// chromosome) and calls `f(chromosome, target index, sample, observation)`
 /// exactly once per target and selected sample.
-fn junta(
+pub(crate) fn junta(
     vcf: &str,
     pedidas: &[Option<String>],
     regioes: &[Option<&Regioes>],
@@ -1803,7 +1803,7 @@ fn junta(
 }
 
 /// Persons grouped by VCF (each VCF is read once), in order of appearance.
-fn por_vcf(persons: &[Person]) -> Vec<(String, Vec<usize>)> {
+pub(crate) fn por_vcf(persons: &[Person]) -> Vec<(String, Vec<usize>)> {
     let mut out: Vec<(String, Vec<usize>)> = Vec::new();
     for (i, p) in persons.iter().enumerate() {
         match out.iter_mut().find(|(v, _)| *v == p.vcf) {
@@ -1814,7 +1814,7 @@ fn por_vcf(persons: &[Person]) -> Vec<(String, Vec<usize>)> {
     out
 }
 
-fn le_regioes_das_pessoas(persons: &[Person]) -> Result<HashMap<String, Regioes>, String> {
+pub(crate) fn le_regioes_das_pessoas(persons: &[Person]) -> Result<HashMap<String, Regioes>, String> {
     let mut m = HashMap::new();
     for p in persons {
         if let Some(b) = &p.callable {
@@ -1973,13 +1973,13 @@ impl AncestryResult {
 
 /// Genotype codes: 0..=2 ALT alleles of a diploid call; 3 and 4: haploid REF
 /// and ALT; FALTA: missing.
-const FALTA: u8 = u8::MAX;
+pub(crate) const FALTA: u8 = u8::MAX;
 /// (ALT alleles, called alleles, ln of the binomial coefficient).
 const DECODIFICA: [(f64, f64, f64); 5] =
     [(0.0, 2.0, 0.0), (1.0, 2.0, std::f64::consts::LN_2), (2.0, 2.0, 0.0), (0.0, 1.0, 0.0), (1.0, 1.0, 0.0)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Motivo {
+pub(crate) enum Motivo {
     Genotipado,
     Assumido,
     NaoChamavel,
@@ -1991,7 +1991,7 @@ enum Motivo {
 }
 
 /// The genotype code of a panel SNV (REF `pr`, ALT `pa`) for one sample.
-fn classifica_snv(obs: &Obs<'_>, s: usize, pr: u8, pa: u8, pass_only: bool) -> (u8, Motivo) {
+pub(crate) fn classifica_snv(obs: &Obs<'_>, s: usize, pr: u8, pa: u8, pass_only: bool) -> (u8, Motivo) {
     match obs {
         Obs::Ausente => (0, Motivo::Assumido),
         Obs::NaoChamavel => (FALTA, Motivo::NaoChamavel),
@@ -2364,7 +2364,7 @@ fn ajusta(d: &DadosEm<'_>, q0: &[f64], peso: Option<&[u32]>, aquecimento: usize,
     }
 }
 
-fn splitmix(s: &mut u64) -> u64 {
+pub(crate) fn splitmix(s: &mut u64) -> u64 {
     *s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *s;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -2983,7 +2983,7 @@ fn le_escore(caminho: &str) -> Result<Escore, String> {
 }
 
 /// A frequency written with at most 2 decimals (0.04, 0.5, 1).
-fn duas_casas(x: f64) -> bool {
+pub(crate) fn duas_casas(x: f64) -> bool {
     ((x * 100.0) - (x * 100.0).round()).abs() < 1e-7
 }
 

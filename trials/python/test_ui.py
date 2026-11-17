@@ -615,9 +615,10 @@ _rail = r[1]
 _rail_pages = {p for _, _, items in _rail["RAIL_GROUPS"] for p, _, _ in items}
 _menu_pages = {p for p, _ in examples[1]["EXAMPLES"]} | {"guide"}   # every screen has examples but the guide
 check("  every screen is in the rail, and only those", _rail_pages == _menu_pages, sorted(_rail_pages ^ _menu_pages))
-r = cell_run(ui.main_menu, RAIL_GROUPS=_rail["RAIL_GROUPS"], get_page=lambda: "home")
-check("  the start page: the families with their screens as links, the folder, the engine",
-      not isinstance(r, BaseException) and raw(r).count('class="mmg-card"') == 5 and raw(r).count("data-page=") == 31
+r = cell_run(ui.main_menu, get_page=lambda: "home")
+check("  the start page presents the project (aims, what is in it, how a screen works), the folder and the engine, with no buttons",
+      not isinstance(r, BaseException) and "Why MMGEN" in shown(r) and "What is in it" in shown(r) and "How a screen works" in shown(r)
+      and "data-page=" not in raw(r) and "marimo-button" not in raw(r)
       and "running on:" in shown(r) and os.path.basename(os.getcwd()) in shown(r), raw(r)[:300])
 r = cell_run(ui.workbench_header, RAIL_GROUPS=_rail["RAIL_GROUPS"], RAIL_HUMAN=_rail["RAIL_HUMAN"], get_page=lambda: "pgx")
 check("  the header strip: group, screen, folder and the human-genome chip",

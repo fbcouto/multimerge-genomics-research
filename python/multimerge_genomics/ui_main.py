@@ -2001,7 +2001,7 @@ def workbench_rail(get_page, mmg, mo, set_page):
 
     def _entry(page, number, title):
         _cls = "mmg-item active" if page == _current else "mmg-item"
-        return f'<a class="{_cls}" href="#{page}" data-page="{page}"><span class="n">{number}</span><span class="t">{title}</span></a>'
+        return f'<a class="{_cls}" href="#{page}" data-page="{page}" data-n="{number}"><span class="n">{number}</span><span class="t">{title}</span></a>'
 
     _parts = ['<button class="mmg-rail-toggle" type="button" aria-label="Tools">☰ Tools</button>',
               '<nav class="mmg-rail" aria-label="Tools">',
@@ -2038,55 +2038,88 @@ def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os):
 
 
 @app.cell
-def main_menu(RAIL_GROUPS, get_page, mmg, mo, os):
+def main_menu(get_page, mmg, mo, os):
     mo.stop(get_page() != "home")
-    # The start page of the workbench: what MMGEN is, where it runs, the
-    # families of tools with their screens (links the rail's script handles,
-    # like the rail's own: ui_head.html) and how a screen works. Navigation
-    # itself is the rail on the left.
+    # The start page: what MMGEN is for, what is in it and how a screen
+    # works. No buttons here: the rail on the left is the navigation (a
+    # click on a number opens that module in this panel).
     _engine = mmg.engine_info()
     _where = "NVIDIA GPU (CUDA)" if _engine["gpu"] else "CPU"
     _folder = os.getcwd()
-    FAMILIES = {
-        "K-mer modules": ("Reads and small genomes as k-mers, in memory: quality and ingestion, assembly, variant calling, "
-                          "functional annotation, Bloom filters and scaffolding. Good for teaching and for bacteria and viruses.", ""),
-        "File tools, any size": ("VCF, BED, GFF/GTF, SAM/BAM and FASTQ of any size, read as streams: sort, merge, index and query, "
-                                 "validate and rename chromosomes, statistics, filter and normalize, quality and trimming, k-mer counting, "
-                                 "and every format in and out (BGZF, BAM, Parquet).", ""),
-        "Human genetics": ("Relatedness, trios and paternity; ancestry and polygenic scores; ClinVar findings and gene panels; "
-                           "pharmacogenomics; sex chromosomes and homozygosity; variant lookup and a genome browser; association and power.",
-                           "Experimental, for teaching and research: not a diagnosis, and only genomes of people who agreed."),
-        "Research & microbiology": ("RNA-seq from counts or reads; CRISPR screens; metagenomics; resistance genes; outbreak trees, "
-                                    "viral mutations and in-silico PCR; 16S amplicons; tumor mutational burden; contaminant screening.", ""),
-        "Assistant": ("Describe your problem and get a plan with the right tools and the Python to run it, or ask about a result. "
-                      "Optional: it needs your own Anthropic API key, and nothing is sent until you press the button.", ""),
-    }
-
-    def _card(name, colour, items):
-        about, note = FAMILIES[name]
-        links = "".join(f'<a href="#{p}" data-page="{p}" data-n="{n}"><span class="n">{n}</span>{t}</a>' for p, n, t in items)
-        _note = f'<p class="note">{note}</p>' if note else ""
-        return (f'<section class="mmg-card"><h3><span class="sw" style="background:{colour}"></span>{name}'
-                f'<small>{len(items)} screen{"s" if len(items) > 1 else ""}</small></h3><p>{about}</p>{_note}<div class="links">{links}</div></section>')
-
-    _cards = "".join(_card(_name, _colour, _items) for _name, _colour, _items in RAIL_GROUPS)
+    # The illustration: a double helix turning, drawn in SVG and animated by
+    # the theme's CSS (.mmg-helix in ui_theme.css). Each base pair is a rung
+    # with a base at each end, scaled from +1 to -1 and back (a half turn
+    # seen from the side); the rungs are staggered in time, which is the twist.
+    _rows, _turns, _period = 24, 1.6, 6.0
+    _rungs = "".join(
+        f'<g class="bp" style="transform-origin: 70px {14 + i * 14}px; animation-delay: {-(i / _rows) * _turns * 2 * _period:.2f}s">'
+        f'<line x1="28" y1="{14 + i * 14}" x2="112" y2="{14 + i * 14}"/>'
+        f'<circle class="a" cx="28" cy="{14 + i * 14}" r="5"/><circle class="b" cx="112" cy="{14 + i * 14}" r="5"/></g>'
+        for i in range(_rows))
+    _helix = (f'<figure class="mmg-helix" aria-hidden="true"><svg viewBox="0 0 140 {14 * _rows + 14}" width="140" height="{14 * _rows + 14}" '
+              f'style="--period: {_period}s">{_rungs}</svg></figure>')
     mo.Html(f"""
     <div class="mmg-home">
       <header class="hero">
-        <h1>🧬 MMGEN</h1>
-        <p class="tag">MultiMerge Genomics: free tools for files of any size, for research and teaching.</p>
-        <p class="ctx"><span class="mmg-chip ctx" title="{_folder}">📁 {os.path.basename(_folder) or _folder}</span>
-           <span class="mmg-chip">{_where} · {_engine["threads"]} threads</span><span class="mmg-chip">engine {_engine["version"]}</span></p>
-        <p class="hint">The screens list the files of this folder and write their results next to the input.
-           Pick a tool in the rail on the left, or below.</p>
+        {_helix}
+        <div class="hero-text">
+          <h1>🧬 MMGEN</h1>
+          <p class="tag">MultiMerge Genomics: free, open-source tools for research and teaching, for files of any size.</p>
+          <p class="ctx"><span class="mmg-chip ctx" title="{_folder}">📁 {os.path.basename(_folder) or _folder}</span>
+             <span class="mmg-chip ctx">{_where} · {_engine["threads"]} threads</span><span class="mmg-chip ctx">engine {_engine["version"]}</span></p>
+          <p class="hint">The screens list the files of this folder and write their results next to the input.
+             Pick a tool in the rail on the left: it opens here.</p>
+        </div>
+        <section class="block why">
+        <h2>Why MMGEN</h2>
+        <ul class="aims">
+          <li><b>Free, for scientists and students</b>, tools on a par with the best professional ones, able to handle problems of any size:
+              what does not fit in memory is processed in runs on disk, with the same result.</li>
+          <li><b>The recurrent problems of genomics</b>, from reads to variants and from a cohort to a pathogen, reading and writing the
+              formats people actually have: VCF, BED, GFF/GTF, SAM/BAM, FASTA and FASTQ, plain, BGZF-compressed, indexed, or Parquet.</li>
+          <li><b>Transparent and reproducible</b>: every result ends with the Python call that does the same thing, ready for a script;
+              the figures are made to judge a result, not to decorate it; experimental tools say so, and say what they do not see.</li>
+          <li><b>Where you are</b>: on your computer (Windows, macOS or Linux; an NVIDIA GPU is used when there is one) or on Google Colab,
+              with the same interface and the same Python API. Rust engine, optional CUDA, Apache-2.0.</li>
+        </ul>
+        </section>
       </header>
-      <ol class="steps">
-        <li><b>Choose a task</b> on the screen's tabs.</li>
-        <li><b>Fill in the form</b>, or pick an example: its files are written to <code>mmgen_examples/</code> and the form is filled in.</li>
-        <li><b>Read the result</b>: the numbers, a look at the output, the figures, and the Python call that does the same thing.</li>
-      </ol>
-      <div class="cards">{_cards}</div>
-      <p class="foot">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads</p>
+
+      <section class="block">
+        <h2>What is in it</h2>
+        <dl class="groups">
+          <div><dt><span class="sw" style="background:#1baf7a"></span>K-mer modules <small>1–7</small></dt>
+               <dd>Reads and small genomes as k-mers, in memory: quality and ingestion, assembly, variant calling, functional annotation,
+                   Bloom filters and scaffolding. The teaching path: a bacterium or a virus, end to end.</dd></div>
+          <div><dt><span class="sw" style="background:#2a78d6"></span>File tools, any size <small>8–14</small></dt>
+               <dd>Sort, merge, index and query; validate and rename chromosomes; VCF statistics, filtering and normalization; FASTQ quality
+                   and trimming; k-mer counting; conversion between formats. Read as streams, compared against samtools, bcftools, bedtools,
+                   tabix, cutadapt and jellyfish.</dd></div>
+          <div><dt><span class="sw" style="background:#e87ba4"></span>Human genetics <small>15–21, 30</small></dt>
+               <dd>Relatedness, trios and paternity; ancestry and polygenic scores; ClinVar findings and gene panels; pharmacogenomics;
+                   sex chromosomes and homozygosity; variant lookup and a genome browser; association and power.
+                   <em>Experimental, for teaching and research: not a diagnosis, and only the genomes of people who agreed.</em></dd></div>
+          <div><dt><span class="sw" style="background:#eda100"></span>Research, microbiology and oncology <small>22–28, 31</small></dt>
+               <dd>RNA-seq from counts or reads; CRISPR screens; metagenomics; resistance genes; outbreak trees, viral mutations and
+                   in-silico PCR; 16S amplicons; tumor mutational burden; contaminant screening.</dd></div>
+          <div><dt><span class="sw" style="background:#6250d6"></span>AI assistant <small>29</small></dt>
+               <dd>Describe your problem and get a plan with the right tools and the Python to run it, or ask about a result.
+                   Optional: it needs your own Anthropic API key, and nothing is sent until you press the button.</dd></div>
+        </dl>
+      </section>
+
+      <section class="block">
+        <h2>How a screen works</h2>
+        <ol class="steps">
+          <li><b>Choose a task</b> on the screen's tabs.</li>
+          <li><b>Fill in the form</b>, or pick an example: its files are written to <code>mmgen_examples/</code> and the form is filled in.</li>
+          <li><b>Read the result</b>: the numbers, a look at the output, the figures, and the Python call that does the same thing.</li>
+        </ol>
+      </section>
+
+      <p class="foot">Engine {_engine["version"]} · running on: {_where} · {_engine["threads"]} threads ·
+         <a href="https://github.com/fbcouto/multimerge-genomics-research" target="_blank" rel="noopener">source and documentation</a> ·
+         cite: <a href="https://doi.org/10.5281/zenodo.20417492" target="_blank" rel="noopener">doi:10.5281/zenodo.20417492</a></p>
     </div>
     """)
     return

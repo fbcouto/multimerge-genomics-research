@@ -299,8 +299,8 @@ def home(pg):
 
 
 def menu_button(pg, n):
-    """The link of screen n on the start page (a button before the workbench layout)."""
-    return pg.locator(f'.mmg-home a[data-n="{n}"]')
+    """The link of screen n in the rail (a button of the menu before the workbench layout)."""
+    return pg.locator(f'.mmg-rail a.mmg-item[data-n="{n}"]')
 
 
 def back(pg):
@@ -379,8 +379,8 @@ def submit(pg, label):
 
 def radio(pg, name):
     """Picks a task (a tab since the workbench layout; a radio button before): the form below is rebuilt for it."""
-    tab = pg.get_by_role("tab", name=name, exact=True)
-    (tab if tab.count() else pg.get_by_role("radio", name=name, exact=True)).click()
+    # Either control, whichever appears: a count() taken the instant after a screen opens could be 0 for both.
+    pg.get_by_role("tab", name=name, exact=True).or_(pg.get_by_role("radio", name=name, exact=True)).first.click(timeout=60000)
     pg.wait_for_timeout(1200)
 
 
@@ -449,7 +449,9 @@ try:
         print("== navigation")
         with page(browser) as pg:
             check("tab title: MMGEN Suite", pg.title() == "MMGEN Suite", pg.title())
-            check(f"the start page links the {len(MENU)} screens", all(menu_button(pg, n).is_visible() for n in MENU))
+            check(f"the rail links the {len(MENU)} screens", all(menu_button(pg, n).is_visible() for n in MENU))
+            check("the start page presents the project, without buttons",
+                  "Why MMGEN" in text_of(pg) and pg.locator(".mmg-home a[data-page]").count() == 0 and pg.locator(".mmg-home marimo-button").count() == 0)
             t = text_of(pg)
             check("the start page says where the engine runs", "running on:" in t and WHERE in t, t[-200:])
             check("menu: no Portuguese left on the page", not PORTUGUESE.search(t), PORTUGUESE.findall(t))

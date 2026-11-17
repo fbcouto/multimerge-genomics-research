@@ -57,19 +57,45 @@
 .mmg-home .steps li { position: relative; padding: 10px 12px 10px 44px; border: 1px solid var(--mmg-line); border-radius: 8px; background: var(--mmg-surface-2); font-size: 0.92em; line-height: 1.45; }
 .mmg-home .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 12px; top: 10px; width: 22px; height: 22px; border-radius: 50%;
   background: var(--mmg-accent); color: #fff; font: 600 12px/22px ui-monospace, Consolas, monospace; text-align: center; }
-.mmg-home .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
-.mmg-card { border: 1px solid var(--mmg-line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
-.mmg-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 1.05em; }
-.mmg-card h3 .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-.mmg-card h3 small { margin-left: auto; color: var(--mmg-fg-3); font-weight: 400; font-size: 0.78em; }
-.mmg-card p { margin: 0 0 8px; font-size: 0.92em; line-height: 1.45; }
-.mmg-card p.note { color: var(--mmg-fg-3); font-size: 0.85em; }
-.mmg-card .links { display: flex; flex-wrap: wrap; gap: 6px; }
-.mmg-card .links a { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 6px; border: 1px solid var(--mmg-line); border-radius: 999px;
-  background: var(--mmg-surface-2); color: inherit; text-decoration: none; font-size: 0.86em; white-space: nowrap; }
-.mmg-card .links a:hover { border-color: var(--mmg-accent); background: var(--mmg-accent-soft); }
-.mmg-card .links a .n { font: 11px ui-monospace, Consolas, monospace; color: var(--mmg-fg-3); }
+/* the hero: the text and, beside it, the double helix (below it on a phone) */
+.mmg-home .hero { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 28px; align-items: center; }
+.mmg-home .hero .mmg-helix { grid-row: 1 / span 2; align-self: center; }   /* beside the title and the "Why" block */
+.mmg-home .hero .why { grid-column: 2; margin-top: 10px; }
+.mmg-home .hero .hero-text { min-width: 0; text-align: center; }
+.mmg-home .hero .hero-text .ctx { justify-content: center; }
+.mmg-home .hero .hero-text .hint { margin-left: auto; margin-right: auto; max-width: 60ch; }
+.mmg-helix { margin: 0; justify-self: start; line-height: 0; }
+.mmg-helix svg { overflow: visible; }
+.mmg-helix .bp line { stroke: var(--mmg-fg-3); stroke-width: 2.5; stroke-linecap: round; opacity: .55; }
+.mmg-helix .bp .a { fill: var(--mmg-accent); }
+.mmg-helix .bp .b { fill: #1baf7a; }
+.mmg-helix .bp { animation: mmg-helix-turn var(--period, 6s) ease-in-out infinite alternate; }
+@keyframes mmg-helix-turn {
+  from { transform: scaleX(1); opacity: 1; }
+  50%  { opacity: .45; }                        /* the rung edge-on, at the back */
+  to   { transform: scaleX(-1); opacity: 1; }
+}
+@media (max-width: 899px) {
+  .mmg-home .hero { grid-template-columns: minmax(0, 1fr); }
+  .mmg-home .hero .mmg-helix { grid-row: auto; }
+  .mmg-home .hero .why { grid-column: auto; }
+  .mmg-helix { justify-self: center; }
+  .mmg-helix svg { height: 180px; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { .mmg-helix .bp { animation-play-state: paused; } }
+.mmg-home .block { margin: 18px 0 0; }
+.mmg-home .block h2 { font-size: 1.15em; margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--mmg-line); }
+.mmg-home .aims { margin: 0; padding-left: 20px; font-size: 0.95em; line-height: 1.5; max-width: 72ch; }
+.mmg-home .aims li { margin: 0 0 6px; }
+.mmg-home .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 18px; margin: 0; }
+.mmg-home .groups > div { min-width: 0; }
+.mmg-home .groups dt { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 0 0 3px; }
+.mmg-home .groups dt .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.mmg-home .groups dt small { color: var(--mmg-fg-3); font-weight: 400; font: 11px ui-monospace, Consolas, monospace; }
+.mmg-home .groups dd { margin: 0; font-size: 0.92em; line-height: 1.45; }
+.mmg-home .groups dd em { display: block; color: var(--mmg-fg-3); font-size: 0.92em; margin-top: 3px; }
 .mmg-home .foot { text-align: center; margin-top: 22px; }
+.mmg-home .foot a { color: inherit; }
 /* the form with the example's note beside it (form_with_note); one column on a phone */
 .mmg-form-note { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
 .mmg-form-note > .f, .mmg-form-note > .n { min-width: 0; }

@@ -114,11 +114,12 @@ check("app.run() without error", not isinstance(r, BaseException), repr(r)[:300]
 import builtins
 import gzip
 
-helpers = run(ui.file_helpers, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
+PATHS = {"output": "", "msg": ""}
+helpers = run(ui.file_helpers, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
-POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, glob=glob, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, glob=glob, gzip=gzip, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re)
 
 # The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
 # no key, nothing leaves the machine. It answers by the kind of request.

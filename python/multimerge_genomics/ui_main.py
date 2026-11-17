@@ -15,6 +15,7 @@ def imports():
     import numpy as np
     import os
     import asyncio
+    import gzip
     import re
     import multimerge_genomics as _engine
 
@@ -29,7 +30,7 @@ def imports():
         mmg = _engine
     # The diagnostic figures (SVG), shared by the screens and usable in scripts.
     from multimerge_genomics import figures as figs
-    return asyncio, figs, mmg, mo, np, os, pl, re
+    return asyncio, figs, gzip, mmg, mo, np, os, pl, re
 
 
 @app.cell
@@ -59,11 +60,17 @@ def global_state(mmg, mo):
     # here and not in the screen's own cell: a state created in the very cell
     # that shows it is reborn empty on every run.
     get_patient_msg, set_patient_msg = mo.state("", allow_self_loops=True)
-    return ai_settings, get_agent, get_ai_rev, get_page, get_patient_msg, set_agent, set_ai_rev, set_page, set_patient_msg
+
+    # Where the results go: "" = next to each input; otherwise a folder. A
+    # plain dict read when a result is named (`beside`), like ai_settings;
+    # get_folder_rev redraws the folders bar after a change.
+    paths = {"output": "", "msg": ""}
+    get_folder_rev, set_folder_rev = mo.state(0)
+    return ai_settings, get_agent, get_ai_rev, get_folder_rev, get_page, get_patient_msg, paths, set_agent, set_ai_rev, set_folder_rev, set_page, set_patient_msg
 
 
 @app.cell
-def file_helpers(mmg, mo, np, os, pl, re):
+def file_helpers(mmg, mo, np, os, paths, pl, re):
     # Shared by the screens: the files of the folder each screen offers (and
     # those of the examples folder), the default output names, a look at the
     # first records of a result, and the Python call that does the same thing
@@ -194,7 +201,10 @@ def file_helpers(mmg, mo, np, os, pl, re):
         return base, ext
 
     def beside(source, name):
-        """`name` in the folder of `source` (a result goes next to its input)."""
+        """`name` in the output folder when one is set (the folders bar), else
+        in the folder of `source`: a result goes next to its input."""
+        if paths.get("output"):
+            return os.path.join(paths["output"], name)
         folder = os.path.dirname(source)
         return f"{folder}/{name}" if folder else name
 
@@ -633,8 +643,7 @@ def file_helpers(mmg, mo, np, os, pl, re):
         spectrum_chart,
         split_name,
         tree_chart,
-        warn,
-    )
+        warn)
 
 
 @app.cell
@@ -2052,7 +2061,67 @@ def workbench_rail(get_page, mmg, mo, set_page):
 
 
 @app.cell
-def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os):
+def data_folders(get_folder_rev, get_page, mo, os, paths, set_folder_rev, set_page):
+    # Where the files come from and where the results go, for every screen,
+    # typed or picked in a folder browser (no need to move files around in
+    # the operating system). The source folder is the process's current
+    # folder: the screens list it and the engine resolves relative paths
+    # against it, so it is changed with os.chdir (mmgen-ui serves one person;
+    # a process-wide setting is what it should be). Results go next to their
+    # input unless an output folder is set.
+    get_folder_rev()   # redrawn after a change
+    _cwd = os.getcwd()
+    _out = paths["output"]
+
+    def _use_source(folder):
+        folder = (folder or "").strip().strip('"')
+        if not folder:
+            return
+        if not os.path.isdir(folder):
+            paths["msg"] = f"🔥 {folder} is not a folder."
+        else:
+            os.chdir(folder)
+            paths["msg"] = ""
+        set_folder_rev(get_folder_rev() + 1)
+        set_page(get_page())   # the screen's lists are built again
+
+    def _use_output(folder):
+        folder = (folder or "").strip().strip('"')
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError as err:
+                paths["msg"] = f"🔥 Cannot use {folder} for the results: {err}"
+                set_folder_rev(get_folder_rev() + 1)
+                return
+            paths["output"] = os.path.abspath(folder)
+        else:
+            paths["output"] = ""
+        paths["msg"] = ""
+        set_folder_rev(get_folder_rev() + 1)
+        set_page(get_page())
+
+    folder_text = mo.ui.text(value=_cwd, label="Source folder (the screens list its files):", full_width=True)
+    output_text = mo.ui.text(value=_out, placeholder="blank: each result next to its input", label="Output folder (where the results are written):", full_width=True)
+    btn_use_folders = mo.ui.button(label="📁 Use these folders", on_click=lambda _: (_use_output(output_text.value), _use_source(folder_text.value)))
+    folder_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
+                                        label="Pick the source folder (a click applies it):", on_change=lambda v: _use_source(str(v[0].path) if v else ""))
+    output_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
+                                        label="Pick the output folder (a click applies it):", on_change=lambda v: _use_output(str(v[0].path) if v else ""))
+    _title = f"📁 Files from `{_cwd}` · results {('in `' + _out + '`') if _out else 'next to each input'} — change"
+    _msg = mo.md(paths["msg"]) if paths["msg"] else None
+    mo.vstack([_x for _x in (
+        mo.accordion({_title: mo.vstack([
+            mo.md("Type the folders and press the button, or pick them below. An output name typed in a form can also be a full path."),
+            folder_text, output_text, btn_use_folders,
+            mo.hstack([folder_browser, output_browser], widths="equal", align="start", wrap=True, gap=1),
+        ])}),
+        _msg) if _x is not None])
+    return btn_use_folders, folder_browser, folder_text, output_browser, output_text
+
+
+@app.cell
+def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os, paths):
     # The strip above every screen: where you are (group › screen) and the
     # context every tool shares: the folder the files are listed from, and
     # where the engine runs.
@@ -2062,6 +2131,8 @@ def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os):
     _engine = mmg.engine_info()
     _chips = [f'<span class="mmg-chip ctx" title="{os.getcwd()}">📁 {os.path.basename(os.getcwd()) or os.getcwd()}</span>',
               f'<span class="mmg-chip">{"GPU" if _engine["gpu"] else "CPU"} · {_engine["threads"]} threads</span>']
+    if paths["output"]:
+        _chips.insert(1, f'<span class="mmg-chip ctx" title="{paths["output"]}">💾 results → {os.path.basename(paths["output"]) or paths["output"]}</span>')
     if _page in RAIL_HUMAN:
         _chips.append('<span class="mmg-chip" title="Human genome data: experimental software, for teaching and research">🧬 human genome</span>')
     mo.Html(f'<div class="mmg-top"><span class="crumb">{_crumb}</span><span class="chips">{"".join(_chips)}</span></div>') if _crumb else None
@@ -4244,7 +4315,7 @@ def anc_page_example(anc_task, example_picker, get_page, mo):
 
 
 @app.cell
-def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
+def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, form_with_note, get_page, gzip, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "anc")
     btn_refresh_anc  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("anc", anc_task.value, anc_example.value)
@@ -4252,20 +4323,37 @@ def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_fo
     _vcfs = files_under(_folder, "vcf")
     _beds_label = "Use the callable-regions BED next to each VCF (`x.callable.bed`, or the Genome in a Bottle `*_benchmark*.bed`)"
     _tsvgz =[_f for _f in files_under(_folder, "vcf", "table") if _f != NO_FILE]
+
+    def _is_panel(path):
+        """A frequency panel (build_panel's output): its header names chrom, pos, ref, alt
+        and AF_<group> columns. Any other TSV of the folder stays out of the list."""
+        try:
+            _open = gzip.open if path.endswith(".gz") else open
+            with _open(path, "rt", encoding="utf-8", errors="replace") as _fh:
+                for _line in _fh:
+                    if not _line.startswith("#"):
+                        _low = _line.lower()
+                        return "chrom" in _low and "af_" in _low
+        except OSError:
+            return False
+        return False
+
+    _panels = [_f for _f in _tsvgz if _f.endswith((".tsv", ".tsv.gz", ".txt")) and _is_panel(_f)]
     if anc_task.value == "Ancestry":
-        _pan = [_f for _f in _tsvgz if "panel" in _f.lower() and _f.endswith((".tsv", ".tsv.gz", ".txt"))] or [NO_FILE]
+        # nothing is picked by itself: a single file in a list would be submitted unseen
+        _pan = [NO_FILE] + _panels
         form_anc = make_form({
-            "panel": mo.ui.dropdown(options=_pan, value=_ex.get("panel"), label="Reference panel (a frequency panel TSV):", full_width=True),
+            "panel": mo.ui.dropdown(options=_pan, value=_ex.get("panel") or NO_FILE, label="Reference panel (a frequency panel TSV, from Build a reference panel):", full_width=True),
             "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="People's VCFs:", full_width=True),
             "samples": mo.ui.text(value=_ex.get("samples", ""), placeholder="blank: every sample", label="Samples, for a multi-sample VCF:", full_width=True),
             "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
         }, "🌍 Estimate")
     elif anc_task.value == "Polygenic score":
-        _scores = [_f for _f in _tsvgz if "pgs" in _f.lower() and not _f.lower().endswith(".vcf.gz")] or [NO_FILE]
-        _pan = {"(none: the score only, no comparison)": "none", **{_f: _f for _f in _tsvgz if "panel" in _f.lower()}}
+        _scores = [NO_FILE] + [_f for _f in _tsvgz if "pgs" in _f.lower() and not _f.lower().endswith(".vcf.gz")]
+        _pan = {"(none: the score only, no comparison)": "none", **{_f: _f for _f in _panels}}
         _imp = {"pooled frequency of the panel": "pooled", "AFR": "AFR", "AMR": "AMR", "EAS": "EAS", "EUR": "EUR", "SAS": "SAS"}
         form_anc = make_form({
-            "scoring": mo.ui.dropdown(options=_scores, value=_ex.get("scoring"), label="Scoring file (PGS Catalog, harmonized GRCh38):", full_width=True),
+            "scoring": mo.ui.dropdown(options=_scores, value=_ex.get("scoring") or NO_FILE, label="Scoring file (PGS Catalog, harmonized GRCh38):", full_width=True),
             "vcfs": mo.ui.multiselect(options=_vcfs, value=_ex.get("vcfs", []), label="People's VCFs:", full_width=True),
             "use_beds": mo.ui.checkbox(value=_ex.get("use_beds", True), label=_beds_label),
             "panel": mo.ui.dropdown(options=_pan, value=label_of(_pan, _ex.get("panel", "none"), "(none: the score only, no comparison)"),

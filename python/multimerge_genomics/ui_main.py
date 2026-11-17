@@ -63,7 +63,7 @@ def global_state(mmg, mo):
 
 
 @app.cell
-def file_helpers(mmg, mo, os, re):
+def file_helpers(mmg, mo, np, os, pl, re):
     # Shared by the screens: the files of the folder each screen offers (and
     # those of the examples folder), the default output names, a look at the
     # first records of a result, and the Python call that does the same thing
@@ -150,6 +150,36 @@ def file_helpers(mmg, mo, os, re):
     def chosen(value):
         """A real file was picked, not the "no file" placeholder."""
         return bool(value) and value != NO_FILE
+
+    def read_kmers(path, need_k=True):
+        """The k-mers of a file written by Module 1: (k, bytes). A file from
+        before MMGEN 2 (one Int64 row per k-mer) or a name without its k
+        (Module 1 writes name_K31.arrow) get a message that says what to do,
+        instead of a crash in the screen."""
+        name = os.path.basename(path)
+        df = pl.read_ipc(path)
+        col = df.get_column("K-mers") if "K-mers" in df.columns else df.to_series(0)
+        if col.dtype != pl.Binary or df.height != 1:
+            raise ValueError(f"{name} is a k-mer file from before MMGEN 2 (one row per 64-bit k-mer), which the "
+                             "current modules do not read: run Module 1 again on the FASTA or FASTQ it came from.")
+        m = re.search(r"_K(\d+)\.arrow$", name)
+        if need_k and not m:
+            raise ValueError(f"{name} does not carry its k in its name (Module 1 writes it, e.g. name_K31.arrow): "
+                             "rename the file with the k that read it, or run Module 1 again.")
+        data = col.item(0)
+        if len(data) % 16:
+            raise ValueError(f"{name} is not a Module 1 file: its k-mers are not 16 bytes each.")
+        k = int(m.group(1)) if m else None
+        if k and k < 64 and data:
+            # A k-mer of k bases fills the low 2k bits of its 16 bytes (little-endian);
+            # the rest is 0. A set bit above that, in any k-mer, is another k or the
+            # layout of an older MMGEN (a file of June 2026 had a few such k-mers).
+            words = np.frombuffer(data, dtype="<u8").reshape(-1, 2)
+            bad = (words[:, 1] >> (2 * k - 64)).any() if 2 * k >= 64 else (words[:, 1].any() or (words[:, 0] >> (2 * k)).any())
+            if bad:
+                raise ValueError(f"{name} was not written by this version of Module 1 with k = {k} (some k-mers use "
+                                 f"more than {2 * k} bits): run Module 1 again on the FASTA or FASTQ.")
+        return k, data
 
     def split_name(path):
         """'data/x.vcf.gz' -> ('x', '.vcf.gz'); 'x.bam' -> ('x', '.bam')."""
@@ -587,6 +617,7 @@ def file_helpers(mmg, mo, os, re):
         files_with,
         form_with_note,
         human_notice,
+        read_kmers,
         make_form,
         task_tabs,
         figure_panel,
@@ -2433,7 +2464,7 @@ def assembly_page_form(assembly_example, example_for, files_with, form_with_note
 
 
 @app.cell
-async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_assembly, get_page, mmg, mo, os, pl, warn):
+async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_assembly, get_page, mmg, mo, os, read_kmers, warn):
     mo.stop(get_page() != "assembly")
     mo.stop(form_assembly.value is None, mo.md("🧩 *Waiting for the assembly button...*"))
 
@@ -2441,14 +2472,10 @@ async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_pan
     mo.stop(not chosen(_path), warn("Select a valid .arrow file."))
 
     try:
-        # K comes from the file name (file_K55.arrow -> 55).
-        _k_text = _path.split("_K")[-1].split(".arrow")[0]
-        _k_size = int(_k_text)
-
-        with mo.status.spinner(f"1/3 Reading the k-mers (K={_k_size})..."):
+        with mo.status.spinner("1/3 Reading the k-mers..."):
             await asyncio.sleep(0)
-            _df = pl.read_ipc(_path)
-            _kmer_bytes = _df.get_column("K-mers").item(0)
+            # k comes from the file name (file_K55.arrow -> 55); the reader explains an old or misnamed file
+            _k_size, _kmer_bytes = read_kmers(_path)
 
         with mo.status.spinner("2/3 Rust: building the graph and walking its paths..."):
             await asyncio.sleep(0)
@@ -2581,7 +2608,11 @@ def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, g
         btn_back_variant,
         mo.md("<br>\n\n# ⚠️ 4. Variant Calling (SNPs)"),
         mo.callout(mo.md("To find mutations we compare a patient against a reference. The button below makes a simulated patient: a copy of the genome you pick, with SNPs planted at positions it tells you; run both through Module 1 to get their `.arrow` files. Or pick the example: a small genome and a patient, ready as k-mers."), kind="info"),
-        mo.hstack([patient_source, patient_snps, btn_generate], justify="start", align="end", widths=[4, 1, 1.4]),
+        # the genome on its own line; the count and the button below it (a
+        # three-column row with fixed widths squeezed the button and the label
+        # in a narrow window, e.g. the browser pane of an editor)
+        patient_source,
+        mo.hstack([patient_snps, btn_generate], justify="start", align="end", wrap=True, gap=1),
         # The button's feedback (an empty one gave "****", which Markdown draws
         # as a horizontal rule).
         mo.md(f"**{get_patient_msg()}**" if get_patient_msg() else ""),
@@ -2607,7 +2638,7 @@ def variant_page_form(example_for, files_with, form_with_note, get_page, make_fo
 
 
 @app.cell
-async def variant_page_backend(asyncio, chosen, form_variant, get_page, mmg, mo, pl, warn):
+async def variant_page_backend(asyncio, chosen, form_variant, get_page, mmg, mo, read_kmers, warn):
     mo.stop(get_page() != "variant")
     mo.stop(form_variant.value is None, mo.md("🧪 *Waiting for the settings...*"))
 
@@ -2617,8 +2648,6 @@ async def variant_page_backend(asyncio, chosen, form_variant, get_page, mmg, mo,
     mo.stop(not chosen(_ref) or not chosen(_pat), warn("Select both files."))
     mo.stop(_ref == _pat, mo.callout(mo.md("⚠️ The reference and the patient cannot be the same file!"), kind="warn"))
 
-    _k_text = _ref.split("_K")[-1].split(".arrow")[0]
-    _k_size = int(_k_text)
     _mb = form_variant.value["filter_mb"]
     _hashes = form_variant.value["num_hashes"]
     # Where the Bloom filter really runs on this machine.
@@ -2627,8 +2656,11 @@ async def variant_page_backend(asyncio, chosen, form_variant, get_page, mmg, mo,
     try:
         with mo.status.spinner("1/3 Loading the k-mers..."):
             await asyncio.sleep(0)
-            _ref_bytes = pl.read_ipc(_ref).get_column("K-mers").item(0)
-            _pat_bytes = pl.read_ipc(_pat).get_column("K-mers").item(0)
+            _k_size, _ref_bytes = read_kmers(_ref)
+            _k_pat, _pat_bytes = read_kmers(_pat)
+            if _k_pat != _k_size:
+                raise ValueError(f"The reference was read with k = {_k_size} and the patient with k = {_k_pat}: "
+                                 "run Module 1 on both with the same k.")
 
         with mo.status.spinner(f"2/3 Building the reference Bloom filter on the {_where}..."):
             await asyncio.sleep(0)
@@ -2761,7 +2793,7 @@ def bloom_page_form(bloom_example, example_for, files_with, form_with_note, get_
 
 
 @app.cell
-async def bloom_page_backend(asyncio, chosen, form_bloom, get_page, mmg, mo, np, pl, warn):
+async def bloom_page_backend(asyncio, chosen, form_bloom, get_page, mmg, mo, np, read_kmers, warn):
     mo.stop(get_page() != "bloom")
     mo.stop(form_bloom.value is None, mo.md("🔍 *Set the parameters above and click 'Build'...*"))
 
@@ -2775,8 +2807,7 @@ async def bloom_page_backend(asyncio, chosen, form_bloom, get_page, mmg, mo, np,
 
     with mo.status.spinner(f"🔥 Building the filter on the {_where}..."):
         await asyncio.sleep(0)
-        _df = pl.read_ipc(_path)
-        _kmer_bytes = _df.get_column("K-mers").item(0)
+        _, _kmer_bytes = read_kmers(_path, need_k=False)
         _total_kmers = len(_kmer_bytes) // 16
 
         _bloom_bytes = await asyncio.to_thread(mmg.build_bloom_filter, _kmer_bytes, _filter_mb, _num_hashes)

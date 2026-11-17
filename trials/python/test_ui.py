@@ -114,7 +114,7 @@ check("app.run() without error", not isinstance(r, BaseException), repr(r)[:300]
 import builtins
 import gzip
 
-helpers = run(ui.file_helpers, mmg=mmg, mo=mo, os=os, re=re)
+helpers = run(ui.file_helpers, mmg=mmg, mo=mo, np=np, os=os, pl=pl, re=re)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])

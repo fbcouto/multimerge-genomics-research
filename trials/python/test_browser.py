@@ -14,6 +14,7 @@
 # It works in a temporary folder, with data it creates itself.
 import contextlib
 import gzip
+import json
 import os
 import random
 import re
@@ -61,7 +62,7 @@ if SHOTS:
 # ---------------------------------------------------------------------------
 T = tempfile.mkdtemp(prefix="mmg_browser_")
 shutil.copy(UI_PATH, os.path.join(T, "ui_main.py"))
-for _side in ("ui_theme.css", "ui_head.html"):   # the workbench theme and the rail's script, next to the app
+for _side in ("ui_theme.css", "ui_head.html", "webgl.py"):   # the workbench theme, the rail's script and the 3-D pages, next to the app
     shutil.copy(os.path.join(os.path.dirname(UI_PATH), _side), os.path.join(T, _side))
 os.chdir(T)
 random.seed(1)
@@ -192,14 +193,16 @@ def log_tail():
 
 
 _up = False
-for _ in range(90):
+for _ in range(90):   # up to 3 min for the port to open, then one long request
     if server.poll() is not None:
         break
     try:
-        _up = urllib.request.urlopen(URL, timeout=3).status == 200
+        # One long request, not many short ones: the first page takes a few seconds to
+        # build, and a request aborted by a short timeout makes the server start over.
+        _up = urllib.request.urlopen(URL, timeout=180).status == 200
         break
     except Exception:
-        time.sleep(1)
+        time.sleep(2)
 if not _up:
     print(log_tail())
     shut_down()
@@ -426,10 +429,10 @@ def launch(p):
     preferred = os.environ.get("MMG_BROWSER")
     for channel in ([preferred] if preferred else ["msedge", "chrome"]):
         try:
-            return p.chromium.launch(channel=channel, headless=True), channel
+            return p.chromium.launch(channel=channel, headless=True, args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]), channel
         except Exception:
             continue
-    return p.chromium.launch(headless=True), "Playwright's chromium"
+    return p.chromium.launch(headless=True, args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]), "Playwright's chromium"
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +571,37 @@ try:
             longest = max(contigs, key=len)
             check("the contig written to disk is the original genome", longest == genome or "".join(COMP[b] for b in reversed(longest)) == genome, f"{len(longest)} bp")
             check("the contig table shows up", "NODE_1" in (t or ""))
+            btn3 = pg.get_by_role("button", name="Draw the 3-D view")
+            check("a button offers the 3-D view of the graph, drawn only when asked", btn3.count() == 1 and pg.locator("iframe").count() == 0, btn3.count())
+            btn3.first.click()
+            pg.locator("iframe").first.wait_for(timeout=180000)
+            pg.wait_for_timeout(2500)
+            fr = next((f for f in pg.frames if f != pg.main_frame), None)
+            info = fr.evaluate("() => { const c = document.getElementById('c'); return JSON.stringify({gl: !!(c && c.getContext('webgl')), points: DATA.points.length, legend: document.getElementById('legend').children.length}); }") if fr else "{}"
+            info = json.loads(info)
+            check("the 3-D view draws the unitigs with WebGL in an iframe", info.get("gl") is True and info.get("points", 0) >= 1 and info.get("legend", 0) >= 1, info)
+            shot(pg, "screen3_assembly_3d")
+            # the wheel flies the camera towards the cursor: the distance to the point looked at shrinks,
+            # and, once at its floor, the point looked at itself moves (the camera enters the cloud)
+            if fr:
+                cam0 = json.loads(fr.evaluate("() => JSON.stringify(cameraState())"))
+                pg.wait_for_timeout(300)
+                # wheel events dispatched inside the frame, 45 ticks a little left of the centre of the canvas
+                fr.evaluate("""() => { const c = document.getElementById('c'); const r = c.getBoundingClientRect();
+                    for (let i = 0; i < 45; i++) c.dispatchEvent(new WheelEvent('wheel', {deltaY: -120, clientX: r.left + r.width * 0.45, clientY: r.top + r.height * 0.5, bubbles: true, cancelable: true})); }""")
+                pg.wait_for_timeout(400)
+                cam1 = json.loads(fr.evaluate("() => JSON.stringify(cameraState())"))
+                moved = sum((a - b) ** 2 for a, b in zip(cam0["centre"], cam1["centre"])) ** 0.5
+                check("the wheel flies the camera into the cloud (closer, then the point looked at moves)",
+                      cam1["dist"] < cam0["dist"] / 10 and moved > 0.05, f"dist {cam0['dist']:.2f} -> {cam1['dist']:.2f}, centre moved {moved:.2f}")
+                links = fr.evaluate("() => { const b = document.getElementById('links'); return JSON.stringify({edges: DATA.edges.length, shown: getComputedStyle(b).display !== 'none', title: b.title}); }")
+                links = json.loads(links)
+                # a genome assembled in one piece has one unitig and no edge: then the button stays hidden
+                check("the Links button is there exactly when the graph has edges, and names them",
+                      (links["edges"] >= 1) == links["shown"] and (not links["shown"] or "edges" in links["title"]), links)
+            pg.get_by_role("button", name="Close the 3-D view").click()
+            pg.wait_for_timeout(1500)
+            check("closing the 3-D view removes it", pg.locator("iframe").count() == 0)
 
         print("== screen 4: variant calling (Bloom)")
         with page(browser) as pg:
@@ -731,7 +765,16 @@ try:
             check("  the settings are saved", t is not None and "AI:" in t, (t or "")[-300:])
             back(pg).click()
             enter(pg, 10)
-            pg.get_by_text("Ask the AI about this result").first.click()
+            # The accordion's own state is its trigger's aria-expanded (the buttons inside
+            # it count as "visible" to Playwright even while it is closed). A click that
+            # lands while the screen is still being rebuilt is lost: check and retry.
+            _trig = pg.get_by_role("button", name=re.compile("Ask the AI about this result")).first
+            _trig.wait_for(timeout=30000)
+            for _try in range(4):
+                if _trig.get_attribute("aria-expanded") == "true":
+                    break
+                _trig.click()
+                pg.wait_for_timeout(1500)
             t = wait_for(pg, "Explain it for", 30)
             shot(pg, "screen10_ai_panel_on")
             check("  with the agreement, the panel offers the question form",

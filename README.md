@@ -182,6 +182,8 @@ The screens draw the figures in which the usual artefacts show — what a summar
 | 30 | **QQ plot** with λGC, **forest plot**, **Manhattan plot** | inflation (population structure, relatives) against true signals; how wide the intervals are |
 | 31 | **Where the reads fall on each genome**, window by window | an infection (reads spread over the genome) against a vector element or a shared gene (a few windows in one place) |
 
+**Optional 3-D views, drawn only when asked.** Under the figures of screens 2, 3, 7, 17, 22 and 27 (the composition PCA, the two assembly graphs, the ancestry PCA, the PCA of the samples and the PCoA) a button, **🧊 Draw the 3-D view**, renders the same data in three dimensions with WebGL, in the browser: drag to rotate, wheel to fly towards whatever is under the cursor (the camera goes right into a cloud, to see the boundaries inside it, and a drag there looks around), right button to pan, hover a point for its name, click a legend entry to hide a group. On screen 2 a thin line joins the consecutive windows of each sequence, the walk of a contig through composition space (a contig that crosses groups is chimeric, or carries a region of another composition); a **Links** button shows or hides these lines, as it does the edges of a graph. Nothing is computed or downloaded until the button is clicked; the graph layout is laid out in three dimensions by the server first (a few seconds for a few thousand unitigs). The pages are self-contained HTML (`multimerge_genomics.webgl`), usable from a script as well: `webgl.scatter3d(points, axes, title, links=...)` and `webgl.graph3d(nodes, edges, title)` return the HTML.
+
 The same figures are open to scripts and notebooks, as standalone SVG with no plotting library:
 
 ```python
@@ -213,15 +215,15 @@ pip install "multimerge-genomics[ui,ai]"
 
 # With an NVIDIA GPU, the CUDA builds attached to the release (they also run without a GPU):
 # Windows (CUDA 11.8)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-1cuda-cp310-abi3-win_amd64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.0/multimerge_genomics-2.5.0-1cuda-cp310-abi3-win_amd64.whl"
 # Linux (glibc 2.28 or newer)
-pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/multimerge_genomics-2.4.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+pip install "multimerge-genomics[ui,ai] @ https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.0/multimerge_genomics-2.5.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 
 cd folder/with/your/files
 mmgen-ui                           # the web interface opens in your browser
 ```
 
-`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The CPU-only packages (Windows, macOS on Apple Silicon and Intel, Linux with glibc 2.17 or newer) come from [PyPI](https://pypi.org/project/multimerge-genomics/), built and tested by the project's continuous integration; `pip` picks the one for your system. The CUDA packages are attached to the release [v2.4.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.4.0), with the same CPU-only packages.
+`mmgen-ui` serves the interface on this computer only (`http://127.0.0.1:2718`), and its screens list and write the files of the folder it is started in (or `--folder`). The extras are optional: `[ui]` is the web interface, `[ai]` the AI assistant; the Python API needs neither. The CPU-only packages (Windows, macOS on Apple Silicon and Intel, Linux with glibc 2.17 or newer) come from [PyPI](https://pypi.org/project/multimerge-genomics/), built and tested by the project's continuous integration; `pip` picks the one for your system. The CUDA packages are attached to the release [v2.5.0](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.5.0), with the same CPU-only packages.
 
 ### On Google Colab: free or paid, your choice
 
@@ -242,7 +244,7 @@ Either way, the files you write on Colab are gone when the session ends: downloa
 * NVIDIA CUDA Toolkit 11.8+ — optional, only for GPU acceleration
 * On Windows: Visual Studio 2022 Build Tools
 
-Ready-made packages of the release v2.4.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
+Ready-made packages of the release v2.5.0 are above ([Two ways to run it](#-two-ways-to-run-it)); this section builds from source.
 
 ### Build and install
 ```bash
@@ -275,7 +277,7 @@ To build a wheel instead: `maturin build --release --locked -o dist`, then `pip 
 import multimerge_genomics as mmg
 
 print(mmg.engine_info())
-# {'version': '2.4.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
+# {'version': '2.5.0', 'gpu_compiled': True, 'gpu': True, 'gpu_memory_mb': [3371, 4095], 'threads': 8}
 
 # What is wrong with this file?
 report = mmg.validate_file("sample.vcf.gz")
@@ -514,7 +516,7 @@ Every Rust test compares the output with an independent reference written in the
 
 ## 🚧 Status and known limitations
 
-MMGEN 2.4.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
+MMGEN 2.5.0 is still experimental (alpha) software. The file tools of modules 8–14 are the most mature part; the k-mer modules 1–7 are closer to a teaching and research prototype.
 
 * **The k-mer modules 1–7 work in memory, and their k-mers are strand-specific.** Assembly and variant detection suit same-strand input, such as an assembled reference against a mutated copy of it. `count_kmers` (module 13) is the exception: any size, canonical.
 * **Variant detection reports k-mers**, not VCF records.
@@ -557,7 +559,7 @@ The course name and the student's name are the seed: the same pair always gives 
 
 If MMGEN helps your research or your teaching, please cite it (GitHub's *Cite this repository* button gives the same, from [CITATION.cff](CITATION.cff)):
 
-> Couto F. *MMGEN: MultiMerge Genomics* (version 2.4.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
+> Couto F. *MMGEN: MultiMerge Genomics* (version 2.5.0). Zenodo. https://doi.org/10.5281/zenodo.20417492
 
 The DOI always resolves to the latest version on Zenodo, where each version has its own DOI too. Please also cite the methods a tool reproduces (DESeq2, KING, MAGeCK, sourmash, Nextclade, cutadapt...), named in the sections above.
 

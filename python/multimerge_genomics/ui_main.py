@@ -32,7 +32,16 @@ def imports():
         mmg = _engine
     # The diagnostic figures (SVG), shared by the screens and usable in scripts.
     from multimerge_genomics import figures as figs
-    return asyncio, figs, gzip, mmg, mo, np, os, pl, re, urllib
+    # The optional 3-D views (WebGL). An interface newer than the installed
+    # package (development) takes the module next to this file.
+    try:
+        from multimerge_genomics import webgl as w3d
+    except ImportError:
+        import importlib.util as _ilu
+        _w = _ilu.spec_from_file_location("mmgen_webgl", os.path.join(str(mo.notebook_dir() or "."), "webgl.py"))
+        w3d = _ilu.module_from_spec(_w)
+        _w.loader.exec_module(w3d)
+    return asyncio, figs, gzip, mmg, mo, np, os, pl, re, urllib, w3d
 
 
 @app.cell
@@ -68,11 +77,13 @@ def global_state(get_folder_rev, mmg, mo):
     # get_folder_rev redraws the folders bar after a change.
     paths = {"output": "", "temp": "", "msg": "", "extra": []}
     get_folder_rev, set_folder_rev = mo.state(0)
-    return ai_settings, get_agent, get_ai_rev, get_folder_rev, get_page, get_patient_msg, paths, set_agent, set_ai_rev, set_folder_rev, set_page, set_patient_msg
+    # The 3-D view asked for: {"page": ...} (the data waits in paths["3d"][page]).
+    get_3d, set_3d = mo.state(None)
+    return ai_settings, get_3d, get_agent, get_ai_rev, get_folder_rev, get_page, get_patient_msg, paths, set_3d, set_agent, set_ai_rev, set_folder_rev, set_page, set_patient_msg
 
 
 @app.cell
-def file_helpers(get_folder_rev, mmg, mo, np, os, paths, pl, re, set_folder_rev):
+def file_helpers(get_folder_rev, get_page, mmg, mo, np, os, paths, pl, re, set_3d, set_folder_rev):
     # Shared by the screens: the files of the folder each screen offers (and
     # those of the examples folder), the default output names, a look at the
     # first records of a result, and the Python call that does the same thing
@@ -344,6 +355,35 @@ def file_helpers(get_folder_rev, mmg, mo, np, os, paths, pl, re, set_folder_rev)
         if add is None:
             return body
         return mo.Html(f'<div class="mmg-form-block">{add}{body}</div>')
+
+    # The optional 3-D views (WebGL), drawn only when asked for: a backend
+    # leaves the data of its figure with offer_3d and shows the button; the
+    # webgl_view cell draws it (spinner, then an iframe) when the button is pressed.
+    def offer_3d(kind, payload, title, note=None):
+        """Under a 2-D figure: `kind` "scatter" (points: (x, y, z, group, label); axes; optional
+        links: pairs of point indices, links_label) or "graph" (nodes: (size, kind, label); edges; init; kinds)."""
+        paths.setdefault("3d", {})[get_page()] = (kind, payload, title)
+        return mo.hstack([btn_3d, mo.md(f"*{note or 'the same data in three dimensions'}, drawn by WebGL only when asked*")],
+                         justify="start", align="center", gap=0.6, wrap=True)
+
+    def graph_payload(graph, kinds):
+        """The nodes and edges of a unitig or overlap graph, for a 3-D layout started from the 2-D one."""
+        nodes = graph.get("nodes") or []
+        index = {n["id"]: i for i, n in enumerate(nodes)}
+        overlap = bool(nodes) and "scaffold" in nodes[0]
+        items, init = [], []
+        for n in nodes:
+            length = n.get("length") or 0
+            kind = f"scaffold {n.get('scaffold')}" if overlap else (n.get("kind") or "")
+            what = f"contig {n['id']}" if overlap else f"unitig {n['id']}"
+            items.append((max(3.0, min(14.0, 2.0 + 1.6 * np.log10(length + 1))), kind,
+                          f"{what}: {length:,} bases" + (", circular" if n.get("circular") else "")))
+            init.append((n.get("x", 0.0), n.get("y", 0.0)))
+        edges = [(index[e["from"]], index[e["to"]]) for e in graph.get("edges") or [] if e.get("from") in index and e.get("to") in index]
+        return {"nodes": items, "edges": edges, "init": init, "kinds": {} if overlap else kinds}
+
+    btn_3d = mo.ui.button(label="🧊 Draw the 3-D view", on_click=lambda _: set_3d({"page": get_page(), "n": paths.get("3d_n", 0) + 1}))
+    btn_3d_close = mo.ui.button(label="✖ Close the 3-D view", on_click=lambda _: set_3d(None))
 
     def svg_download(svg, name, title=None):
         """A button that saves a chart as a standalone SVG file (vector, for a paper)."""
@@ -799,8 +839,12 @@ def file_helpers(get_folder_rev, mmg, mo, np, os, paths, pl, re, set_folder_rev)
 
     return (
         EXAMPLES_DIR,
+        btn_3d,
+        btn_3d_close,
         btn_clear_extra,
         download_form,
+        graph_payload,
+        offer_3d,
         drive_picker,
         explorer_panel,
         file_picker,
@@ -859,7 +903,7 @@ def example_files(chosen, EXAMPLES_DIR, mmg, mo, os, pl):
     # Downloaded from the GitHub release the first time an example needs them,
     # unless the zip is already in this folder. The 16S data (the mothur MiSeq
     # SOP) carry no explicit licence and are not published.
-    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/"
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.0/"
     DEMO_PACKS = {
         "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
                   "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
@@ -2598,7 +2642,7 @@ def cluster_page_form(cluster_example, example_for, files_with, form_with_note, 
 
 
 @app.cell
-async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_page, mo, np, os, warn):
+async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_page, mo, np, offer_3d, os, warn):
     mo.stop(get_page() != "cluster")
     mo.stop(form_cluster.value is None, mo.md("🧬 *Pick the sequences and submit the form.*"))
     _v = form_cluster.value
@@ -2641,13 +2685,14 @@ async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_pa
             if name is not None:
                 yield name, "".join(parts)
 
-        rows, labels, gcs = [], [], []
+        rows, labels, gcs, seq_of, place = [], [], [], [], []
         n_seq = 0
         for path in _paths:
             for name, seq in records(path):
                 n_seq += 1
                 label = os.path.basename(path) if len(_paths) > 1 else name
                 arr = code[np.frombuffer(seq.encode("ascii", "replace"), dtype=np.uint8)]
+                first = len(rows)
                 for a in range(0, len(arr) - _W // 2, _W):
                     w = arr[a:a + _W]
                     if len(w) < _W // 2 or (w < 0).mean() > 0.1:
@@ -2659,6 +2704,10 @@ async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_pa
                     labels.append(label)
                     valid = w[w >= 0]
                     gcs.append(float(((valid == 1) | (valid == 2)).mean()) if len(valid) else 0.0)
+                    # which sequence the window is from, and its place along it (the 3-D view joins
+                    # consecutive windows of one sequence: the walk of a contig through composition space)
+                    seq_of.append(n_seq - 1)
+                    place.append((name if len(_paths) == 1 else f"{label} {name}", a + 1, len(rows) - first))
         if len(rows) < max(4, _min):
             return {"error": f"only {len(rows)} window(s) of {_W:,} bases: give longer sequences, or a shorter window."}
         X = np.log(np.array(rows) + 1e-4)
@@ -2667,7 +2716,7 @@ async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_pa
         Z = pca.fit_transform(X)
         lab = HDBSCAN(min_cluster_size=_min, copy=True).fit_predict(Z)
         return {"Z": Z, "labels": lab, "sources": labels, "gc": gcs, "sequences": n_seq,
-                "explained": pca.explained_variance_ratio_}
+                "explained": pca.explained_variance_ratio_, "seq_of": seq_of, "place": place}
 
     try:
         with mo.status.spinner("Cutting the sequences into windows and measuring their composition..."):
@@ -2728,6 +2777,19 @@ async def cluster_page_backend(asyncio, error_panel, facts, form_cluster, get_pa
         ])), kind="success"),
         mo.ui.table(_summary, selection=None, label="The groups and where their windows came from"),
         _chart,
+        offer_3d("scatter", {"points": [(float(_Z[_i, 0]), float(_Z[_i, 1]) if _Z.shape[1] > 1 else 0.0, float(_Z[_i, 2]) if _Z.shape[1] > 2 else 0.0,
+                                         _names[int(_lab[_i])], f"{_r['place'][_i][0]} · window {_r['place'][_i][2]} (from base {_r['place'][_i][1]:,})")
+                                        for _i in range(len(_lab))],
+                             "axes": tuple(f"PC{_i + 1} ({100 * _r['explained'][_i]:.0f}%)" if _i < len(_r["explained"]) else f"PC{_i + 1}" for _i in range(3)),
+                             # thin lines join consecutive windows of one sequence: the walk of each contig through
+                             # composition space (a contig that stays in its group is clean; one that crosses groups is chimeric,
+                             # or carries a region of another composition)
+                             "links": [(_i, _i + 1) for _i in range(len(_lab) - 1) if _r["seq_of"][_i] == _r["seq_of"][_i + 1]],
+                             "links_label": "consecutive windows of the same sequence, joined in order"},
+                 "The windows by their tetranucleotide composition",
+                 note="the same data in three dimensions, with a thin line joining the consecutive windows of each sequence "
+                      "(the walk of a contig through composition space: a contig that crosses groups is chimeric, or carries a "
+                      "region of another composition)"),
         mo.md("A group made of windows from a single source is a clean bin; a source split across groups, or windows "
               "left ungrouped, often means a plasmid, a phage or a region of unusual composition. Try a longer window "
               "or a larger smallest group for steadier groups."),
@@ -2766,7 +2828,7 @@ def assembly_page_form(assembly_example, example_for, files_with, form_with_note
 
 
 @app.cell
-async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_assembly, get_page, mmg, mo, os, read_kmers, warn):
+async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_assembly, get_page, graph_payload, mmg, mo, offer_3d, os, read_kmers, warn):
     mo.stop(get_page() != "assembly")
     mo.stop(form_assembly.value is None, mo.md("🧩 *Waiting for the assembly button...*"))
 
@@ -2829,6 +2891,7 @@ async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_pan
                 "Tips are dead ends, usually sequencing errors; bubbles are two parallel paths (a SNP between two "
                 "copies, or an error); repeats are where the path can go two ways — where an assembly breaks. Reads "
                 "from both strands give two mirror-image components: these k-mers are not canonical.")])
+            _panel = mo.vstack([_panel, offer_3d("graph", graph_payload(_g, figs.GRAPH_KINDS), f"Assembly graph (k = {_k_size})")])
 
     except Exception as e:
         _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
@@ -3165,7 +3228,7 @@ def scaffold_page_form(example_for, files_with, form_with_note, get_folder_rev, 
 
 
 @app.cell
-async def scaffold_page_backend(asyncio, chosen, figs, figure_panel, form_scaffold, get_page, mmg, mo, warn):
+async def scaffold_page_backend(asyncio, chosen, figs, figure_panel, form_scaffold, get_page, graph_payload, mmg, mo, offer_3d, warn):
     mo.stop(get_page() != "scaffold")
     mo.stop(form_scaffold.value is None, mo.md("🏗️ *Waiting for a FASTA file...*"))
 
@@ -3215,6 +3278,7 @@ async def scaffold_page_backend(asyncio, chosen, figs, figure_panel, form_scaffo
                 "Each contig a line, coloured by the scaffold it ends up in; an arrow from the end of one contig to the start "
                 "of the next. A loop of contigs is a circular molecule. Grey dashed links overlap but were not joined (the "
                 "scaffolder needs an overlap of exactly the length given)."), mo.md(_og.get("text", "").replace("\n", "  \n"))])
+            _panel = mo.vstack([_panel, offer_3d("graph", graph_payload(_og, figs.GRAPH_KINDS), f"Contigs joined by their ends (overlap {_overlap})")])
 
     except Exception as e:
         _panel = mo.callout(mo.md(f"**🔥 ERROR:** `{str(e)}`"), kind="danger")
@@ -4632,7 +4696,7 @@ def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, chosen, ex
 
 
 @app.cell
-async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_anc, get_page, mmg, mo, python_call, split_name, warn, words):
+async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_anc, get_page, mmg, mo, offer_3d, python_call, split_name, warn, words):
     mo.stop(get_page() != "anc")
     mo.stop(form_anc.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_anc.value
@@ -4692,6 +4756,11 @@ async def anc_page_backend(anc_task, asyncio, bed_next_to, beside, chosen, code_
                                                 "distance (cloud spreads)": round(_x["distance"], 1) if _x.get("distance") is not None else "",
                                                 "sites observed": _x.get("sites_observed")} for _x in _pca["people"]],
                                               selection=None, label="Each person's place in the PCA"))
+                    _items.append(offer_3d("scatter", {
+                        "points": [(_x["pcs"][0], _x["pcs"][1], _x["pcs"][2] if len(_x["pcs"]) > 2 else 0.0, _x["group"], "") for _x in _pca["reference"] if _x.get("pcs")]
+                                  + [(_x["pcs"][0], _x["pcs"][1], _x["pcs"][2] if len(_x["pcs"]) > 2 else 0.0, "the people analyzed", _x["name"]) for _x in _pca["people"] if _x.get("pcs")],
+                        "axes": tuple(f"PC{_i + 1} ({100 * _ve[_i]:.1f}%)" if _i < len(_ve) else f"PC{_i + 1}" for _i in range(3))},
+                        f"The people on the panel's groups (PCA of {_pca['sites_used']:,} sites)"))
                 except Exception as _perr:
                     _items.append(mo.md(f"*The PCA could not be drawn: {_perr}*"))
             _items.append(code_panel(f"r = {python_call('estimate_ancestry', _v['panel'], _target, **_kw)}", 'for x in r:\n    print(x["text"])',
@@ -5117,7 +5186,7 @@ def pgx_page_download(btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, error_p
     PGX_TABLES_VERSION = "cpic-v1.61.0"
     PGX_TABLES_DIR = f"mmgen_tools/pgx/{PGX_TABLES_VERSION}"
     PGX_TABLES_ZIP = f"mmgen_pgx_tables_{PGX_TABLES_VERSION}.zip"
-    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.4.0/" + PGX_TABLES_ZIP
+    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.0/" + PGX_TABLES_ZIP
     PGX_TABLES_SHA256 = "e329b8ec6e8567dc2570cd3823a96401e54135b3a5545305fb05c7265caa1f85"
     PGX_HLA_FILES = ("A_gen.fasta", "B_gen.fasta", "C_gen.fasta")
     # The IPD-IMGT/HLA release the tables pin in bam_genes.json (the engine uses no other):
@@ -6230,7 +6299,7 @@ def rnaseq_page_form(btn_refresh_rnaseq, chosen, example_for, files_under, form_
 
 
 @app.cell
-async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_rnaseq, get_page, mmg, mo, np, python_call, rnaseq_task, scatter_chart, split_name, warn, words):
+async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_rnaseq, get_page, mmg, mo, np, offer_3d, python_call, rnaseq_task, scatter_chart, split_name, warn, words):
     mo.stop(get_page() != "rnaseq")
     # the tasks that start from the reads are run by rnaseq_fastq_backend
     mo.stop(rnaseq_task.value in ("Build a transcript index", "Quantify from FASTQ (pseudoalignment)", "See how one read is pseudoaligned"))
@@ -6397,6 +6466,11 @@ async def rnaseq_page_backend(asyncio, beside, chosen, code_panel, error_panel, 
                     "Samples of the same condition should sit together. A sample among the other group may be swapped or "
                     "mislabeled; a split along PC1 that follows a batch, a donor or a cell line, not the condition, is a factor to "
                     "add to the design."))
+                _diag.append(offer_3d("scatter", {
+                    "points": [(float(_Vt[0][_j] * _S[0]), float(_Vt[1][_j] * _S[1]) if len(_S) > 1 else 0.0, float(_Vt[2][_j] * _S[2]) if len(_S) > 2 else 0.0,
+                                _sampletab.get(_s0, "—"), _s0) for _j, _s0 in enumerate(_r["samples"])],
+                    "axes": tuple(f"PC{_i + 1} ({100 * _pv[_i]:.0f}%)" if _i < len(_pv) else f"PC{_i + 1}" for _i in range(3))},
+                    "Samples: PCA of the 500 most variable genes"))
                 _D = np.sqrt(((_sel[:, :, None] - _sel[:, None, :]) ** 2).sum(axis=0))
                 _order = sorted(range(len(_r["samples"])), key=lambda _j: (_sampletab.get(_r["samples"][_j], ""), _r["samples"][_j]))
                 _labs = [f"{_r['samples'][_j]} ({_sampletab.get(_r['samples'][_j], '—')})" for _j in _order]
@@ -7343,8 +7417,7 @@ def amplicon_page_form(amplicon_example, amplicon_folder, amplicon_task, btn_ref
 
 
 @app.cell
-async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_amplicon,
-                                get_page, mmg, mo, os, python_call, warn):
+async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_panel, error_panel, facts, figs, figure_panel, form_amplicon, get_page, mmg, mo, offer_3d, os, python_call, warn):
     mo.stop(get_page() != "amplicon")
     mo.stop(form_amplicon.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_amplicon.value
@@ -7551,6 +7624,10 @@ async def amplicon_page_backend(amplicon_task, asyncio, beside, chosen, code_pan
                     "Each ellipse holds about 95% of its group if the points were normally spread (groups of three or more). "
                     "Separate ellipses with little overlap go with a significant PERMANOVA; a group much more spread than "
                     "another can also make PERMANOVA significant (it tests location and dispersion together)."))
+                _items.append(offer_3d("scatter", {
+                    "points": [(_c[0], _c[1], _c[2] if len(_c) > 2 else 0.0, _group.get(_s, "—"), _s) for _s, _c in zip(_b["samples"], _pc["coordinates"])],
+                    "axes": tuple(f"PCo{_i + 1} ({100 * _pe[_i]:.1f}%)" if _i < len(_pe) else f"PCo{_i + 1}" for _i in range(3))},
+                    "Principal coordinates of the samples"))
             _items.append(code_panel(f"a = {python_call('alpha_diversity', _v['table'], **_kw_a)}",
                                      f"b = {python_call('beta_diversity', _v['table'], **_kw_b)}"))
         else:
@@ -8275,6 +8352,46 @@ def ai_page_session(AI_SCREENS, ai_task, btn_refresh_ai, get_page, mmg, mo):
     else:
         _items.append(mo.md("*Nothing has been run in this session yet.*"))
     mo.vstack(_items)
+    return
+
+
+@app.cell
+def webgl_view(btn_3d_close, get_3d, get_page, mo, paths, w3d):
+    # The 3-D view of the current screen's figure, when its button was pressed:
+    # the layout is computed here (with a spinner) and kept, so a redraw of
+    # the page does not compute it again.
+    _req = get_3d()
+    mo.stop(not _req or _req.get("page") != get_page())
+    _item = (paths.get("3d") or {}).get(get_page())
+    mo.stop(not _item)
+    _kind, _payload, _title = _item
+    _cache = paths.setdefault("3d_html", {})
+    try:
+        _theme = mo.app_meta().theme  # the interface's theme (marimo.toml), not the OS's
+    except Exception:
+        _theme = "auto"
+    _key = (get_page(), id(_payload), _theme)
+    if _key not in _cache:
+        with mo.status.spinner("Laying out the 3-D view..." if _kind == "graph" else "Drawing the 3-D view..."):
+            try:
+                if _kind == "scatter":
+                    _html = w3d.scatter3d(_payload["points"], _payload.get("axes", ("x", "y", "z")), _title, group_notes=_payload.get("notes"), theme=_theme,
+                                          links=_payload.get("links"), links_label=_payload.get("links_label"), links_on=_payload.get("links_on", True))
+                else:
+                    _nodes, _edges = _payload["nodes"], _payload["edges"]
+                    _xyz = w3d.layout3d(len(_nodes), _edges, init=_payload.get("init"))
+                    _html = w3d.graph3d([(float(_x), float(_y), float(_z), _sz, _kd, _lb) for (_x, _y, _z), (_sz, _kd, _lb) in zip(_xyz, _nodes)],
+                                        _edges, _title, _payload.get("kinds"), theme=_theme)
+                _cache[_key] = (_html, None)
+            except Exception as _err:
+                _cache[_key] = (None, f"{type(_err).__name__}: {_err}")
+    _html, _err = _cache[_key]
+    mo.vstack([
+        mo.md(f"#### 🧊 {_title} — in three dimensions"),
+        mo.iframe(_html, height="620px") if _html else mo.callout(mo.md(f"**🔥 The 3-D view could not be drawn:** {_err}"), kind="danger"),
+        mo.md("*Drag to turn, wheel to zoom, right-drag to pan, hover a point for its name; click a legend entry to hide its group.*"),
+        btn_3d_close,
+    ])
     return
 
 

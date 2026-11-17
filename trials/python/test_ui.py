@@ -42,6 +42,9 @@ ui = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ui)
 # The figures from the same tree as the interface (the installed package may be older).
 _fspec = importlib.util.spec_from_file_location("mmgen_figures", os.path.join(os.path.dirname(ui_path), "figures.py"))
+_wspec = importlib.util.spec_from_file_location("mmgen_webgl", os.path.join(os.path.dirname(ui_path), "webgl.py"))
+w3d = importlib.util.module_from_spec(_wspec)
+_wspec.loader.exec_module(w3d)
 figs = importlib.util.module_from_spec(_fspec)
 _fspec.loader.exec_module(figs)
 
@@ -115,13 +118,14 @@ import builtins
 import gzip
 
 PATHS = {"output": "", "temp": "", "msg": "", "extra": [], "explorer": False}   # the lists of the tests have no Explorer line
-helpers = run(ui.file_helpers, get_folder_rev=lambda: 0, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re, set_folder_rev=lambda v: None)
+helpers = run(ui.file_helpers, get_folder_rev=lambda: 0, get_page=lambda: "home", mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re,
+              set_3d=lambda v: None, set_folder_rev=lambda v: None)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
 import urllib.request
 import urllib.parse
-POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, get_folder_rev=lambda: 0, glob=glob, gzip=gzip, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re, urllib=urllib)
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, get_folder_rev=lambda: 0, glob=glob, gzip=gzip, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re, urllib=urllib, w3d=w3d)
 
 # The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
 # no key, nothing leaves the machine. It answers by the kind of request.

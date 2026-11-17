@@ -114,12 +114,14 @@ check("app.run() without error", not isinstance(r, BaseException), repr(r)[:300]
 import builtins
 import gzip
 
-PATHS = {"output": "", "msg": ""}
-helpers = run(ui.file_helpers, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re)
+PATHS = {"output": "", "temp": "", "msg": "", "extra": [], "explorer": False}   # the lists of the tests have no Explorer line
+helpers = run(ui.file_helpers, get_folder_rev=lambda: 0, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re, set_folder_rev=lambda v: None)
 check("the helpers cell runs", not isinstance(helpers, BaseException), repr(helpers)[:300])
 examples = run(ui.example_files, EXAMPLES_DIR=helpers[1]["EXAMPLES_DIR"], mmg=mmg, mo=mo, os=os, pl=pl)
 check("the examples cell runs", not isinstance(examples, BaseException), repr(examples)[:300])
-POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, glob=glob, gzip=gzip, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re)
+import urllib.request
+import urllib.parse
+POOL = dict(helpers[1], **examples[1], asyncio=asyncio, figs=figs, get_folder_rev=lambda: 0, glob=glob, gzip=gzip, mmg=mmg, mo=mo, np=np, os=os, paths=PATHS, pl=pl, re=re, urllib=urllib)
 
 # The AI (screen 29 and the "Ask the AI" panel) with a stand-in for Claude:
 # no key, nothing leaves the machine. It answers by the kind of request.

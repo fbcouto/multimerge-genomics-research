@@ -507,8 +507,21 @@ try:
             back(pg).wait_for(timeout=30000)
             pg.wait_for_timeout(400)
             check("a choice closes the drawer and opens the screen", not pg.evaluate(drawer_open) and pg.evaluate("() => location.hash") == "#validate")
+            # the sources panel above the form: one line (source, results) that opens the Folder / File / Google Drive / URL / Results tabs
+            pg.set_viewport_size({"width": 1280, "height": 1500})
+            pg.wait_for_timeout(400)
+            head = pg.get_by_text(re.compile(r"Source: .* Results: next to each input")).first
+            check("above the form, one line says the source folder and where the results go", head.is_visible())
+            head.click()
+            pg.wait_for_timeout(1200)
+            check("it opens the sources panel, with its Folder, File, Google Drive, URL and Results tabs",
+                  all(pg.get_by_role("tab", name=re.compile(n)).first.is_visible() for n in ("Folder", "File", "Google Drive", "URL", "Results")))
+            head.click()   # closed again: its file browsers are wide, and the phone check below measures the page's width
+            pg.wait_for_timeout(600)
+            pg.set_viewport_size({"width": 390, "height": 844})
+            pg.wait_for_timeout(400)
             check("the tasks are tabs; on a phone the strip scrolls sideways instead of overflowing the page",
-                  pg.get_by_role("tab").count() == 3 and pg.evaluate(
+                  pg.get_by_role("tab", name=re.compile("Validate a file|Rename chromosomes|Compare reference")).count() == 3 and pg.evaluate(
                       "() => { const t = document.querySelector('marimo-tabs'); return !!t && getComputedStyle(t).overflowX === 'auto'; }")
                   and pg.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth"))
         pg2 = browser.new_page(viewport={"width": 1280, "height": 1500})

@@ -17,6 +17,8 @@ def imports():
     import asyncio
     import gzip
     import re
+    import urllib.request
+    import urllib.parse
     import multimerge_genomics as _engine
 
     # Every call to the engine goes through the session record: the AI
@@ -30,11 +32,11 @@ def imports():
         mmg = _engine
     # The diagnostic figures (SVG), shared by the screens and usable in scripts.
     from multimerge_genomics import figures as figs
-    return asyncio, figs, gzip, mmg, mo, np, os, pl, re
+    return asyncio, figs, gzip, mmg, mo, np, os, pl, re, urllib
 
 
 @app.cell
-def global_state(mmg, mo):
+def global_state(get_folder_rev, mmg, mo):
     # allow_self_loops: the cell that calls the setter is re-run too. Without it
     # the menu (which calls set_page) never left the page when a screen opened,
     # and the screen you left through "Back to Menu" stayed on the page.
@@ -64,19 +66,20 @@ def global_state(mmg, mo):
     # Where the results go: "" = next to each input; otherwise a folder. A
     # plain dict read when a result is named (`beside`), like ai_settings;
     # get_folder_rev redraws the folders bar after a change.
-    paths = {"output": "", "msg": ""}
+    paths = {"output": "", "temp": "", "msg": "", "extra": []}
     get_folder_rev, set_folder_rev = mo.state(0)
     return ai_settings, get_agent, get_ai_rev, get_folder_rev, get_page, get_patient_msg, paths, set_agent, set_ai_rev, set_folder_rev, set_page, set_patient_msg
 
 
 @app.cell
-def file_helpers(mmg, mo, np, os, paths, pl, re):
+def file_helpers(get_folder_rev, mmg, mo, np, os, paths, pl, re, set_folder_rev):
     # Shared by the screens: the files of the folder each screen offers (and
     # those of the examples folder), the default output names, a look at the
     # first records of a result, and the Python call that does the same thing
     # (shown under every result of screens 9-14, so each screen is also a
     # recipe for a script).
     NO_FILE = "(no matching file in this folder)"
+
     EXAMPLES_DIR = "mmgen_examples"
     FILE_KINDS = {
         "vcf": (".vcf", ".vcf.gz", ".vcf.bgz", ".vcf.lz4", ".vcf.parquet"),
@@ -115,7 +118,7 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
         """The files under `folder` (and its subfolders, a few levels deep) with
         an extension of `kinds`, then those of the examples folder."""
         ends = tuple(s for k in kinds for s in FILE_KINDS[k])
-        found = []
+        found = [f for f in paths.get("extra", []) if f.lower().endswith(ends) and os.path.isfile(f)]   # picked by hand, first
         root = (folder or ".").strip().rstrip("/\\") or "."
 
         def walk(path, level):
@@ -145,17 +148,18 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
         """The files of the current folder with an extension of `kinds`, then
         those of the examples folder (as 'mmgen_examples/name')."""
         ends = tuple(s for k in kinds for s in FILE_KINDS[k])
-        found = sorted(n for n in os.listdir(".") if n.lower().endswith(ends) and os.path.isfile(n))
+        found = [f for f in paths.get("extra", []) if f.lower().endswith(ends) and os.path.isfile(f)]   # picked by hand, first
+        found += sorted(n for n in os.listdir(".") if n.lower().endswith(ends) and os.path.isfile(n))
         if os.path.isdir(EXAMPLES_DIR):
             found += sorted(f"{EXAMPLES_DIR}/{n}" for n in os.listdir(EXAMPLES_DIR)
                             if n.lower().endswith(ends) and os.path.isfile(os.path.join(EXAMPLES_DIR, n)))
         return found or [NO_FILE]
 
     def real_files(*kinds):
-        return [n for n in files_with(*kinds) if n != NO_FILE]
+        return [n for n in files_with(*kinds) if chosen(n)]
 
     def chosen(value):
-        """A real file was picked, not the "no file" placeholder."""
+        """A real file was picked, not the "no file" placeholder nor the Explorer line."""
         return bool(value) and value != NO_FILE
 
     def read_kmers(path, need_k=True):
@@ -325,11 +329,21 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
         """The form, with the example's note (what it shows, what to expect) and
         any other note beside it on a wide screen, below it on a narrow one."""
         notes = [n for n in notes if n is not None]
+        # Above the form: a file that is not in the lists (the pickers of the
+        # data_folders cell: File, Google Drive, URL), folded until needed.
+        msg = mo.callout(mo.md(paths["msg"]), kind="danger" if paths["msg"].startswith("🔥") else "success") if paths.get("msg") else None
+        paths["msg"] = ""   # shown once
+        paths["just_added"] = []   # taken by this form
+        add = mo.Html(f'<div class="mmg-explorer" title="{os.getcwd()}">{mo.accordion({explorer_title(): explorer_panel})}{msg if msg is not None else ""}</div>')
         if not notes:
-            return form
-        # A grid of the theme (ui_theme.css): two columns from 900 px, one below.
-        # (mo.hstack with widths never wraps: its columns have no base width.)
-        return mo.Html(f'<div class="mmg-form-note"><div class="f">{form}</div><div class="n">{mo.vstack(notes, gap=0.5)}</div></div>')
+            body = form
+        else:
+            # A grid of the theme (ui_theme.css): two columns from 900 px, one below.
+            # (mo.hstack with widths never wraps: its columns have no base width.)
+            body = mo.Html(f'<div class="mmg-form-note"><div class="f">{form}</div><div class="n">{mo.vstack(notes, gap=0.5)}</div></div>')
+        if add is None:
+            return body
+        return mo.Html(f'<div class="mmg-form-block">{add}{body}</div>')
 
     def svg_download(svg, name, title=None):
         """A button that saves a chart as a standalone SVG file (vector, for a paper)."""
@@ -351,8 +365,39 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
             parts.append(mo.md(f"*{note}*"))
         return mo.vstack(parts, gap=0.25)
 
+    ALL_EXTS = tuple(sorted({e for exts in FILE_KINDS.values() for e in exts}))
+
+    def is_file_field(widget):
+        """A dropdown or multiselect whose options are files of the lists."""
+        opts = getattr(widget, "options", None)
+        if not isinstance(opts, dict) or not opts:
+            return False
+        vals = [v for v in opts.values() if isinstance(v, str)]
+        return any(v == NO_FILE or v.lower().endswith(ALL_EXTS) for v in vals)
+
+    def with_added(widget):
+        """A file field that is empty gets the files just added through the
+        Explorer, when they are among its options (same kind of file)."""
+        added = paths.get("just_added") or []
+        # the initial value, from the constructor: a cell must not read .value of a widget it created
+        if not added or not is_file_field(widget) or widget._args.initial_value not in (None, [], NO_FILE):
+            return widget
+        hits = [v for v in widget.options.values() if v in added]
+        if not hits:
+            return widget
+        a = widget._args
+        if isinstance(widget, mo.ui.multiselect):
+            return mo.ui.multiselect(options=widget.options, value=hits, label=a.label, full_width=bool(a.args.get("full-width")))
+        return mo.ui.dropdown(options=widget.options, value=hits[0], label=a.label, full_width=bool(a.args.get("full-width")),
+                              searchable=bool(a.args.get("searchable")))
+
     def make_form(widgets, submit):
-        """A form with one field per line and plain labels (no JSON tree)."""
+        """A form with one field per line and plain labels (no JSON tree); an
+        empty file field gets the file just added through the Explorer.
+        (No HTML with a style attribute in the template: the frontend turns
+        it into React, which rejects a style string and shows "Something
+        went wrong" instead of the form.)"""
+        widgets = {key: with_added(w) for key, w in widgets.items()}
         template = "\n\n".join("{" + key + "}" for key in widgets)
         return mo.md(template).batch(**widgets).form(submit_button_label=submit, bordered=True)
 
@@ -611,8 +656,160 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
                f'aria-label="{_html.escape(title)}">' + "".join(parts) + "</svg>")
         return mo.vstack([mo.md(f"**{title}**"), mo.Html(svg), svg_download(svg, "tree", title)], gap=0.25)
 
+    # The sources panel, above every form (form_with_note) and on the start
+    # page (data_folders): where the files come from, a file from elsewhere,
+    # where the results go. The source folder is the process's current folder
+    # (the lists read it, the engine resolves relative paths in it), changed
+    # with os.chdir: mmgen-ui serves one person, a process-wide setting is what
+    # it should be. A change rebuilds the screen, so its lists are read again.
+    def _notify():
+        # Only the forms are built again (they read get_folder_rev): the rest
+        # of the screen stays where it is.
+        set_folder_rev(get_folder_rev() + 1)
+
+    def use_source(folder):
+        folder = (folder or "").strip().strip('"')
+        if not folder:
+            return
+        if not os.path.isdir(folder):
+            paths["msg"] = f"🔥 {folder} is not a folder."
+        else:
+            os.chdir(folder)
+            paths["msg"] = f"📁 Now listing the files of `{os.getcwd()}`."
+        _notify()
+
+    def _use_folder(key, folder, what):
+        """The output folder (key "output") or the temporary one ("temp"); blank = the default."""
+        folder = (folder or "").strip().strip('"')
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError as err:
+                paths["msg"] = f"🔥 Cannot use {folder} for {what}: {err}"
+                _notify()
+                return
+            paths[key] = os.path.abspath(folder)
+            paths["msg"] = f"✅ {what[0].upper() + what[1:]} will go to `{paths[key]}`."
+        else:
+            paths[key] = ""
+            paths["msg"] = f"✅ {what[0].upper() + what[1:]}: back to the default."
+        _notify()
+
+    def kinds_of(path):
+        """The kinds of list a file belongs to, by its extension: 'x.vcf.gz' -> ['vcf', 'vcf_merge'...]."""
+        low = path.lower()
+        return sorted(k for k, exts in FILE_KINDS.items() if low.endswith(exts))
+
+    def _picker_handler(which):
+        """A picker's selection changed: files ticked join the top of the lists, files unticked leave them."""
+        last = {"files": set()}
+
+        def on_change(v):
+            current = {str(f.path) for f in (v or []) if not getattr(f, "is_directory", False)}
+            added = [f for f in current if f not in paths["extra"]]
+            # unticked (the browser kept its ticks): removed. Ticked again after the screen was
+            # rebuilt (the browser forgot its ticks, so the click looks like a new tick of a
+            # file already in the lists): removed too.
+            removed = [f for f in last["files"] - current if f in paths["extra"]]
+            if not added and not removed:
+                reclicked = [f for f in current if f in paths["extra"]]
+                if len(reclicked) == 1:
+                    removed = reclicked
+            last["files"] = current - set(removed)
+            if not added and not removed:
+                return
+            for f in removed:
+                paths["extra"].remove(f)
+            for f in added:
+                paths["extra"].insert(0, f)
+            paths["just_added"] = list(added)   # the next form picks them in its fields of that kind
+            parts = []
+            for f in added:
+                kinds = kinds_of(f)
+                where = ("the lists of " + ", ".join(kinds).upper() + " files") if kinds else "no list (MMGEN does not read this file type)"
+                parts.append(f"✅ `{f}` added to {where}; a field of this form that takes it is filled in with it.")
+            if removed:
+                parts.append("🧹 Removed from the lists: " + ", ".join(f"`{f}`" for f in removed) + ".")
+            paths["msg"] = " ".join(parts)
+            _notify()
+        return on_change
+
+    def _clear_extra(_):
+        n = len(paths["extra"])
+        paths["extra"].clear()
+        paths["msg"] = f"🧹 The {n} added file(s) left the lists; the folder's files stay." if n else "Nothing had been added."
+        _notify()
+
+    _cwd = os.getcwd()
+    folder_text = mo.ui.text(value="", placeholder="type a folder and press Enter", on_change=use_source,
+                             label="Another folder (this computer, a network share, a mapped drive):", full_width=True)
+    folder_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
+                                        label="... or pick it (a click applies it):", on_change=lambda v: use_source(str(v[0].path) if v else ""))
+    _readable = lambda path: path.is_dir() or path.name.lower().endswith(ALL_EXTS)   # only the file types MMGEN reads
+    file_picker = mo.ui.file_browser(initial_path=_cwd, selection_mode="file", multiple=True, restrict_navigation=False, filter=_readable,
+                                     label="Tick one or more files: they go to the top of the lists of their kind, with their full path (untick to remove):",
+                                     on_change=_picker_handler("file"))
+    btn_clear_extra = mo.ui.button(label="🧹 Remove all the added files from the lists", on_click=_clear_extra)
+    _drive_roots = [os.environ.get("MMGEN_DRIVE", ""), "/content/drive/MyDrive", "/content/drive",
+                    os.path.join(os.path.expanduser("~"), "Google Drive"), os.path.join(os.path.expanduser("~"), "My Drive")]
+    _drive_roots += [f"{_d}:\\My Drive" for _d in "GHIJKLMNOPQRSTUVWXYZ"] + [f"{_d}:\\Meu Drive" for _d in "GHIJKLMNOPQRSTUVWXYZ"]
+    _drive_root = next((_d for _d in _drive_roots if _d and os.path.isdir(_d)), None)
+    drive_picker = (mo.ui.file_browser(initial_path=_drive_root, selection_mode="file", multiple=True, restrict_navigation=False, filter=_readable,
+                                       label=f"Google Drive, mounted at {_drive_root}: tick the files to add them to the lists of their kind (untick to remove):",
+                                       on_change=_picker_handler("drive"))
+                    if _drive_root else None)
+    _drive_tab = drive_picker if drive_picker is not None else mo.md(
+        "Google Drive is not mounted as a folder on this computer. Install **Google Drive for Desktop** (it appears as a drive, "
+        "e.g. `G:\\My Drive`), or on Colab run `drive.mount('/content/drive')`; a file shared with *anyone with the link* "
+        "can also be fetched from the **URL** tab with its share link.")
+    download_form = make_form({
+        "url": mo.ui.text(value="", placeholder="https://... or a Google Drive share link (anyone with the link)", label="Get a file from a URL:", full_width=True),
+        "name": mo.ui.text(value="", placeholder="blank: the name the server gives it", label="Save it as (in the source folder):", full_width=True),
+    }, "⬇️ Download into the source folder")
+    output_text = mo.ui.text(value="", placeholder="blank: each result next to its input", label="Output folder:", full_width=True,
+                             on_change=lambda v: _use_folder("output", v, "the results"))
+    temp_text = mo.ui.text(value="", placeholder="blank: the system's temporary folder", full_width=True,
+                           label="Temporary folder, for the runs on disk of a sort or merge that does not fit in memory (as big as the input; a large disk):",
+                           on_change=lambda v: _use_folder("temp", v, "the temporary runs"))
+    output_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
+                                        label="Pick the output folder:", on_change=lambda v: _use_folder("output", str(v[0].path) if v else "", "the results"))
+    temp_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
+                                      label="Pick the temporary folder:", on_change=lambda v: _use_folder("temp", str(v[0].path) if v else "", "the temporary runs"))
+    explorer_panel = mo.ui.tabs({
+        "📁 Folder": mo.vstack([mo.md("The folder whose files the lists show."), folder_text, folder_browser]),
+        "📄 File": mo.vstack([mo.md("A file from anywhere: this computer, a network share, a mapped drive. Only the file types MMGEN reads are shown."), file_picker, btn_clear_extra]),
+        "☁️ Google Drive": _drive_tab,
+        "🌐 URL": download_form,
+        "💾 Results": mo.vstack([mo.md("Where the results are written (press Enter after typing, or pick the folder); an output name typed in a form can also be a full path."),
+                                 output_text, temp_text, mo.hstack([output_browser, temp_browser], widths="equal", align="start", wrap=True, gap=1)]),
+    })
+    paths["pickers"] = explorer_panel
+
+    def short_path(path, keep=2):
+        """The last folders of a path: 'D:\\a\\b\\c' -> '…\\b\\c' (the whole path goes in the tooltip)."""
+        parts = [x for x in re.split(r"[\\/]", path) if x]
+        return path if len(parts) <= keep else "…" + os.sep + os.sep.join(parts[-keep:])
+
+    def explorer_title():
+        out, tmp = paths.get("output") or "", paths.get("temp") or ""
+        bits = [f"📁 Source: {short_path(os.getcwd())}", f"💾 Results: {short_path(out) if out else 'next to each input'}"]
+        if tmp:
+            bits.append(f"🗂️ Temp: {short_path(tmp)}")
+        return " · ".join(bits) + " — change, or add a file from elsewhere"
+
     return (
         EXAMPLES_DIR,
+        btn_clear_extra,
+        download_form,
+        drive_picker,
+        explorer_panel,
+        file_picker,
+        folder_browser,
+        folder_text,
+        output_browser,
+        output_text,
+        temp_browser,
+        temp_text,
         GENE_PANELS,
         NO_FILE,
         bed_next_to,
@@ -647,7 +844,7 @@ def file_helpers(mmg, mo, np, os, paths, pl, re):
 
 
 @app.cell
-def example_files(EXAMPLES_DIR, mmg, mo, os, pl):
+def example_files(chosen, EXAMPLES_DIR, mmg, mo, os, pl):
     # The examples of every screen. The files are small, written on demand into
     # mmgen_examples/ by make_examples (the same bytes every time: nothing is
     # downloaded), and each example is the set of values that fills in the form
@@ -2061,71 +2258,100 @@ def workbench_rail(get_page, mmg, mo, set_page):
 
 
 @app.cell
-def data_folders(get_folder_rev, get_page, mo, os, paths, set_folder_rev, set_page):
-    # Where the files come from and where the results go, for every screen,
-    # typed or picked in a folder browser (no need to move files around in
-    # the operating system). The source folder is the process's current
-    # folder: the screens list it and the engine resolves relative paths
-    # against it, so it is changed with os.chdir (mmgen-ui serves one person;
-    # a process-wide setting is what it should be). Results go next to their
-    # input unless an output folder is set.
+def data_folders(explorer_panel, get_folder_rev, get_page, mo, paths):
+    # On the start page: the sources panel (above every form on the screens).
+    mo.stop(get_page() != "home")
     get_folder_rev()   # redrawn after a change
-    _cwd = os.getcwd()
-    _out = paths["output"]
-
-    def _use_source(folder):
-        folder = (folder or "").strip().strip('"')
-        if not folder:
-            return
-        if not os.path.isdir(folder):
-            paths["msg"] = f"🔥 {folder} is not a folder."
-        else:
-            os.chdir(folder)
-            paths["msg"] = ""
-        set_folder_rev(get_folder_rev() + 1)
-        set_page(get_page())   # the screen's lists are built again
-
-    def _use_output(folder):
-        folder = (folder or "").strip().strip('"')
-        if folder:
-            try:
-                os.makedirs(folder, exist_ok=True)
-            except OSError as err:
-                paths["msg"] = f"🔥 Cannot use {folder} for the results: {err}"
-                set_folder_rev(get_folder_rev() + 1)
-                return
-            paths["output"] = os.path.abspath(folder)
-        else:
-            paths["output"] = ""
-        paths["msg"] = ""
-        set_folder_rev(get_folder_rev() + 1)
-        set_page(get_page())
-
-    folder_text = mo.ui.text(value=_cwd, label="Source folder (the screens list its files):", full_width=True)
-    output_text = mo.ui.text(value=_out, placeholder="blank: each result next to its input", label="Output folder (where the results are written):", full_width=True)
-    btn_use_folders = mo.ui.button(label="📁 Use these folders", on_click=lambda _: (_use_output(output_text.value), _use_source(folder_text.value)))
-    folder_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
-                                        label="Pick the source folder (a click applies it):", on_change=lambda v: _use_source(str(v[0].path) if v else ""))
-    output_browser = mo.ui.file_browser(initial_path=_cwd, selection_mode="directory", multiple=False, restrict_navigation=False,
-                                        label="Pick the output folder (a click applies it):", on_change=lambda v: _use_output(str(v[0].path) if v else ""))
-    _title = f"📁 Files from `{_cwd}` · results {('in `' + _out + '`') if _out else 'next to each input'} — change"
     _msg = mo.md(paths["msg"]) if paths["msg"] else None
     mo.vstack([_x for _x in (
-        mo.accordion({_title: mo.vstack([
-            mo.md("Type the folders and press the button, or pick them below. An output name typed in a form can also be a full path."),
-            folder_text, output_text, btn_use_folders,
-            mo.hstack([folder_browser, output_browser], widths="equal", align="start", wrap=True, gap=1),
-        ])}),
+        mo.accordion({"📁 Folders and sources — where the files come from, where the results go, a file from elsewhere": explorer_panel}),
         _msg) if _x is not None])
-    return btn_use_folders, folder_browser, folder_text, output_browser, output_text
+    return
 
 
 @app.cell
-def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os, paths):
+async def data_download_backend(asyncio, download_form, get_page, mo, os, paths, set_folder_rev, set_page, urllib):
+    # Downloads the URL of the folders bar into the source folder, then
+    # rebuilds the screen so its lists show the file. A Google Drive share
+    # link becomes the direct download of the file (public links only).
+    mo.stop(download_form.value is None or not (download_form.value.get("url") or "").strip())
+    _url = download_form.value["url"].strip()
+    _name = (download_form.value.get("name") or "").strip()
+    _key = (_url, _name)
+    if paths.get("downloaded", {}).get("key") == _key:
+        # the same request, rerun because the page was rebuilt after the download: show the result again
+        mo.stop(True, mo.md(paths["downloaded"]["report"]))
+
+    def _direct(url):
+        """A Google Drive share link -> the direct download; anything else unchanged."""
+        _m = (urllib.parse.urlparse(url))
+        if "drive.google.com" in _m.netloc:
+            _id = None
+            _parts = _m.path.split("/")
+            if "d" in _parts:
+                _id = _parts[_parts.index("d") + 1]
+            else:
+                _id = urllib.parse.parse_qs(_m.query).get("id", [None])[0]
+            if _id:
+                return f"https://drive.usercontent.google.com/download?id={_id}&export=download&confirm=t", _id
+        return url, None
+
+    def _fetch():
+        url, drive_id = _direct(_url)
+        if not url.lower().startswith(("http://", "https://", "file:")):
+            raise ValueError("The address must start with http://, https:// (or be a Google Drive share link).")
+        req = urllib.request.Request(url, headers={"User-Agent": "MMGEN"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            name = _name
+            if not name:
+                cd = resp.headers.get("Content-Disposition") or ""
+                m = re_search_filename(cd)
+                name = m or os.path.basename(urllib.parse.urlparse(url).path) or (f"drive_{drive_id}" if drive_id else "download")
+            name = os.path.basename(name)   # never a path from the server
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if drive_id and "text/html" in ctype:
+                raise ValueError("Google Drive answered with a web page, not the file: the link must be shared as "
+                                 "'Anyone with the link', and the file must not need a sign-in.")
+            tmp = name + ".part"
+            total = 0
+            with open(tmp, "wb") as fh:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    total += len(chunk)
+            if os.path.exists(name):
+                os.remove(name)
+            os.replace(tmp, name)
+            return name, total
+
+    def re_search_filename(cd):
+        import re as _re
+        m = _re.search(r"filename\*=UTF-8''([^;]+)", cd) or _re.search(r'filename="?([^";]+)"?', cd)
+        return urllib.parse.unquote(m.group(1)) if m else None
+
+    try:
+        with mo.status.spinner(f"⬇️ Downloading {_url[:80]}..."):
+            await asyncio.sleep(0)
+            _saved, _bytes = await asyncio.to_thread(_fetch)
+        _report = f"✅ **Downloaded** `{_saved}` ({_bytes / 1e6:,.1f} MB) into `{os.getcwd()}`. The lists of this screen show it now."
+        paths["downloaded"] = {"key": _key, "report": _report}
+        set_folder_rev(0)          # (redraws the bar)
+        set_page(get_page())       # the screen's lists are built again
+    except Exception as _err:
+        _report = f"🔥 **ERROR:** {_err}"
+    mo.md(_report)
+    return
+
+
+@app.cell
+def workbench_header(get_folder_rev, get_page, mmg, mo, os, paths, RAIL_GROUPS, RAIL_HUMAN):
     # The strip above every screen: where you are (group › screen) and the
     # context every tool shares: the folder the files are listed from, and
     # where the engine runs.
     mo.stop(get_page() == "home")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _page = get_page()
     _crumb = next((f'{_g} <span class="sep">›</span> <b>{_n}. {_t}</b>' for _g, _, _items in RAIL_GROUPS for _p, _n, _t in _items if _p == _page), "")
     _engine = mmg.engine_info()
@@ -2133,6 +2359,8 @@ def workbench_header(RAIL_GROUPS, RAIL_HUMAN, get_page, mmg, mo, os, paths):
               f'<span class="mmg-chip">{"GPU" if _engine["gpu"] else "CPU"} · {_engine["threads"]} threads</span>']
     if paths["output"]:
         _chips.insert(1, f'<span class="mmg-chip ctx" title="{paths["output"]}">💾 results → {os.path.basename(paths["output"]) or paths["output"]}</span>')
+    if paths["temp"]:
+        _chips.insert(2, f'<span class="mmg-chip" title="{paths["temp"]}">🗂️ temp → {os.path.basename(paths["temp"]) or paths["temp"]}</span>')
     if _page in RAIL_HUMAN:
         _chips.append('<span class="mmg-chip" title="Human genome data: experimental software, for teaching and research">🧬 human genome</span>')
     mo.Html(f'<div class="mmg-top"><span class="crumb">{_crumb}</span><span class="chips">{"".join(_chips)}</span></div>') if _crumb else None
@@ -2245,8 +2473,9 @@ def qc_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def qc_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, qc_example):
+def qc_page_form(example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo, qc_example):
     mo.stop(get_page() != "qc")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("qc", None, qc_example.value)
     form_qc = make_form({
         "files": mo.ui.multiselect(options=files_with("kmer_input"), value=_ex.get("files", []), label="🧬 DNA files (FASTA or FASTQ; several allowed, .gz too):", full_width=True),
@@ -2258,7 +2487,7 @@ def qc_page_form(example_for, files_with, form_with_note, get_page, make_form, m
 
 
 @app.cell
-async def qc_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_qc, get_page, mmg, mo, pl, split_name, warn):
+async def qc_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, form_qc, get_page, mmg, mo, paths, pl, split_name, warn):
     mo.stop(get_page() != "qc")
     mo.stop(form_qc.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
@@ -2303,7 +2532,7 @@ async def qc_page_backend(asyncio, beside, chosen, facts, figs, figure_panel, fo
             with mo.status.spinner("Counting how often each k-mer was seen (the spectrum)..."):
                 _kk = min(int(_k), 31)
                 _kk -= 1 if _kk % 2 == 0 else 0  # canonical k-mers need an odd k
-                _cnt = await asyncio.to_thread(mmg.count_kmers, _paths, None, k=_kk)
+                _cnt = await asyncio.to_thread(mmg.count_kmers, _paths, None, k=_kk, **({"temp_dir": paths["temp"]} if paths["temp"] else {}))
             _model = figs.spectrum_model(_cnt["histogram"], k=_cnt["k"])
             _rows = []
             if _model.get("genome_size"):
@@ -2352,8 +2581,9 @@ def cluster_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def cluster_page_form(cluster_example, example_for, files_with, form_with_note, get_page, make_form, mo):
+def cluster_page_form(cluster_example, example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo):
     mo.stop(get_page() != "cluster")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("cluster", None, cluster_example.value)
     _files = [f for f in files_with("fasta") if not f.startswith("(")]
     _files += [f for f in _ex.get("fastas", []) if f not in _files]
@@ -2523,8 +2753,9 @@ def assembly_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def assembly_page_form(assembly_example, example_for, files_with, form_with_note, get_page, make_form, mo):
+def assembly_page_form(assembly_example, example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo):
     mo.stop(get_page() != "assembly")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("assembly", None, assembly_example.value)
     # The .arrow files written by Module 1.
     form_assembly = make_form({
@@ -2607,7 +2838,7 @@ async def assembly_page_backend(asyncio, beside, chosen, facts, figs, figure_pan
 
 
 @app.cell
-def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, get_page, get_patient_msg, make_examples, mo, os, set_page, set_patient_msg):
+def variant_page_ui(beside, chosen, example_picker, EXAMPLES_DIR, files_with, get_page, get_patient_msg, make_examples, mo, NO_FILE, os, set_page, set_patient_msg):
     mo.stop(get_page() != "variant")
 
     def _back(_):
@@ -2619,9 +2850,9 @@ def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, g
     # The simulated patient: a copy of a "healthy" genome with a few SNPs
     # planted at positions it reports, so the search below can be checked.
     _example_genome = f"{EXAMPLES_DIR}/toy_bacterium.fasta"
-    _genomes = {f: f for f in files_with("plain_fasta") if f != NO_FILE and not f.endswith("mutated_patient.fasta")}
+    _genomes = {f: f for f in files_with("plain_fasta") if chosen(f) and not f.endswith("mutated_patient.fasta")}
     _genomes.setdefault(_example_genome, _example_genome)
-    patient_source = mo.ui.dropdown(options=_genomes, value=next(iter(_genomes)), label="Healthy genome to copy (FASTA):", full_width=True)
+    patient_source = mo.ui.dropdown(options=_genomes, value=next((_g for _g in _genomes if chosen(_g)), None), label="Healthy genome to copy (FASTA):", full_width=True)
     patient_snps = mo.ui.number(start=1, stop=50, step=1, value=3, label="SNPs to plant:")
 
     def generate_patient():
@@ -2694,8 +2925,9 @@ def variant_page_ui(EXAMPLES_DIR, NO_FILE, beside, example_picker, files_with, g
 
 
 @app.cell
-def variant_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, variant_example):
+def variant_page_form(example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo, variant_example):
     mo.stop(get_page() != "variant")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("variant", None, variant_example.value)
     _files = files_with("arrow")
     form_variant = make_form({
@@ -2781,8 +3013,9 @@ def annotation_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def annotation_page_form(annotation_example, example_for, form_with_note, get_page, make_form, mo):
+def annotation_page_form(annotation_example, example_for, form_with_note, get_folder_rev, get_page, make_form, mo):
     mo.stop(get_page() != "annotation")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("annotation", None, annotation_example.value)
     form_annotation = make_form({
         "dna": mo.ui.text_area(
@@ -2835,7 +3068,7 @@ async def annotation_page_backend(asyncio, form_annotation, get_page, mmg, mo):
 
 
 @app.cell
-def bloom_page_ui(example_picker, get_page, mo, set_page):
+def bloom_page_ui(chosen, example_picker, get_page, mo, set_page):
     mo.stop(get_page() != "bloom")
     btn_back_bloom = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     bloom_example = example_picker("bloom")
@@ -2851,8 +3084,9 @@ def bloom_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def bloom_page_form(bloom_example, example_for, files_with, form_with_note, get_page, make_form, mo):
+def bloom_page_form(bloom_example, example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo):
     mo.stop(get_page() != "bloom")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("bloom", None, bloom_example.value)
     form_bloom = make_form({
         "kmer_file": mo.ui.dropdown(options=files_with("arrow"), value=_ex.get("kmer_file"), label="🧬 Genome (.arrow):", full_width=True),
@@ -2917,8 +3151,9 @@ def scaffold_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def scaffold_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, scaffold_example):
+def scaffold_page_form(example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo, scaffold_example):
     mo.stop(get_page() != "scaffold")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("scaffold", None, scaffold_example.value)
     form_scaffold = make_form({
         "contigs_fasta": mo.ui.dropdown(options=files_with("plain_fasta"), value=_ex.get("contigs_fasta"), label="🧩 Contigs file (FASTA):", full_width=True),
@@ -3005,8 +3240,9 @@ def vcf_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def vcf_page_form(example_for, files_with, form_with_note, get_page, make_form, mo, vcf_example):
+def vcf_page_form(example_for, files_with, form_with_note, get_folder_rev, get_page, make_form, mo, vcf_example):
     mo.stop(get_page() != "vcf")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("vcf", None, vcf_example.value)
     form_vcf = make_form({
         "files": mo.ui.multiselect(options=files_with("vcf_merge"), value=_ex.get("files", []), label="🗄️ Files (VCF, VCF.GZ):", full_width=True),
@@ -3018,7 +3254,7 @@ def vcf_page_form(example_for, files_with, form_with_note, get_page, make_form, 
 
 
 @app.cell
-async def vcf_page_backend(asyncio, chosen, form_vcf, get_page, mmg, mo, os, warn):
+async def vcf_page_backend(asyncio, chosen, form_vcf, get_page, mmg, mo, os, paths, warn):
     mo.stop(get_page() != "vcf")
     mo.stop(form_vcf.value is None, mo.md("⏳ *Waiting for the settings...*"))
 
@@ -3043,7 +3279,7 @@ async def vcf_page_backend(asyncio, chosen, form_vcf, get_page, mmg, mo, os, war
             # output: each erased the previous one and only the last file
             # survived.) It runs in a thread (Rust releases the GIL) so the
             # interface does not freeze.
-            _variants = await asyncio.to_thread(mmg.multimerge_vcf, _paths, _sort_by, _output)
+            _variants = await asyncio.to_thread(mmg.multimerge_vcf, _paths, _sort_by, _output, **({"temp_dir": paths["temp"]} if paths["temp"] else {}))
 
             _full_path = os.path.abspath(_output)
 
@@ -3116,8 +3352,9 @@ def sort_page_example(example_picker, get_page, interval_op, mo, sort_task):
 
 
 @app.cell
-def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, get_page, interval_op, label_of, make_form, mo, real_files, sort_example, sort_task):
+def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, get_folder_rev, get_page, interval_op, label_of, make_form, mo, real_files, sort_example, sort_task):
     mo.stop(get_page() != "sort")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_sort  # a click re-runs this cell, which lists the folder again
     _task = sort_task.value
     _ex, _about = example_for("sort", interval_op.value if _task == "Interval operations (BED)" else _task, sort_example.value)
@@ -3138,7 +3375,7 @@ def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, ge
             "order": mo.ui.dropdown(options=_orders, value=label_of(_orders, _ex.get("order"), "default: the header for VCF and SAM, lexical for BED and GFF"), label="Chromosome order:", full_width=True),
             "memory": mo.ui.number(start=0, stop=1_048_576, step=64, value=_ex.get("memory", 0), label="Memory budget in MB (0 = half of the free RAM):"),
             "index": mo.ui.checkbox(value=_ex.get("index", False), label="Also write the index (.tbi for a .gz output, .bai for a .bam output)"),
-            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <first file>.sorted.<same extension>", label="Output file:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <first file>.sorted.<same extension>", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True),
         }, "🚀 Sort")
     elif _task == "Index & query a region":
         _indexed = files_with("indexed")
@@ -3169,7 +3406,7 @@ def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, ge
         if _op == "slop":
             _fields["left"] = mo.ui.number(start=0, stop=10**9, step=1, value=_ex.get("left", 100), label="Bases to add before the start:")
             _fields["right"] = mo.ui.number(start=0, stop=10**9, step=1, value=_ex.get("right", 100), label="Bases to add after the end:")
-        _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <first A file>.{_op}.<same extension>", label="Output file:", full_width=True)
+        _fields["output"] = mo.ui.text(value=_ex.get("output", ""), placeholder=f"blank: <first A file>.{_op}.<same extension>", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True)
         form_sort = make_form(_fields, f"🚀 Run {_op}")
 
     form_with_note(form_sort, _about)
@@ -3177,7 +3414,7 @@ def sort_page_form(btn_refresh_sort, example_for, files_with, form_with_note, ge
 
 
 @app.cell
-async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_sort, get_page, interval_op, mmg, mo, os, output_name, preview_panel, python_call, size_of, skipped_panel, sort_task, split_name, warn):
+async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_sort, get_page, interval_op, mmg, mo, os, output_name, paths, preview_panel, python_call, size_of, skipped_panel, sort_task, split_name, warn):
     mo.stop(get_page() != "sort")
     mo.stop(form_sort.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_sort.value
@@ -3202,6 +3439,8 @@ async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, f
             _kw["memory_mb"] = int(_v["memory"])
         if _v["index"]:
             _kw["index"] = True
+        if paths["temp"]:
+            _kw["temp_dir"] = paths["temp"]   # the runs on disk, in the folder of the folders bar
         try:
             with mo.status.spinner(f"Sorting {len(_paths)} file(s)..."):
                 _records, _runs, _skipped = await asyncio.to_thread(mmg.sort_genomic, _paths, _out, **_kw)
@@ -3291,30 +3530,31 @@ async def sort_page_backend(asyncio, chosen, clashes, code_panel, error_panel, f
         try:
             with mo.status.spinner(f"Running {_op}..."):
                 _read = None
+                _tmp = {"temp_dir": paths["temp"]} if paths["temp"] else {}   # the runs on disk, from the folders bar
                 if _op == "merge":
                     _kw = {"distance": int(_v["distance"])} if int(_v["distance"] or 0) > 0 else {}
-                    _read, _n = await asyncio.to_thread(mmg.bed_merge, _a, _out, **_kw)
+                    _read, _n = await asyncio.to_thread(mmg.bed_merge, _a, _out, **_kw, **_tmp)
                     _call = f"read, written = {python_call('bed_merge', _a, _out, **_kw)}"
                 elif _op == "intersect":
                     _kw = {"mode": _v["mode"]} if _v["mode"] != "regions" else {}
-                    _n = await asyncio.to_thread(mmg.bed_intersect, _a, _b, _out, **_kw)
+                    _n = await asyncio.to_thread(mmg.bed_intersect, _a, _b, _out, **_kw, **_tmp)
                     _call = python_call("bed_intersect", _a, _b, _out, **_kw)
                 elif _op == "subtract":
                     _kw = {"remove_whole": True} if _v["whole"] else {}
-                    _n = await asyncio.to_thread(mmg.bed_subtract, _a, _b, _out, **_kw)
+                    _n = await asyncio.to_thread(mmg.bed_subtract, _a, _b, _out, **_kw, **_tmp)
                     _call = python_call("bed_subtract", _a, _b, _out, **_kw)
                 elif _op == "complement":
-                    _n = await asyncio.to_thread(mmg.bed_complement, _a, _genome, _out)
+                    _n = await asyncio.to_thread(mmg.bed_complement, _a, _genome, _out, **_tmp)
                     _call = python_call("bed_complement", _a, _genome, _out)
                 elif _op == "closest":
-                    _n = await asyncio.to_thread(mmg.bed_closest, _a, _b, _out)
+                    _n = await asyncio.to_thread(mmg.bed_closest, _a, _b, _out, **_tmp)
                     _call = python_call("bed_closest", _a, _b, _out)
                 elif _op == "coverage":
-                    _n = await asyncio.to_thread(mmg.bed_coverage, _a, _b, _out)
+                    _n = await asyncio.to_thread(mmg.bed_coverage, _a, _b, _out, **_tmp)
                     _call = python_call("bed_coverage", _a, _b, _out)
                 else:
                     _kw = {"left": int(_v["left"]), "right": int(_v["right"])}
-                    _n = await asyncio.to_thread(mmg.bed_slop, _a, _genome, _out, **_kw)
+                    _n = await asyncio.to_thread(mmg.bed_slop, _a, _genome, _out, **_kw, **_tmp)
                     _call = python_call("bed_slop", _a, _genome, _out, **_kw)
             _rows = ([("Intervals read", f"`{_read:,}`")] if _read is not None else []) + [
                 ("Lines written", f"`{_n:,}`"),
@@ -3360,8 +3600,9 @@ def validate_page_example(example_picker, get_page, mo, validate_task):
 
 
 @app.cell
-def validate_page_form(btn_refresh_validate, example_for, files_with, form_with_note, get_page, label_of, make_form, mo, real_files, validate_example, validate_task):
+def validate_page_form(btn_refresh_validate, example_for, files_with, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, real_files, validate_example, validate_task):
     mo.stop(get_page() != "validate")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_validate  # a click re-runs this cell, which lists the folder again
     _task = validate_task.value
     _ex, _about = example_for("validate", _task, validate_example.value)
@@ -3380,7 +3621,7 @@ def validate_page_form(btn_refresh_validate, example_for, files_with, form_with_
             "file": mo.ui.dropdown(options=files_with("vcf", "bed", "gff", "sam"), value=_ex.get("file"), label="File:", full_width=True),
             "style": mo.ui.dropdown(options=_styles, value=label_of(_styles, _ex.get("style"), "chr1, chrX, chrM (UCSC)"), label="Rename to:", full_width=True),
             "mapping": mo.ui.dropdown(options=_maps, value=label_of(_maps, _ex.get("mapping"), "(none)"), label="Mapping file for other names (two columns: name, new name):", full_width=True),
-            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.chr.<same extension> (or .nochr)", label="Output file:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.chr.<same extension> (or .nochr)", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True),
         }, "🔁 Rename")
     else:
         _refs = files_with("vcf", "sam", "gff", "genome")
@@ -3531,8 +3772,9 @@ def vcftools_page_example(example_picker, get_page, mo, vcftools_task):
 
 
 @app.cell
-def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_note, get_page, label_of, make_form, mo, real_files, vcftools_example, vcftools_task):
+def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, real_files, vcftools_example, vcftools_task):
     mo.stop(get_page() != "vcftools")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_vcftools  # a click re-runs this cell, which lists the folder again
     _task = vcftools_task.value
     _ex, _about = example_for("vcftools", _task, vcftools_example.value)
@@ -3556,7 +3798,7 @@ def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_
             "expression": mo.ui.text(value=_ex.get("expression", ""), placeholder='QUAL >= 30 && FILTER == "PASS"', label="Expression (blank: no expression):", full_width=True),
             "regions": mo.ui.text(value=_ex.get("regions", ""), placeholder="chr1:1000000-2000000, chrX", label="Regions (blank: the whole genome):", full_width=True),
             "samples": mo.ui.text(value=_ex.get("samples", ""), placeholder="sample1, sample2", label="Samples to keep, in this order (blank: all of them):", full_width=True),
-            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.filtered.<same extension>", label="Output file:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.filtered.<same extension>", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True),
         }, "🔍 Filter")
     else:
         _refs = {"(none: split and trim only, no left-alignment)": "none"}
@@ -3567,7 +3809,7 @@ def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_
             "split": mo.ui.checkbox(value=_ex.get("split", True), label="Split multiallelic sites into one record per allele"),
             "reference": mo.ui.dropdown(options=_refs, value=label_of(_refs, _ex.get("reference"), "(none: split and trim only, no left-alignment)"),
                                         label="Reference genome (FASTA), to check REF and left-align the indels:", full_width=True),
-            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.norm.<same extension>", label="Output file:", full_width=True),
+            "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <file>.norm.<same extension>", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True),
         }, "🧹 Normalize")
 
     form_with_note(form_vcftools, *_above)
@@ -3575,7 +3817,7 @@ def vcftools_page_form(btn_refresh_vcftools, example_for, files_with, form_with_
 
 
 @app.cell
-async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_vcftools, get_page, mmg, mo, os, output_name, preview_panel, python_call, size_of, skipped_panel, vcftools_task, warn):
+async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, form_vcftools, get_page, mmg, mo, os, output_name, paths, preview_panel, python_call, size_of, skipped_panel, vcftools_task, warn):
     mo.stop(get_page() != "vcftools")
     mo.stop(form_vcftools.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_vcftools.value
@@ -3652,6 +3894,8 @@ async def vcftools_page_backend(asyncio, chosen, clashes, code_panel, error_pane
             _kw["split_multiallelic"] = False
         if _ref:
             _kw["reference"] = _ref
+        if paths["temp"]:
+            _kw["temp_dir"] = paths["temp"]
         try:
             with mo.status.spinner(f"Normalizing {_path}..."):
                 _r = await asyncio.to_thread(mmg.vcf_normalize, _path, _out, **_kw)
@@ -3712,8 +3956,9 @@ def fastq_page_example(example_picker, fastq_task, get_page, mo):
 
 
 @app.cell
-def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, files_with, form_with_note, get_page, label_of, make_form, mo, real_files):
+def fastq_page_form(btn_refresh_fastq, example_for, fastq_example, fastq_task, files_with, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, real_files):
     mo.stop(get_page() != "fastq")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_fastq  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("fastq", fastq_task.value, fastq_example.value)
     _fastqs = files_with("fastq")
@@ -3858,8 +4103,9 @@ def kmercount_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, form_with_note, get_page, kmercount_example, make_form, mo):
+def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, form_with_note, get_folder_rev, get_page, kmercount_example, make_form, mo):
     mo.stop(get_page() != "kmercount")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_kmercount  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("kmercount", None, kmercount_example.value)
     form_kmercount = make_form({
@@ -3874,7 +4120,7 @@ def kmercount_page_form(btn_refresh_kmercount, example_for, files_with, form_wit
 
 
 @app.cell
-async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, figs, figure_panel, form_kmercount, get_page, mmg, mo, os, python_call, size_of, spectrum_chart, warn):
+async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_panel, facts, figs, figure_panel, form_kmercount, get_page, mmg, mo, os, paths, python_call, size_of, spectrum_chart, warn):
     mo.stop(get_page() != "kmercount")
     mo.stop(form_kmercount.value is None, mo.md("⏳ *Fill in the form above and submit it.*"))
     _v = form_kmercount.value
@@ -3889,6 +4135,8 @@ async def kmercount_page_backend(asyncio, chosen, clashes, code_panel, error_pan
         _kw["canonical"] = False
     if int(_v["min_count"] or 1) > 1:
         _kw["min_count"] = int(_v["min_count"])
+    if paths["temp"]:
+        _kw["temp_dir"] = paths["temp"]
     try:
         with mo.status.spinner(f"Counting the {_k}-mers of {len(_paths)} file(s)..."):
             _r = await asyncio.to_thread(mmg.count_kmers, _paths, _out, **_kw)
@@ -3952,8 +4200,9 @@ def convert_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def convert_page_form(btn_refresh_convert, convert_example, example_for, files_with, form_with_note, get_page, label_of, make_form, mo):
+def convert_page_form(btn_refresh_convert, convert_example, example_for, files_with, form_with_note, get_folder_rev, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "convert")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_convert  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("convert", None, convert_example.value)
     _targets = {
@@ -3972,7 +4221,7 @@ def convert_page_form(btn_refresh_convert, convert_example, example_for, files_w
         "target": mo.ui.dropdown(options=_targets, value=label_of(_targets, _ex.get("target"), "gzip, written as BGZF (.gz)"), label="Convert to:", full_width=True),
         "numbers": mo.ui.radio(options=_numbers, value=label_of(_numbers, _ex.get("numbers"), "as numbers (filter and sum without conversion)"),
                                label="QUAL (VCF) and score (GFF) in a Parquet output:"),
-        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the same name with the new extension", label="Output file:", full_width=True),
+        "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: the same name with the new extension", label="Output file (written next to the input, or in the output folder of the 📁 bar; a full path works too):", full_width=True),
     }, "📦 Convert")
     form_with_note(form_convert, _about)
     return (form_convert,)
@@ -4155,8 +4404,9 @@ def kin_page_example(example_picker, get_page, kin_task, mo):
 
 
 @app.cell
-def kin_page_form(btn_refresh_kin, example_for, files_under, form_with_note, get_page, kin_example, kin_folder, kin_task, label_of, make_form, mo, NO_FILE):
+def kin_page_form(btn_refresh_kin, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, kin_example, kin_folder, kin_task, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "kin")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_kin  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("kin", kin_task.value, kin_example.value)
     _vcfs = files_under(kin_folder.value, "vcf")
@@ -4169,8 +4419,8 @@ def kin_page_form(btn_refresh_kin, example_for, files_under, form_with_note, get
         }, "👪 Compare")
     else:
         _people = list(_vcfs)
-        _mothers = {"(none: a duo, child and alleged father only)": "none", **{_f: _f for _f in _vcfs if _f != NO_FILE}}
-        _afs = {"(none: no paternity index)": "none", **{_f: _f for _f in _vcfs if _f != NO_FILE}}
+        _mothers = {"(none: a duo, child and alleged father only)": "none", **{_f: _f for _f in _vcfs if chosen(_f)}}
+        _afs = {"(none: no paternity index)": "none", **{_f: _f for _f in _vcfs if chosen(_f)}}
         _fields = {"AF (all populations)": "AF", "AFR_AF (African)": "AFR_AF", "AMR_AF (admixed American)": "AMR_AF",
                    "EAS_AF (East Asian)": "EAS_AF", "EUR_AF (European)": "EUR_AF", "SAS_AF (South Asian)": "SAS_AF"}
         form_kin = make_form({
@@ -4315,14 +4565,15 @@ def anc_page_example(anc_task, example_picker, get_page, mo):
 
 
 @app.cell
-def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_for, files_under, form_with_note, get_page, gzip, label_of, make_form, mo, NO_FILE):
+def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, gzip, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "anc")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_anc  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("anc", anc_task.value, anc_example.value)
     _folder = anc_folder.value
     _vcfs = files_under(_folder, "vcf")
     _beds_label = "Use the callable-regions BED next to each VCF (`x.callable.bed`, or the Genome in a Bottle `*_benchmark*.bed`)"
-    _tsvgz =[_f for _f in files_under(_folder, "vcf", "table") if _f != NO_FILE]
+    _tsvgz =[_f for _f in files_under(_folder, "vcf", "table") if chosen(_f)]
 
     def _is_panel(path):
         """A frequency panel (build_panel's output): its header names chrom, pos, ref, alt
@@ -4365,7 +4616,7 @@ def anc_page_form(anc_example, anc_folder, anc_task, btn_refresh_anc, example_fo
     else:
         _kinds = {"a sites VCF with each group's frequency in INFO (AFR_AF, EUR_AF...)": "freq",
                   "a multi-sample VCF of genotypes, with a table of each sample's group": "geno"}
-        _tables = {"(not needed for a sites VCF)": "none", **{_f: _f for _f in files_under(_folder, "table") if _f != NO_FILE}}
+        _tables = {"(not needed for a sites VCF)": "none", **{_f: _f for _f in files_under(_folder, "table") if chosen(_f)}}
         form_anc = make_form({
             "source": mo.ui.dropdown(options=_vcfs, value=_ex.get("source"), label="Source VCF:", full_width=True),
             "kind": mo.ui.dropdown(options=_kinds, value=label_of(_kinds, _ex.get("kind", "freq"), "a sites VCF with each group's frequency in INFO (AFR_AF, EUR_AF...)"), label="It is:", full_width=True),
@@ -4541,12 +4792,13 @@ def chrom_page_example(chrom_task, example_picker, get_page, mo):
 
 
 @app.cell
-def chrom_page_form(btn_refresh_chrom, chrom_example, chrom_folder, chrom_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
+def chrom_page_form(btn_refresh_chrom, chosen, chrom_example, chrom_folder, chrom_task, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "chrom")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_chrom  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("chrom", chrom_task.value, chrom_example.value)
     _vcfs = files_under(chrom_folder.value, "vcf")
-    _beds = {"(none)": "none", **{_b: _b for _b in files_under(chrom_folder.value, "bed_any") if _b != NO_FILE}}
+    _beds = {"(none)": "none", **{_b: _b for _b in files_under(chrom_folder.value, "bed_any") if chosen(_b)}}
     _fields = {
         "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF:", full_width=True),
         "sample": mo.ui.text(value=_ex.get("sample", ""), placeholder="blank: the first sample", label="Sample, in a multi-sample VCF:"),
@@ -4667,8 +4919,9 @@ def findings_page_example(example_picker, findings_task, get_page, mo):
 
 
 @app.cell
-def findings_page_form(btn_refresh_findings, example_for, files_under, findings_example, findings_folder, findings_task, form_with_note, GENE_PANELS, get_page, label_of, make_form, mo, NO_FILE):
+def findings_page_form(btn_refresh_findings, chosen, example_for, files_under, findings_example, findings_folder, findings_task, form_with_note, GENE_PANELS, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "findings")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_findings  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("findings", findings_task.value, findings_example.value)
     _folder = findings_folder.value
@@ -4677,7 +4930,7 @@ def findings_page_form(btn_refresh_findings, example_for, files_under, findings_
         _vcfs = files_under(_folder, "vcf")
         _beds = {"(none: compare every call in the file)": "none"}
         for _b in files_under(_folder, "bed_any"):
-            if _b != NO_FILE:
+            if chosen(_b):
                 _beds[_b] = _b
         _classes = {
             "pathogenic and likely pathogenic": "plp",
@@ -4974,8 +5227,9 @@ def pgx_page_example(example_picker, get_page, mo, pgx_engine):
 
 
 @app.cell
-def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, os, pgx_downloaded, pgx_engine, pgx_example, pgx_folder, PHARMCAT_DIR):
+def pgx_page_form(btn_refresh_pgx, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE, os, pgx_downloaded, pgx_engine, pgx_example, pgx_folder, PHARMCAT_DIR):
     mo.stop(get_page() != "pgx")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_pgx, pgx_downloaded  # re-list the folder after a refresh or a download
     _mine = pgx_engine.value.startswith("MMGEN")
     _ex, _about = example_for("pgx", pgx_engine.value, pgx_example.value)
@@ -4985,14 +5239,14 @@ def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get
         _cbeds = {"next to each VCF (x.callable.bed, or Genome in a Bottle's *_benchmark*.bed), when there is one": "auto",
                   "(none: positions without a record are not read)": "none"}
         for _b in files_under(_folder, "bed_any"):
-            if _b != NO_FILE:
+            if chosen(_b):
                 _cbeds[f"{_b} (for every VCF)"] = _b
         _gpanels = {"(none: the plain mean of the CPIC population groups)": "none"}
         for _t in files_under(_folder, "table"):
-            if _t != NO_FILE and "panel" in os.path.basename(_t).lower():
+            if chosen(_t) and "panel" in os.path.basename(_t).lower():
                 _gpanels[_t] = _t
         form_pgx = make_form({
-            "vcfs": mo.ui.multiselect(options=[_x for _x in _vcfs if _x != NO_FILE], value=_ex.get("vcfs", []),
+            "vcfs": mo.ui.multiselect(options=[_x for _x in _vcfs if chosen(_x)], value=_ex.get("vcfs", []),
                                       label="People's VCFs (GRCh38; one per person, or multi-sample):", full_width=True),
             "callable": mo.ui.dropdown(options=_cbeds, value=label_of(_cbeds, _ex.get("callable", "auto"), next(iter(_cbeds))),
                                        label="Callable regions (BED):", full_width=True),
@@ -5010,7 +5264,7 @@ def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get
                      else "(none: a position without a record counts as reference)")
         _beds = {_none_bed: "none"}
         for _b in files_under(_folder, "bed_any"):
-            if _b != NO_FILE:
+            if chosen(_b):
                 _beds[_b] = _b
         _fields = {
             "vcf": mo.ui.dropdown(options=_vcfs, value=_ex.get("vcf"), label="The person's VCF (GRCh38):", full_width=True),
@@ -5021,11 +5275,11 @@ def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get
         if _mine:
             _bams = {"(none: only the genes read from the VCF)": "none"}
             for _b in files_under(_folder, "bam"):
-                if _b != NO_FILE:
+                if chosen(_b):
                     _bams[_b] = _b
             _refs = {"(none)": "none"}
             for _f in files_under(_folder, "fasta"):
-                if _f != NO_FILE:
+                if chosen(_f):
                     _refs[_f] = _f
             _fields["bam"] = mo.ui.dropdown(options=_bams, value=label_of(_bams, _ex.get("bam", "none"), "(none: only the genes read from the VCF)"),
                                             label="The person's reads (BAM with its .bai, GRCh38) for CYP2D6 and HLA:", full_width=True)
@@ -5033,7 +5287,7 @@ def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get
                                                   label="GRCh38 genome (FASTA), to left-align the indels of the VCF (optional):", full_width=True)
             _panels = {"(none: the plain mean of the CPIC population groups)": "none"}
             for _t in files_under(_folder, "table"):
-                if _t != NO_FILE and "panel" in os.path.basename(_t).lower():
+                if chosen(_t) and "panel" in os.path.basename(_t).lower():
                     _panels[_t] = _t
             _fields["ancestry"] = mo.ui.text(value=_ex.get("ancestry", ""), placeholder="e.g. EUR 0.55, AFR 0.30, AMR 0.15",
                                              label="The person's ancestry, for NAT2 (optional; superpopulations or CPIC groups):", full_width=True)
@@ -5047,7 +5301,7 @@ def pgx_page_form(btn_refresh_pgx, example_for, files_under, form_with_note, get
             _jars = list(dict.fromkeys(_jars)) or ["(PharmCAT not found: download it above)"]
             _outside = {"(none)": "none"}
             for _t in files_under(_folder, "table"):
-                if _t != NO_FILE:
+                if chosen(_t):
                     _outside[_t] = _t
             _fields["jar"] = mo.ui.dropdown(options=_jars, value=_jars[-1], label="PharmCAT (pharmcat-<version>-all.jar, with its positions file next to it):", full_width=True)
             _fields["outside"] = mo.ui.dropdown(options=_outside, value=label_of(_outside, _ex.get("outside", "none"), "(none)"),
@@ -5368,8 +5622,9 @@ def lookup_page_example(example_picker, get_page, lookup_task, mo):
 
 
 @app.cell
-def lookup_page_form(btn_refresh_lookup, example_for, files_under, form_with_note, get_page, label_of, lookup_example, lookup_folder, lookup_task, make_form, mo, NO_FILE):
+def lookup_page_form(btn_refresh_lookup, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, lookup_example, lookup_folder, lookup_task, make_form, mo, NO_FILE):
     mo.stop(get_page() != "lookup")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_lookup  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("lookup", lookup_task.value, lookup_example.value)
     _folder = lookup_folder.value
@@ -5377,7 +5632,7 @@ def lookup_page_form(btn_refresh_lookup, example_for, files_under, form_with_not
         _vcfs = files_under(_folder, "vcf")
         _cv = {"(none: coordinates only)": "none"}
         for _f in _vcfs:
-            if _f != NO_FILE and "clinvar" in _f.lower():
+            if chosen(_f) and "clinvar" in _f.lower():
                 _cv[_f] = _f
         form_lookup = make_form({
             "variants": mo.ui.text_area(value=_ex.get("variants", ""), placeholder="chr4:186274193:G:T\nrs121965063",
@@ -5394,13 +5649,13 @@ def lookup_page_form(btn_refresh_lookup, example_for, files_under, form_with_not
             "min_mapq": mo.ui.number(start=0, stop=255, step=1, value=_ex.get("min_mapq", 0), label="Minimum mapping quality:"),
             "min_baseq": mo.ui.number(start=0, stop=93, step=1, value=_ex.get("min_baseq", 13), label="Minimum base quality:"),
             "reference": mo.ui.dropdown(options={"(none: mismatches from the reads' MD tags)": "none",
-                                                 **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}},
+                                                 **{_f: _f for _f in files_under(_folder, "fasta") if chosen(_f)}},
                                         value=label_of({"(none: mismatches from the reads' MD tags)": "none",
-                                                        **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}},
+                                                        **{_f: _f for _f in files_under(_folder, "fasta") if chosen(_f)}},
                                                        _ex.get("reference", "none"), "(none: mismatches from the reads' MD tags)"),
                                         label="Reference genome (FASTA), for the browser view:", full_width=True),
-            "annotation": mo.ui.dropdown(options={"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}},
-                                         value=label_of({"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}},
+            "annotation": mo.ui.dropdown(options={"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if chosen(_f)}},
+                                         value=label_of({"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if chosen(_f)}},
                                                         _ex.get("annotation", "none"), "(none)"),
                                          label="Genes (GFF/GTF), drawn above the reads:", full_width=True),
         }, "🧮 Count")
@@ -5578,8 +5833,9 @@ def assoc_page_example(assoc_task, example_picker, get_page, mo):
 
 
 @app.cell
-def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, example_for, files_under, form_with_note, get_page, label_of, make_form, mo):
+def assoc_page_form(assoc_example, assoc_folder, assoc_task, btn_refresh_assoc, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "assoc")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_assoc  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("assoc", assoc_task.value, assoc_example.value)
     _folder = assoc_folder.value
@@ -5887,13 +6143,14 @@ def rnaseq_page_example(example_picker, get_page, mo, rnaseq_task):
 
 
 @app.cell
-def rnaseq_page_form(btn_refresh_rnaseq, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, rnaseq_example, rnaseq_folder, rnaseq_task):
+def rnaseq_page_form(btn_refresh_rnaseq, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE, rnaseq_example, rnaseq_folder, rnaseq_task):
     mo.stop(get_page() != "rnaseq")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_rnaseq  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("rnaseq", rnaseq_task.value, rnaseq_example.value)
     _folder = rnaseq_folder.value
     if rnaseq_task.value == "Build a transcript index":
-        _maps = {"(from the FASTA headers)": "none", **{_f: _f for _f in files_under(_folder, "gff", "table") if _f != NO_FILE}}
+        _maps = {"(from the FASTA headers)": "none", **{_f: _f for _f in files_under(_folder, "gff", "table") if chosen(_f)}}
         form_rnaseq = make_form({
             "fasta": mo.ui.dropdown(options=files_under(_folder, "fasta"), value=_ex.get("fasta"),
                                     label="Transcript sequences (cDNA FASTA: Ensembl, GENCODE or RefSeq):", full_width=True),
@@ -5903,7 +6160,7 @@ def rnaseq_page_form(btn_refresh_rnaseq, example_for, files_under, form_with_not
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <fasta>.idx next to it", label="Index file:", full_width=True),
         }, "📇 Build the index")
     elif rnaseq_task.value == "Quantify from FASTQ (pseudoalignment)":
-        _conds = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "table") if _f != NO_FILE}}
+        _conds = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "table") if chosen(_f)}}
         form_rnaseq = make_form({
             "index": mo.ui.dropdown(options=files_under(_folder, "tx_index"), value=_ex.get("index"),
                                     label="Transcript index (.idx: the task Build a transcript index makes it):", full_width=True),
@@ -5938,9 +6195,9 @@ def rnaseq_page_form(btn_refresh_rnaseq, example_for, files_under, form_with_not
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: counts.tsv next to the first BAM", label="Count table:", full_width=True),
         }, "📊 Count")
     elif rnaseq_task.value == "Test gene sets":
-        _tables = [_f for _f in files_under(_folder, "table") if _f != NO_FILE] or [NO_FILE]
+        _tables = [_f for _f in files_under(_folder, "table") if chosen(_f)] or [NO_FILE]
         _builtin = "Spinal cord injury: 11 teaching sets (built in)"
-        _sets = {_builtin: "spinal_cord_injury", **{_f: _f for _f in files_under(_folder, "geneset", "table") if _f != NO_FILE}}
+        _sets = {_builtin: "spinal_cord_injury", **{_f: _f for _f in files_under(_folder, "geneset", "table") if chosen(_f)}}
         _stats = {"stat (the Wald statistic)": "stat", "log2FoldChange": "log2FoldChange"}
         form_rnaseq = make_form({
             "results": mo.ui.dropdown(options=_tables, value=_ex.get("results"),
@@ -5955,8 +6212,8 @@ def rnaseq_page_form(btn_refresh_rnaseq, example_for, files_under, form_with_not
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: <results>.sets.tsv next to it", label="Result table:", full_width=True),
         }, "📊 Test the sets")
     else:
-        _tables = [_f for _f in files_under(_folder, "table") if _f != NO_FILE] or [NO_FILE]
-        _names = {"(none: gene IDs only)": "none", **{_f: _f for _f in _tables if _f != NO_FILE}}
+        _tables = [_f for _f in files_under(_folder, "table") if chosen(_f)] or [NO_FILE]
+        _names = {"(none: gene IDs only)": "none", **{_f: _f for _f in _tables if chosen(_f)}}
         form_rnaseq = make_form({
             "counts": mo.ui.dropdown(options=_tables, value=_ex.get("counts"), label="Count table (gene + one column per sample):", full_width=True),
             "samples": mo.ui.dropdown(options=_tables, value=_ex.get("samples"), label="Sample table (sample + one column per factor):", full_width=True),
@@ -6364,8 +6621,9 @@ def crispr_page_example(crispr_task, example_picker, get_page, mo):
 
 
 @app.cell
-def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo):
+def crispr_page_form(btn_refresh_crispr, crispr_example, crispr_folder, crispr_task, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "crispr")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_crispr  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("crispr", crispr_task.value, crispr_example.value)
     _folder = crispr_folder.value
@@ -6466,7 +6724,7 @@ async def crispr_page_backend(asyncio, beside, chosen, code_panel, crispr_task, 
 
 
 @app.cell
-def meta_page_ui(get_page, mo, set_page, task_tabs):
+def meta_page_ui(chosen, get_page, mo, set_page, task_tabs):
     mo.stop(get_page() != "meta")
     btn_back_meta = mo.ui.button(label="⬅️ Back to Menu", on_change=lambda _: set_page("home"))
     btn_refresh_meta = mo.ui.button(label="🔄 Refresh the file list")
@@ -6500,8 +6758,9 @@ def meta_page_example(example_picker, get_page, meta_task, mo):
 
 
 @app.cell
-def meta_page_form(btn_refresh_meta, example_for, files_under, form_with_note, get_page, label_of, make_form, meta_example, meta_folder, meta_task, mo, NO_FILE):
+def meta_page_form(btn_refresh_meta, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, meta_example, meta_folder, meta_task, mo, NO_FILE):
     mo.stop(get_page() != "meta")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_meta  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("meta", meta_task.value, meta_example.value)
     _folder = meta_folder.value
@@ -6515,7 +6774,7 @@ def meta_page_form(btn_refresh_meta, example_for, files_under, form_with_note, g
             "output": mo.ui.text(value=_ex.get("output", ""), placeholder="blank: shown here only", label="Also save the table (TSV):", full_width=True),
         }, "🦠 Identify")
     elif meta_task.value == "Classify the reads":
-        _mates = {"(none: single-end)": "none", **{_f: _f for _f in _seqs if _f != NO_FILE}}
+        _mates = {"(none: single-end)": "none", **{_f: _f for _f in _seqs if chosen(_f)}}
         form_meta = make_form({
             "input": mo.ui.dropdown(options=_seqs, value=_ex.get("input"), label="Reads (R1):", full_width=True),
             "input2": mo.ui.dropdown(options=_mates, value=label_of(_mates, _ex.get("input2", "none"), "(none: single-end)"), label="Mate reads (R2):", full_width=True),
@@ -6651,8 +6910,9 @@ def amr_page_ui(example_picker, get_page, mo, set_page):
 
 
 @app.cell
-def amr_page_form(amr_example, amr_folder, btn_refresh_amr, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
+def amr_page_form(amr_example, amr_folder, btn_refresh_amr, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "amr")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_amr  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("amr", None, amr_example.value)
     _folder = amr_folder.value
@@ -6662,7 +6922,7 @@ def amr_page_form(amr_example, amr_folder, btn_refresh_amr, example_for, files_u
     _modes = {"automatic: FASTA = assembly, FASTQ = reads": "auto", "assembly (contigs)": "assembly", "reads": "reads"}
     form_amr = make_form({
         "inputs": mo.ui.multiselect(options=_seqs, value=_ex.get("inputs", []), label="Isolate (assembly, or both files of reads):", full_width=True),
-        "catalog": mo.ui.dropdown(options=_catalogs, value=_ex.get("catalog", _catalogs[0] if _catalogs[0] != NO_FILE else None), label="Catalog (AMR_CDS.fa):", full_width=True),
+        "catalog": mo.ui.dropdown(options=_catalogs, value=_ex.get("catalog", next((_c for _c in _catalogs if chosen(_c)), None)), label="Catalog (AMR_CDS.fa):", full_width=True),
         "table": mo.ui.dropdown(options=_tables, value=label_of(_tables, _ex.get("table", next((_v for _v in _tables.values() if _v != "none"), "none")), "(none: no drug class)"),
                                 label="Catalog table (ReferenceGeneCatalog.txt), for the drug class:", full_width=True),
         "min_identity": mo.ui.number(start=0.5, stop=1.0, step=0.01, value=_ex.get("min_identity", 0.9), label="Minimum identity:"),
@@ -6760,8 +7020,9 @@ def outbreak_page_example(example_picker, get_page, mo, outbreak_task):
 
 
 @app.cell
-def outbreak_page_form(btn_refresh_outbreak, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, outbreak_example, outbreak_folder, outbreak_task):
+def outbreak_page_form(btn_refresh_outbreak, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE, outbreak_example, outbreak_folder, outbreak_task):
     mo.stop(get_page() != "outbreak")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_outbreak  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("outbreak", outbreak_task.value, outbreak_example.value)
     _folder = outbreak_folder.value
@@ -6783,7 +7044,7 @@ def outbreak_page_form(btn_refresh_outbreak, example_for, files_under, form_with
         }, "🌳 Build the tree")
     elif outbreak_task.value == "Mutations of viral genomes":
         _fastas = files_under(_folder, "fasta")
-        _gffs = {"(none: nucleotide changes only)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}}
+        _gffs = {"(none: nucleotide changes only)": "none", **{_f: _f for _f in files_under(_folder, "gff") if chosen(_f)}}
         form_outbreak = make_form({
             "reference": mo.ui.dropdown(options=_fastas, value=_ex.get("reference"), label="Reference genome (FASTA):", full_width=True),
             "annotation": mo.ui.dropdown(options=_gffs, value=label_of(_gffs, _ex.get("annotation", "none"), "(none: nucleotide changes only)"),
@@ -7015,14 +7276,15 @@ def amplicon_page_example(amplicon_task, example_picker, get_page, mo):
 
 
 @app.cell
-def amplicon_page_form(amplicon_example, amplicon_folder, amplicon_task, btn_refresh_amplicon, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
+def amplicon_page_form(amplicon_example, amplicon_folder, amplicon_task, btn_refresh_amplicon, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "amplicon")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_amplicon  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("amplicon", amplicon_task.value, amplicon_example.value)
     _folder = amplicon_folder.value
-    _tables = [_f for _f in files_under(_folder, "table") if _f != NO_FILE]
+    _tables = [_f for _f in files_under(_folder, "table") if chosen(_f)]
     if amplicon_task.value == "Amplicon variants (ASVs)":
-        _sheets = {"(none: the FASTQ files below)": "none", **{_f: _f for _f in files_under(_folder, "sheet") if _f != NO_FILE}}
+        _sheets = {"(none: the FASTQ files below)": "none", **{_f: _f for _f in files_under(_folder, "sheet") if chosen(_f)}}
         form_amplicon = make_form({
             "sheet": mo.ui.dropdown(options=_sheets, value=label_of(_sheets, _ex.get("sheet", "none"), "(none: the FASTQ files below)"),
                                     label="Sample sheet (name, R1, R2 per line; mothur's stability.files works):", full_width=True),
@@ -7039,7 +7301,7 @@ def amplicon_page_form(amplicon_example, amplicon_folder, amplicon_task, btn_ref
                               label="Folder for asvs.fasta, asv_table.tsv and asv_tracking.tsv:", full_width=True),
         }, "🌿 Find the ASVs")
     elif amplicon_task.value == "Taxonomy":
-        _models = [_f for _f in files_under(_folder, "model", "fasta") if _f != NO_FILE] or [NO_FILE]
+        _models = [_f for _f in files_under(_folder, "model", "fasta") if chosen(_f)] or [NO_FILE]
         _tab = {"(none: no composition chart)": "none", **{_f: _f for _f in _tables}}
         _conf = {"0.8 (the RDP's default)": 0.8, "0.5 (DADA2's minBoot 50, for short reads)": 0.5}
         _ranks = ["Phylum", "Class", "Order", "Family", "Genus"]
@@ -7340,13 +7602,14 @@ def tmb_page_ui(example_picker, get_page, human_notice, mo, set_page):
 
 
 @app.cell
-def tmb_page_form(btn_refresh_tmb, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE, tmb_example, tmb_folder):
+def tmb_page_form(btn_refresh_tmb, chosen, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE, tmb_example, tmb_folder):
     mo.stop(get_page() != "tmb")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_tmb  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("tmb", None, tmb_example.value)
     _folder = tmb_folder.value
-    _gffs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if _f != NO_FILE}}
-    _refs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "fasta") if _f != NO_FILE}}
+    _gffs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "gff") if chosen(_f)}}
+    _refs = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "fasta") if chosen(_f)}}
     form_tmb = make_form({
         "vcf": mo.ui.dropdown(options=files_under(_folder, "vcf"), value=_ex.get("vcf"), label="Somatic variants of the tumor (VCF):", full_width=True),
         "bed": mo.ui.dropdown(options=files_under(_folder, "bed_any"), value=_ex.get("bed"), label="Region the test covers (BED):", full_width=True),
@@ -7462,13 +7725,14 @@ def contam_page_example(contam_task, example_picker, get_page, mo):
 
 
 @app.cell
-def contam_page_form(btn_refresh_contam, contam_example, contam_folder, contam_task, example_for, files_under, form_with_note, get_page, label_of, make_form, mo, NO_FILE):
+def contam_page_form(btn_refresh_contam, chosen, contam_example, contam_folder, contam_task, example_for, files_under, form_with_note, get_folder_rev, get_page, label_of, make_form, mo, NO_FILE):
     mo.stop(get_page() != "contam")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     btn_refresh_contam  # a click re-runs this cell, which lists the folder again
     _ex, _about = example_for("contam", contam_task.value, contam_example.value)
     _folder = contam_folder.value
     if contam_task.value.startswith("Screen"):
-        _spikes = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "table") if _f != NO_FILE}}
+        _spikes = {"(none)": "none", **{_f: _f for _f in files_under(_folder, "table") if chosen(_f)}}
         form_contam = make_form({
             "database": mo.ui.dropdown(options=files_under(_folder, "screen_db"), value=_ex.get("database"),
                                        label="Screening database (.mmgscreen: the task Build a screening database makes it):", full_width=True),
@@ -7830,8 +8094,9 @@ def ai_page_example(ai_task, example_picker, get_page, mo):
 
 
 @app.cell
-def ai_page_form(AI_EFFORTS, ai_example, AI_LEVELS, AI_MODELS, AI_SENT, ai_settings, ai_task, example_for, form_with_note, get_page, label_of, make_form, mo):
+def ai_page_form(AI_EFFORTS, ai_example, AI_LEVELS, AI_MODELS, AI_SENT, ai_settings, ai_task, example_for, form_with_note, get_folder_rev, get_page, label_of, make_form, mo):
     mo.stop(get_page() != "ai")
+    get_folder_rev()   # built again when the Explorer changes a folder or adds a file
     _ex, _about = example_for("ai", ai_task.value, ai_example.value)
     _s = ai_settings
     _note = None

@@ -2,6 +2,10 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20417492.svg)](https://doi.org/10.5281/zenodo.20417492) [![PyPI](https://img.shields.io/pypi/v/multimerge-genomics.svg)](https://pypi.org/project/multimerge-genomics/) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/fbcouto/multimerge-genomics-research/blob/main/colab/MultiMerge_Genomics_Colab.ipynb)
 
+[![MMGEN in three minutes: the interface, the engine, the 3-D views, and Colab (video)](assets/video_cover.jpg)](https://youtu.be/KroKXjHCf-U)
+
+*Three minutes on video: the interface, the k-way merge engine, the 3-D views, and how to run it on Google Colab.* [Watch on YouTube](https://youtu.be/KroKXjHCf-U) · [download the MP4 (1080p, 17 MB)](https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.0/mmgen_2.5.0_overview_1080p.mp4)
+
 ![MMGEN main menu](assets/menu.png)
 
 MMGEN is a free, open-source genomics toolkit written in **Rust**, with optional **CUDA** acceleration and a **Python** API. It has four families of tools, plus an optional AI assistant:

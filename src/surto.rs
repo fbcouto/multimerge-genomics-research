@@ -117,7 +117,7 @@
 use crate::annotation::translate_dna_to_protein;
 use crate::externo::{abre_leitura, Escritor};
 use crate::microbio::{load_databases, max_hash_for_scaled, murmur64, SeqKind, SeqReader, SeqRecord, SEED};
-use crate::multimerge_core::{multi_merge_sort_stable, multi_merge_sort_stable_by};
+use crate::multimerge_core::{multi_merge_sort_stable_by, multi_merge_sort_stable_radix};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::File;
@@ -803,7 +803,7 @@ fn sketch_genome(seqs: &[&[u8]], k: usize, max_hash: u64) -> (Vec<u64>, u64) {
                 (x, cx + cy)
             },
         );
-    multi_merge_sort_stable(&mut all);
+    multi_merge_sort_stable_radix(&mut all);
     all.dedup();
     (all, kmers)
 }

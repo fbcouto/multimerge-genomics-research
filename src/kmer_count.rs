@@ -27,7 +27,7 @@
 // =====================================================================
 
 use crate::externo::{abre_leitura, DirTemp, Escritor};
-use crate::multimerge_core::multi_merge_sort_stable;
+use crate::multimerge_core::{multi_merge_sort_stable_by_prefix_key, multi_merge_sort_stable_by_radix_key};
 use lz4_flex::frame::{BlockSize, FrameDecoder, FrameEncoder, FrameInfo};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -509,6 +509,35 @@ const fn classes() -> [u8; 256] {
     t
 }
 
+/// Sorts k-mers of `k` bases held in `u128`, in the order of the numbers --
+/// the result of a plain stable sort, reached by another road.
+///
+/// The engine sorts input without structure by radix when it is told the bits
+/// of the key, and its keys are 64 bits wide:
+///
+/// - with k <= 32 the whole k-mer fits in 64 bits (2 per base), so its low
+///   word is the exact key;
+/// - above that, the key is the 64 highest of the 2k bits, and the comparison
+///   of the whole number settles the k-mers that share them.
+///
+/// Ordered input never gets there: the engine sees the runs first. Every
+/// value must be below 4^k, which the encoders of this crate guarantee. The
+/// working memory is the one the stable sort already used: one buffer the size
+/// of the slice (`BYTES_PER_KMER` counts it).
+///
+/// Measured on 20M canonical k-mers, 8 threads: 783 -> 395 ms with k = 31,
+/// 793 -> 435 ms with k = 51.
+pub fn sort_kmers(kmers: &mut [u128], k: u8) {
+    let bits = 2 * u32::from(k);
+    if bits <= 64 {
+        debug_assert!(kmers.iter().all(|x| x >> 64 == 0), "a k-mer of {k} bases above 64 bits");
+        multi_merge_sort_stable_by_radix_key(kmers, |x| *x as u64);
+    } else {
+        let shift = bits - 64;
+        multi_merge_sort_stable_by_prefix_key(kmers, move |x| (*x >> shift) as u64, |a, b| a.cmp(b));
+    }
+}
+
 /// The rolling encoder and the batch it fills. A full batch becomes a run on
 /// disk.
 struct Batches<'a> {
@@ -615,7 +644,7 @@ impl<'a> Batches<'a> {
     /// Sorts the batch, collapses it into (k-mer, count) pairs and writes it
     /// as a run.
     fn flush(&mut self) -> Result<(), String> {
-        multi_merge_sort_stable(&mut self.batch);
+        sort_kmers(&mut self.batch, self.k as u8);
         let temp = match &mut self.temp {
             Some(temp) => temp,
             None => {
@@ -920,7 +949,7 @@ fn count_into(caminhos: &[String], opt: &CountOptions, collector: &mut Collector
     if batches.runs.is_empty() {
         // Everything fitted: sort and deliver, without touching the
         // temporary disk.
-        multi_merge_sort_stable(&mut batches.batch);
+        sort_kmers(&mut batches.batch, batches.k as u8);
         collapse(&batches.batch, |kmer, count| collector.receive(kmer, count))?;
     } else {
         if !batches.batch.is_empty() {

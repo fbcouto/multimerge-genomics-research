@@ -199,8 +199,8 @@ fn sort_merge_bytes<'py>(py: Python<'py>, bytes_a: &[u8], bytes_b: &[u8], device
     let resultado = py.allow_threads(|| {
         let mut kmer_a: Vec<u64> = como_u64(bytes_a).into_owned();
         let mut kmer_b: Vec<u64> = como_u64(bytes_b).into_owned();
-        multimerge_core::multi_merge_sort_stable(&mut kmer_a);
-        multimerge_core::multi_merge_sort_stable(&mut kmer_b);
+        multimerge_core::multi_merge_sort_stable_radix(&mut kmer_a);
+        multimerge_core::multi_merge_sort_stable_radix(&mut kmer_b);
         ordenar_e_mesclar_backend(&kmer_a, &kmer_b, onde)
     })?;
 
@@ -419,8 +419,8 @@ fn read_and_merge_kmer_files<'py>(py: Python<'py>, path_a: &str, path_b: &str) -
     let resultado = py.allow_threads(|| -> PyResult<Vec<u64>> {
         let mut kmer_a = ler_kmer(path_a)?;
         let mut kmer_b = ler_kmer(path_b)?;
-        multimerge_core::multi_merge_sort_stable(&mut kmer_a);
-        multimerge_core::multi_merge_sort_stable(&mut kmer_b);
+        multimerge_core::multi_merge_sort_stable_radix(&mut kmer_a);
+        multimerge_core::multi_merge_sort_stable_radix(&mut kmer_b);
         ordenar_e_mesclar_backend(&kmer_a, &kmer_b, Dispositivo::Auto)
     })?;
     let byte_slice: &[u8] = unsafe { std::slice::from_raw_parts(resultado.as_ptr() as *const u8, resultado.len() * 8) };

@@ -26,7 +26,7 @@ MMGEN from [PyPI](https://pypi.org/project/multimerge-genomics/) (about a minute
 once (about 45 MB each).
 
 **On your computer**: `python -m pip install multimerge-genomics` (from PyPI; the CUDA builds are on the
-[release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.5.0)), plus `python -m pip install jupyter matplotlib pandas`, and open the
+[release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.5.1)), plus `python -m pip install jupyter matplotlib pandas`, and open the
 notebook with Jupyter in a working folder. The notebooks write the demo files to `data/` and their results to
 `results/<notebook name>/`, both in the folder where they run.
 
@@ -65,7 +65,7 @@ table above.
 
 ## The demo data
 
-Two packs, attached to the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.5.0); each has a `README.md` with the sources and licenses:
+Two packs, attached to the [release](https://github.com/fbcouto/multimerge-genomics-research/releases/tag/v2.5.1); each has a `README.md` with the sources and licenses:
 
 * `mmgen_demo_human_v3.zip`: the Genome in a Bottle (NIST) benchmark calls of seven public genomes (HG001-HG007, volunteers
   who consented to open sharing) cut to chromosome 22 and the genes of some clinical panels, with their callable

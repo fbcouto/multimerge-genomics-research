@@ -26,6 +26,11 @@ mod nomes;
 mod kmer;
 #[path = "../../../src/kmer_count.rs"]
 mod kmer_count;
+// The assembly readers (modules 1-7), tried against their old code.
+#[path = "../../../src/fasta.rs"]
+mod fasta;
+#[path = "../../../src/fastq.rs"]
+mod fastq;
 
 use kmer_count::*;
 use std::collections::{BTreeMap, HashMap};
@@ -971,6 +976,250 @@ fn main() {
         t.passed += 2;
     }
 
+    // ------------------------------------------------ sort_kmers, against the standard library
+    // The engine takes the radix road only from 32,768 elements on: 300,000
+    // put every case well past it. k = 32 is the last length whose k-mer is
+    // its own 64-bit key and k = 33 the first one sorted by a prefix. In the
+    // last shape every k-mer shares its high bits, so above k = 32 the prefix
+    // says nothing and the comparison settles everything.
+    {
+        let n = 300_000usize;
+        for k in [1u8, 2, 16, 31, 32, 33, 48, 63] {
+            let mask = (1u128 << (2 * u32::from(k))) - 1;
+            let draw = |s: &mut u64| (0..5).fold(0u128, |x, _| (x << 31) | u128::from(lcg(s))) & mask;
+            let random: Vec<u128> = (0..n).map(|_| draw(&mut s)).collect();
+            let mut sorted = random.clone();
+            sorted.sort();
+            let reversed: Vec<u128> = sorted.iter().rev().copied().collect();
+            let few: Vec<u128> = (0..n).map(|_| random[lcg(&mut s) as usize % 1000]).collect();
+            let high = draw(&mut s) & !0xFFFF;
+            let same_high_bits: Vec<u128> = (0..n).map(|_| (high | u128::from(lcg(&mut s) & 0xFFFF)) & mask).collect();
+            for (what, data) in [
+                ("random", &random),
+                ("sorted", &sorted),
+                ("reversed", &reversed),
+                ("1000 distinct", &few),
+                ("same high bits", &same_high_bits),
+            ] {
+                let mut got = data.clone();
+                sort_kmers(&mut got, k);
+                let mut want = data.clone();
+                want.sort();
+                assert!(got == want, "sort_kmers, k={k}, {what}: not the order of the standard library's sort");
+                t.passed += 1;
+            }
+        }
+    }
+
+    // ------------------------------------------------ the k-mers of the assembly readers (fasta.rs, fastq.rs)
+    // `kmers_rolantes` walks one base at a time. The old readers took every
+    // window, looked for N and n in it and encoded it with `Kmer128::encode`:
+    // that old way is the reference here, and the two readers are compared
+    // whole against copies of their old code, on files with several records,
+    // line widths, CRLF, blank lines, lower case, runs of N, IUPAC letters
+    // (which `encode` turns into A, and so must the new code) and gzip.
+    {
+        let old_windows = |seq: &[u8], k: usize| -> Vec<u128> {
+            if seq.len() < k {
+                return Vec::new();
+            }
+            seq.windows(k)
+                .filter(|w| !w.contains(&b'N') && !w.contains(&b'n'))
+                .map(|w| kmer::Kmer128::encode(w).bits)
+                .collect()
+        };
+        for k in [1usize, 2, 3, 5, 15, 31, 32, 33, 48, 62, 63] {
+            for len in [0, 1, k.saturating_sub(1), k, k + 1, 50, 333, 2000] {
+                let seq = messy_dna(len, &mut s);
+                let mut got = Vec::new();
+                kmer::kmers_rolantes(&seq, k, &mut got);
+                assert!(got == old_windows(&seq, k), "kmers_rolantes, k={k}, {len} bases: not the k-mers of the old windows");
+                t.passed += 1;
+            }
+            let seq = messy_dna(5000, &mut s);
+            let want = old_windows(&seq, k);
+            for pedaco in [1usize, 2, 7, 64, 1000, 1 << 20] {
+                let mut got = Vec::new();
+                kmer::kmers_em_pedacos(&seq, k, pedaco, &mut got);
+                assert!(got == want, "kmers_em_pedacos, k={k}, pieces of {pedaco} windows: not the k-mers of the old windows");
+                t.passed += 1;
+            }
+        }
+        // A chromosome-sized sequence takes the parallel road (more than
+        // JANELAS_POR_PEDACO windows).
+        let long = messy_dna(3 * kmer::JANELAS_POR_PEDACO + 12_345, &mut s);
+        for k in [31usize, 63] {
+            let mut got = Vec::new();
+            kmer::kmers_da_sequencia(&long, k, &mut got);
+            assert!(got == old_windows(&long, k), "kmers_da_sequencia, k={k}, {} bases: not the old k-mers", long.len());
+            t.passed += 1;
+        }
+
+        // The readers, whole.
+        let mut fasta_files = Vec::new();
+        for (i, (width, eol, gz)) in [(60usize, "\n", false), (80, "\r\n", true), (0, "\n", false)].iter().enumerate() {
+            let mut text = String::from("\n");
+            for r in 0..(5 + i * 3) {
+                let len = if r == 0 { 2_500_000 } else { (lcg(&mut s) % 3000) as usize };
+                let seq = String::from_utf8(messy_dna(len, &mut s)).unwrap();
+                text.push_str(&format!(">record_{i}_{r} some description{eol}"));
+                if *width == 0 {
+                    text.push_str(&seq);
+                    text.push_str(eol);
+                } else {
+                    for line in seq.as_bytes().chunks(*width) {
+                        text.push_str(std::str::from_utf8(line).unwrap());
+                        text.push_str(eol);
+                    }
+                }
+                if r % 3 == 0 {
+                    text.push_str(eol);
+                }
+            }
+            fasta_files.push(write_maybe_gz(&t, &format!("reader_{i}.fa"), &text, *gz));
+        }
+        let mut fastq_files = Vec::new();
+        for (i, gz) in [false, true].iter().enumerate() {
+            let mut text = String::new();
+            for r in 0..4000 {
+                let len = 20 + (lcg(&mut s) % 200) as usize;
+                let seq = String::from_utf8(messy_dna(len, &mut s)).unwrap();
+                let qual: String = (0..len).map(|_| (33 + (lcg(&mut s) % 42) as u8) as char).collect();
+                let qual = if r % 50 == 0 { qual[..len / 2].to_string() } else { qual }; // the wrong length
+                text.push_str(&format!("@read_{i}_{r}\n{seq}\n+\n{qual}\n"));
+            }
+            fastq_files.push(write_maybe_gz(&t, &format!("reader_{i}.fq"), &text, *gz));
+        }
+        for k in [1u8, 21, 31, 32, 33, 63] {
+            let got = fasta::processar_fasta_lote(fasta_files.clone(), k);
+            assert!(got == old_fasta_reader(&fasta_files, k), "processar_fasta_lote, k={k}: not the k-mers of the old reader");
+            t.passed += 1;
+            for q in [0u8, 20, 30] {
+                let got = fastq::processar_fastq_lote(fastq_files.clone(), q, k);
+                assert!(got == old_fastq_reader(&fastq_files, q, k), "processar_fastq_lote, k={k}, q={q}: not the k-mers of the old reader");
+                t.passed += 1;
+            }
+        }
+    }
+
     std::fs::remove_dir_all(&dir).unwrap();
     println!("{} k-mer counting tests passed", t.passed);
+}
+
+/// DNA with everything a real file may have: upper and lower case, runs of N
+/// and n, IUPAC letters and other bytes.
+fn messy_dna(n: usize, s: &mut u64) -> Vec<u8> {
+    let mut v = Vec::with_capacity(n);
+    while v.len() < n {
+        let r = lcg(s) % 1000;
+        let x = lcg(s);
+        if r < 900 {
+            v.push(b"ACGT"[(x % 4) as usize]);
+        } else if r < 950 {
+            v.push(b"acgt"[(x % 4) as usize]);
+        } else if r < 965 {
+            let run = 1 + (x % 40) as usize;
+            let b = if x % 2 == 0 { b'N' } else { b'n' };
+            v.extend(std::iter::repeat_n(b, run.min(n - v.len())));
+        } else if r < 990 {
+            v.push(b"RYKMSWBDHVrykmswbdhv"[(x % 20) as usize]);
+        } else {
+            v.push(b"-.*X"[(x % 4) as usize]);
+        }
+    }
+    v
+}
+
+fn write_maybe_gz(t: &Trial, name: &str, text: &str, gz: bool) -> String {
+    if !gz {
+        return t.write(name, text);
+    }
+    let p = t.p(&format!("{name}.gz"));
+    let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&p).unwrap(), flate2::Compression::fast());
+    e.write_all(text.as_bytes()).unwrap();
+    e.finish().unwrap();
+    p
+}
+
+fn open_text(path: &str) -> Box<dyn BufRead> {
+    let f = std::fs::File::open(path).unwrap();
+    if path.ends_with(".gz") {
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(f)))
+    } else {
+        Box::new(std::io::BufReader::new(f))
+    }
+}
+
+/// The FASTA reader as it was (src/fasta.rs before the one-base-at-a-time
+/// encoder), one file after another, sorted by the standard library.
+fn old_fasta_reader(paths: &[String], k: u8) -> Vec<u128> {
+    let mut all = Vec::new();
+    for path in paths {
+        let mut reader = open_text(path);
+        let mut linha = String::new();
+        let mut seq_atual = String::new();
+        let flush = |seq: &str, all: &mut Vec<u128>| {
+            if seq.len() >= k as usize {
+                for janela in seq.as_bytes().windows(k as usize) {
+                    if !janela.contains(&b'N') && !janela.contains(&b'n') {
+                        all.push(kmer::Kmer128::encode(janela).bits);
+                    }
+                }
+            }
+        };
+        while let Ok(n) = reader.read_line(&mut linha) {
+            if n == 0 {
+                break;
+            }
+            let l = linha.trim();
+            if l.starts_with('>') {
+                flush(&seq_atual, &mut all);
+                seq_atual.clear();
+            } else {
+                seq_atual.push_str(l);
+            }
+            linha.clear();
+        }
+        flush(&seq_atual, &mut all);
+    }
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// The FASTQ reader as it was (src/fastq.rs before the change).
+fn old_fastq_reader(paths: &[String], qualidade_minima: u8, k: u8) -> Vec<u128> {
+    let mut all = Vec::new();
+    for path in paths {
+        let mut reader = open_text(path);
+        let mut linha = String::new();
+        let mut num_linha = 0usize;
+        let mut seq = String::new();
+        while let Ok(n) = reader.read_line(&mut linha) {
+            if n == 0 {
+                break;
+            }
+            let idx = num_linha % 4;
+            if idx == 1 {
+                seq = linha.trim().to_string();
+            } else if idx == 3 {
+                let qual = linha.trim();
+                if seq.len() >= k as usize && seq.len() == qual.len() {
+                    let soma: usize = qual.bytes().map(|q| (q as usize).saturating_sub(33)).sum();
+                    if soma / qual.len() >= qualidade_minima as usize {
+                        for janela in seq.as_bytes().windows(k as usize) {
+                            if !janela.contains(&b'N') && !janela.contains(&b'n') {
+                                all.push(kmer::Kmer128::encode(janela).bits);
+                            }
+                        }
+                    }
+                }
+            }
+            linha.clear();
+            num_linha += 1;
+        }
+    }
+    all.sort();
+    all.dedup();
+    all
 }

@@ -303,6 +303,39 @@ check("query: what did not go in is a mutation", len(mut) // 16 >= 4990 and mut[
 x = sorted(random.getrandbits(63) for _ in range(3000)); y = sorted(random.getrandbits(63) for _ in range(2000))
 u64 = lambda vs: struct.pack(f"<{len(vs)}Q", *vs)
 check("sort_merge_bytes: correct merge", mmg.sort_merge_bytes(u64(x), u64(y)) == u64(sorted(x + y)))
+# The engine sorts by radix from 32,768 elements on, and every check above is
+# smaller: these make each system of the CI go through that road (64-bit
+# values; and the 128-bit k-mers, by their exact key with k = 31 and by a
+# prefix key with k = 45).
+_big_x = [random.getrandbits(64) for _ in range(100_000)]
+_big_y = [random.getrandbits(64) for _ in range(80_000)]
+check("sort_merge_bytes, 180,000 unsorted values: the radix road", mmg.sort_merge_bytes(u64(_big_x), u64(_big_y)) == u64(sorted(_big_x + _big_y)))
+_code = {"A": 0, "C": 1, "G": 2, "T": 3, "a": 0, "c": 1, "g": 2, "t": 3}
+
+
+def _kmer_windows(seq, k):
+    out, bits, run, mask = [], 0, 0, (1 << (2 * k)) - 1
+    for ch in seq:
+        if ch in "Nn":
+            bits, run = 0, 0
+            continue
+        bits = ((bits << 2) | _code[ch]) & mask
+        run += 1
+        if run >= k:
+            out.append(bits)
+    return out
+
+
+_recs = []
+for _r in range(2):
+    _s = "".join(random.choice("ACGTACGTACGTacgt") for _ in range(70_000))
+    _recs.append(_s[:30_000] + "N" * 25 + _s[30_000:])
+_bigfa = write("radix.fa", sum(([f">r{_i}"] + [_s[j:j + 60] for j in range(0, len(_s), 60)] for _i, _s in enumerate(_recs)), []))
+for _k in (31, 45):
+    _want = sorted(set(w for _s in _recs for w in _kmer_windows(_s, _k)))
+    _got = mmg.read_fasta_batch([_bigfa], _k)
+    check(f"read_fasta_batch, k={_k}, {len(_want):,} k-mers: the radix road gives the same k-mers",
+          _got == b"".join(struct.pack("<QQ", w & (2**64 - 1), w >> 64) for w in _want), f"{len(_got) // 16} vs {len(_want)}")
 if info["gpu"]:
     check("GPU: filter identical to the CPU's", bloom == mmg.build_bloom_filter(u128(inside), 1, 5, device="gpu"))
     check("GPU: identical merge", mmg.sort_merge_bytes(u64(x), u64(y), device="gpu") == u64(sorted(x + y)))

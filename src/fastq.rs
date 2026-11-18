@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use rayon::prelude::*;
 use flate2::read::MultiGzDecoder;
-use crate::kmer::Kmer128;
 
 /// Processa múltiplos ficheiros FASTQ (suporta .gz e texto limpo) em paralelo
 pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) -> Vec<u128> {
@@ -30,7 +29,8 @@ pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) 
             
             let idx = num_linha % 4;
             if idx == 1 { 
-                seq = linha.trim().to_string(); // Linha 2: A Sequência de DNA
+                seq.clear(); // Linha 2: A Sequência de DNA (o mesmo buffer a cada leitura)
+                seq.push_str(linha.trim());
             } else if idx == 3 { 
                 let qual = linha.trim();        // Linha 4: A Qualidade (Phred)
                 
@@ -44,11 +44,8 @@ pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) 
                     
                     // Se passar no QC, fatiamos a sequência em K-mers de 128-bits
                     if media >= qualidade_minima as usize {
-                        for janela in seq.as_bytes().windows(k as usize) {
-                            if !janela.contains(&b'N') && !janela.contains(&b'n') {
-                                kmers_locais.push(Kmer128::encode(janela).bits);
-                            }
-                        }
+                        // Uma base por vez, em vez de recodificar cada janela.
+                        crate::kmer::kmers_rolantes(seq.as_bytes(), k as usize, &mut kmers_locais);
                     }
                 }
             }
@@ -58,9 +55,10 @@ pub fn processar_fastq_lote(caminhos: Vec<String>, qualidade_minima: u8, k: u8) 
         kmers_locais
     }).collect(); // O Rayon junta os resultados de todas as threads aqui!
 
-    // 4. Esmagamento Final: Ordenação Instável In-Place (Ultra rápida)
+    // 4. Esmagamento Final: ordenação pelo motor estável, com a chave
+    //    informada (dado sem estrutura vai por radix)
     println!("🔄 Sorting {} k-mers from the batch and removing duplicates...", todos_kmers.len());
-    crate::multimerge_core::multi_merge_sort_stable(&mut todos_kmers);
+    crate::kmer_count::sort_kmers(&mut todos_kmers, k);
     todos_kmers.dedup(); // Remove cópias exatas do DNA para economizar RAM no Grafo
 
     todos_kmers

@@ -68,6 +68,98 @@ impl Kmer128 {
     }
 }
 
+// =====================================================================
+// K-MERS DE UMA SEQUENCIA, UMA BASE POR VEZ
+// =====================================================================
+//
+// Os leitores da montagem (`fasta.rs`, `fastq.rs`) pegavam cada janela de k
+// bases, procuravam `N` e `n` nela (duas varreduras) e a codificavam do zero
+// com `Kmer128::encode` (k passos): ~3k operacoes por k-mer. Aqui o k-mer
+// anda uma base por vez: entra a base nova nos 2 bits de baixo e a mascara
+// tira a mais antiga. Os bits sao exatamente os do `encode`, inclusive no
+// que ele faz com letra que nao e ACGT nem N (vale A).
+
+/// O codigo de 2 bits de cada byte, como no `encode`; `N_BASE` marca N/n,
+/// que tira a janela.
+const N_BASE: u8 = 4;
+const TABELA: [u8; 256] = {
+    let mut t = [0u8; 256];
+    t[b'C' as usize] = 1;
+    t[b'c' as usize] = 1;
+    t[b'G' as usize] = 2;
+    t[b'g' as usize] = 2;
+    t[b'T' as usize] = 3;
+    t[b't' as usize] = 3;
+    t[b'N' as usize] = N_BASE;
+    t[b'n' as usize] = N_BASE;
+    t
+};
+
+/// Acrescenta a `saida`, na ordem, o k-mer de cada janela de `k` bases de
+/// `seq` que nao tem `N` nem `n` — os mesmos bits que
+/// `Kmer128::encode(janela).bits` —, com um passo por base.
+pub fn kmers_rolantes(seq: &[u8], k: usize, saida: &mut Vec<u128>) {
+    assert!((1..=63).contains(&k), "The k-mer size must be between 1 and 63 (got {k})");
+    if seq.len() < k {
+        return;
+    }
+    let mascara: u128 = (1u128 << (2 * k)) - 1;
+    let mut bits: u128 = 0;
+    let mut seguidas = 0usize; // bases desde o ultimo N
+    for &b in seq {
+        let c = TABELA[b as usize];
+        if c == N_BASE {
+            seguidas = 0;
+            bits = 0;
+            continue;
+        }
+        bits = ((bits << 2) | c as u128) & mascara;
+        seguidas += 1;
+        if seguidas >= k {
+            saida.push(bits);
+        }
+    }
+}
+
+/// Janelas por tarefa quando uma sequencia longa e dividida entre as threads.
+pub const JANELAS_POR_PEDACO: usize = 1 << 20;
+
+/// Como `kmers_rolantes`, mas uma sequencia longa (um cromossomo) e cortada
+/// em pedacos de `JANELAS_POR_PEDACO` janelas, feitos em paralelo; cada
+/// pedaco le tambem as k-1 bases do seguinte. A ordem da saida e a mesma.
+pub fn kmers_da_sequencia(seq: &[u8], k: usize, saida: &mut Vec<u128>) {
+    kmers_em_pedacos(seq, k, JANELAS_POR_PEDACO, saida)
+}
+
+/// `kmers_da_sequencia` com o tamanho do pedaco escolhido (para os ensaios).
+pub fn kmers_em_pedacos(seq: &[u8], k: usize, pedaco: usize, saida: &mut Vec<u128>) {
+    use rayon::prelude::*;
+    assert!((1..=63).contains(&k), "The k-mer size must be between 1 and 63 (got {k})");
+    if seq.len() < k {
+        return;
+    }
+    let janelas = seq.len() - k + 1;
+    let pedaco = pedaco.max(1);
+    if janelas <= pedaco {
+        kmers_rolantes(seq, k, saida);
+        return;
+    }
+    let inicios: Vec<usize> = (0..janelas).step_by(pedaco).collect();
+    let partes: Vec<Vec<u128>> = inicios
+        .par_iter()
+        .map(|&inicio| {
+            let fim = (inicio + pedaco).min(janelas);
+            let mut v = Vec::with_capacity(fim - inicio);
+            kmers_rolantes(&seq[inicio..fim + k - 1], k, &mut v);
+            v
+        })
+        .collect();
+    saida.reserve(partes.iter().map(|p| p.len()).sum());
+    for p in partes {
+        saida.extend_from_slice(&p);
+    }
+}
+
 // Permite imprimir o Kmer diretamente com {}
 impl fmt::Display for Kmer128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

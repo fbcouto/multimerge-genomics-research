@@ -35,6 +35,14 @@
 //  3. Dado caotico. O estavel ordena em blocos e funde pela arvore; o instavel
 //     delega ao quicksort paralelo, que trabalha no lugar e nao aloca buffer.
 //
+//  CHAVE RADIX
+//
+//  As entradas `_radix`, `_by_radix_key` e `_by_prefix_key` dizem ao motor
+//  quais sao os BITS da chave. Com isso o dado aleatorio deixa de passar por
+//  comparacao: uma passada de radix pelos bits altos e cada balde resolvido
+//  dentro do cache (ver "CAMINHO CAOTICO COM CHAVE"). Vale para os dois
+//  motores; o resto do caminho -- escudo, runs, arvore -- nao muda.
+//
 //  O motor nao tem `unsafe`. `T: Copy` e o que permite ao borrow checker
 //  provar o merge bidirecional: as duas threads leem as fontes por referencia
 //  compartilhada e escrevem em metades disjuntas do destino.
@@ -137,6 +145,119 @@ pub fn multi_merge_sort_stable_by_with_buffer<T, F>(
     sort_with(arr, &compare, true, &Tuning::for_type::<T>(), Some(scratch));
 }
 
+/// Integer types whose order is the order of an unsigned integer of up to 64
+/// bits. Implemented for the primitive integers.
+///
+/// A type that implements it can use [`multi_merge_sort_radix`] and
+/// [`multi_merge_sort_stable_radix`], where chaotic input is sorted by radix
+/// instead of by comparison.
+pub trait RadixKey: Ord + Copy + Send + Sync {
+    /// Order-preserving map to `u64`: `a < b` exactly when
+    /// `a.to_radix() < b.to_radix()`.
+    fn to_radix(self) -> u64;
+    /// Inverse of [`RadixKey::to_radix`].
+    fn from_radix(bits: u64) -> Self;
+}
+
+macro_rules! radix_key_unsigned {
+    ($($t:ty),*) => {$(
+        impl RadixKey for $t {
+            #[inline(always)]
+            fn to_radix(self) -> u64 {
+                self as u64
+            }
+            #[inline(always)]
+            fn from_radix(bits: u64) -> Self {
+                bits as $t
+            }
+        }
+    )*};
+}
+radix_key_unsigned!(u8, u16, u32, u64, usize);
+
+macro_rules! radix_key_signed {
+    ($($t:ty => $u:ty),*) => {$(
+        impl RadixKey for $t {
+            #[inline(always)]
+            fn to_radix(self) -> u64 {
+                ((self as $u) ^ (1 << (<$u>::BITS - 1))) as u64
+            }
+            #[inline(always)]
+            fn from_radix(bits: u64) -> Self {
+                ((bits as $u) ^ (1 << (<$u>::BITS - 1))) as $t
+            }
+        }
+    )*};
+}
+radix_key_signed!(i8 => u8, i16 => u16, i32 => u32, i64 => u64, isize => usize);
+
+/// [`multi_merge_sort`] for integer keys. **Not stable.**
+///
+/// Same engine and same result. The difference is the chaotic path: random
+/// input is sorted by a parallel radix pass plus in-cache bucket sorts instead
+/// of the parallel quicksort. That path allocates a buffer of `arr.len()`
+/// elements, except when the keys span 16 bits or less (counting sort, no
+/// buffer). If the buffer cannot be allocated, or the keys are too skewed for
+/// radix to pay off, the quicksort takes over.
+pub fn multi_merge_sort_radix<T: RadixKey>(arr: &mut [T]) {
+    sort_with_key(arr, &T::cmp, false, &Tuning::for_type::<T>(), None, &Bare);
+}
+
+/// [`multi_merge_sort_stable`] for integer keys. See
+/// [`multi_merge_sort_radix`].
+pub fn multi_merge_sort_stable_radix<T: RadixKey>(arr: &mut [T]) {
+    sort_with_key(arr, &T::cmp, true, &Tuning::for_type::<T>(), None, &Bare);
+}
+
+/// Sorts by a `u64` key that decides the order completely: elements with equal
+/// keys are equal. **Not stable.** Chaotic input is sorted by radix on the key.
+pub fn multi_merge_sort_by_radix_key<T, K>(arr: &mut [T], key: K)
+where
+    T: Copy + Send + Sync,
+    K: Fn(&T) -> u64 + Sync,
+{
+    let cmp = |a: &T, b: &T| key(a).cmp(&key(b));
+    sort_with_key(arr, &cmp, false, &Tuning::for_type::<T>(), None, &Exact(&key));
+}
+
+/// [`multi_merge_sort_by_radix_key`], preserving the relative order of
+/// elements with equal keys.
+pub fn multi_merge_sort_stable_by_radix_key<T, K>(arr: &mut [T], key: K)
+where
+    T: Copy + Send + Sync,
+    K: Fn(&T) -> u64 + Sync,
+{
+    let cmp = |a: &T, b: &T| key(a).cmp(&key(b));
+    sort_with_key(arr, &cmp, true, &Tuning::for_type::<T>(), None, &Exact(&key));
+}
+
+/// Sorts with `compare`, using `prefix` as a radix key for chaotic input.
+/// **Not stable.**
+///
+/// `prefix` must agree with `compare` wherever it can tell two elements apart:
+/// `prefix(a) < prefix(b)` implies `compare(a, b) == Less`. Elements with the
+/// same prefix are ordered by `compare`. This is the entry for keys longer
+/// than 64 bits, such as strings: the prefix is the first 8 bytes, big-endian.
+pub fn multi_merge_sort_by_prefix_key<T, K, F>(arr: &mut [T], prefix: K, compare: F)
+where
+    T: Copy + Send + Sync,
+    K: Fn(&T) -> u64 + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+{
+    sort_with_key(arr, &compare, false, &Tuning::for_type::<T>(), None, &Prefix(&prefix));
+}
+
+/// [`multi_merge_sort_by_prefix_key`], preserving the relative order of equal
+/// elements.
+pub fn multi_merge_sort_stable_by_prefix_key<T, K, F>(arr: &mut [T], prefix: K, compare: F)
+where
+    T: Copy + Send + Sync,
+    K: Fn(&T) -> u64 + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+{
+    sort_with_key(arr, &compare, true, &Tuning::for_type::<T>(), None, &Prefix(&prefix));
+}
+
 /// Run decomposition of `arr` as signed lengths: positive for a non-decreasing
 /// run, negative for a non-increasing one.
 ///
@@ -225,6 +346,47 @@ pub(crate) struct Tuning {
     pub cheap_ns: usize,
     /// Fixa o veredito de custo em vez de medir. Para os testes.
     pub force_cheap: Option<bool>,
+    /// Radix: abaixo deste tamanho o caminho caotico do INSTAVEL segue por
+    /// comparacao. Medido com o motor (minimo de 60, 8 threads): em i32 o
+    /// radix perde ate 65 mil (0,87 contra 0,64 ms) e ganha de 131 mil em
+    /// diante (1,04 contra 1,30); em u64 empata em 262 mil e ganha em 1M.
+    pub radix_min: usize,
+    /// O mesmo piso para o ESTAVEL, que e mais baixo: ali o concorrente e o
+    /// sort estavel em blocos, e o radix ja ganha em 32 mil (0,59 contra 0,79
+    /// ms em i32; 0,54 contra 0,80 em u64) e empata em 16 mil.
+    pub radix_min_stable: usize,
+    /// Radix: bits do digito da passada MSD. 8 venceu 10 (mais baldes custam
+    /// mais no espalhamento do que economizam nas folhas).
+    pub radix_digit: u32,
+    /// Radix: chave "nua" cuja faixa cabe nestes bits e resolvida por
+    /// contagem, sem buffer.
+    pub radix_count_bits: u32,
+    /// Radix: o balde e ordenado por LSD quando sobram ate estes bits e a
+    /// comparacao e barata; acima, pelo sort da std. Em i32 (sobram 24) o LSD
+    /// vence; em u64 de faixa inteira (sobram 56) perde.
+    pub radix_lsd_cheap: u32,
+    /// O mesmo limiar quando a comparacao e cara: ali o LSD compensa por mais
+    /// passadas (registro de 6 bytes, sobram 39: 411 ms contra 741 em 30M).
+    pub radix_lsd_costly: u32,
+    /// Radix: elementos por pedaco do histograma e do espalhamento paralelos.
+    pub radix_piece: usize,
+    /// Radix: balde acima disto, e de 1/`radix_big_div` do trecho, passa pela
+    /// rotina de novo em vez de ir para uma folha sequencial.
+    pub radix_big: usize,
+    pub radix_big_div: usize,
+    /// Radix: quando a folha NAO e um LSD curto (sobram mais bits que
+    /// `radix_lsd_cheap`: chave larga, texto), o balde acima deste tamanho
+    /// leva um segundo corte MSD antes da folha. Medido com o motor, 8
+    /// threads, corte em 64 mil contra sem corte: texto de 6 bytes em u64,
+    /// 30M, 356 -> 320 ms; u64 aleatorio, 100M, 1190 -> 1073 (estavel 1796 ->
+    /// 1211). Com folha LSD curta o corte ATRAPALHA (i32, 100M: 562 -> 606),
+    /// por isso a regra olha a folha.
+    pub radix_recut: usize,
+    /// Radix: um balde com mais de 1/`radix_skew` do dado denuncia chave
+    /// enviesada; nada e movido e o caminho por comparacao assume.
+    pub radix_skew: usize,
+    /// Radix: balde menor que isto vai direto para o sort da std.
+    pub radix_leaf_min: usize,
     pub route: Route,
 }
 
@@ -249,6 +411,18 @@ impl Tuning {
             random_percent: 35,
             cheap_ns: 10,
             force_cheap: None,
+            radix_min: if e <= 4 { 131_072 } else { 524_288 },
+            radix_min_stable: 32_768,
+            radix_digit: 8,
+            radix_count_bits: 16,
+            radix_lsd_cheap: 24,
+            radix_lsd_costly: 40,
+            radix_piece: 65_536,
+            radix_big: 2 << 20,
+            radix_big_div: 16,
+            radix_recut: 65_536,
+            radix_skew: 4,
+            radix_leaf_min: 128,
             route: Route::Auto,
         }
     }
@@ -275,6 +449,23 @@ pub(crate) fn sort_with<T, F>(
     T: Copy + Send + Sync,
     F: Fn(&T, &T) -> Ordering + Sync,
 {
+    sort_with_key(arr, cmp, stable, t, scratch, &NoKey);
+}
+
+/// `sort_with` com a estrategia de chave do caminho caotico: `NoKey` (so
+/// comparacao), `Bare`, `Exact` ou `Prefix`.
+pub(crate) fn sort_with_key<T, F, K>(
+    arr: &mut [T],
+    cmp: &F,
+    stable: bool,
+    t: &Tuning,
+    scratch: Option<&mut Vec<T>>,
+    key: &K,
+) where
+    T: Copy + Send + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
+{
     let n = arr.len();
     if n < 2 {
         return;
@@ -292,7 +483,7 @@ pub(crate) fn sort_with<T, F>(
     let cheap = t.force_cheap.unwrap_or(probe.cheap);
     if rate > t.chaos_percent {
         let kind = if rate > t.random_percent { Chaos::Random } else { Chaos::ShortRuns };
-        sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap);
+        sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap, key);
         return;
     }
     // ATALHO DO INSTAVEL: dado globalmente ascendente, com desordem espalhada
@@ -318,8 +509,8 @@ pub(crate) fn sort_with<T, F>(
         _ => usize::MAX,
     };
     match detect_runs(arr, cmp, t.detect_block, t.min_run, limit) {
-        Some(runs) => sort_structured(arr, &runs, cmp, stable, t, scratch, cheap),
-        None => sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap),
+        Some(runs) => sort_structured(arr, &runs, cmp, stable, t, scratch, cheap, key),
+        None => sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap, key),
     }
 }
 
@@ -541,18 +732,32 @@ where
             // run so. Sem isto o dente de serra em faixas disjuntas ficava com
             // um run a cada troca de direcao (medido: 1,25x de ganho contra
             // 11x com a devolucao).
+            //
+            // O roubo pode levar MAIS de um elemento: a varredura ascendente
+            // aceita empate, entao em ... 3 9 9 | 8 7 6 os dois 9 ficam a
+            // esquerda. Devolver so um deixava o ascendente terminando em 9 e
+            // o array inteiro ia para um merge (medido em int32, 30M, 1000
+            // dentes: 13,6 ms sem a duplicata, 66 ms com UMA duplicata no
+            // topo de um dente). Devolve-se o plato final inteiro; com dois ou
+            // mais iguais o descendente passa a ter chave repetida.
             let mut start = head;
             if out.len() > first {
                 let last = out.len() - 1;
                 let prev = out[last];
-                if prev.kind() == ASC
-                    && prev.len() >= 2
-                    && cmp(&arr[head - 2], &arr[tail - 1]) != Greater
-                {
-                    let l = prev.len() - 1;
-                    out[last] = Run::new(if l == 1 { FLAT } else { ASC }, l);
-                    start = head - 1;
-                    count.prev_max = head - 2;
+                if prev.kind() == ASC && prev.len() >= 2 {
+                    let mut k = 1;
+                    while k < prev.len() - 1 && cmp(&arr[head - 1 - k], &arr[head - 1]) == Equal {
+                        k += 1;
+                    }
+                    if cmp(&arr[head - 1 - k], &arr[tail - 1]) != Greater {
+                        let l = prev.len() - k;
+                        out[last] = Run::new(if l == 1 { FLAT } else { ASC }, l);
+                        start = head - k;
+                        count.prev_max = head - 1 - k;
+                        if k > 1 {
+                            ties = true;
+                        }
+                    }
                 }
             }
             out.push(Run::new(if ties { DESC_TIES } else { DESC }, tail - start));
@@ -951,7 +1156,8 @@ fn prefix_sums(lens: &[usize]) -> Vec<usize> {
     offsets
 }
 
-fn sort_structured<T, F>(
+#[allow(clippy::too_many_arguments)]
+fn sort_structured<T, F, K>(
     arr: &mut [T],
     runs: &[Run],
     cmp: &F,
@@ -959,9 +1165,11 @@ fn sort_structured<T, F>(
     t: &Tuning,
     scratch: Option<&mut Vec<T>>,
     cheap: bool,
+    key: &K,
 ) where
     T: Copy + Send + Sync,
     F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
 {
     let n = arr.len();
     let plan = plan_segments(runs, t.min_run, t.chunk);
@@ -975,7 +1183,7 @@ fn sort_structured<T, F>(
         let fragmented = plan.lens.len() > allowed
             && runs_after_coalesce(arr, &plan, &offsets, cmp) > allowed;
         if fragmented {
-            sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap);
+            sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap, key);
             return;
         }
         // O escudo foi enganado e a maior parte do dado nao tem run que se
@@ -985,7 +1193,7 @@ fn sort_structured<T, F>(
         // comprimento do dente.
         if !stable && plan.sorted_elems * 2 > n {
             let kind = if runs.len() * 6 > n { Chaos::Random } else { Chaos::ShortRuns };
-            sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap);
+            sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap, key);
             return;
         }
     }
@@ -1045,18 +1253,43 @@ enum Chaos {
     Fragmented,
 }
 
-fn sort_chaotic<T, F>(
+#[allow(clippy::too_many_arguments)]
+fn sort_chaotic<T, F, K>(
     arr: &mut [T],
     cmp: &F,
     stable: bool,
     t: &Tuning,
-    scratch: Option<&mut Vec<T>>,
+    mut scratch: Option<&mut Vec<T>>,
     kind: Chaos,
     cheap: bool,
+    key: &K,
 ) where
     T: Copy + Send + Sync,
     F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
 {
+    // RADIX: dado aleatorio de fato e chave conhecida. Vale para os dois
+    // motores. Se a rotina desistir (chave enviesada, sem memoria para o
+    // buffer) nada foi movido e o caminho por comparacao abaixo segue igual.
+    // Runs curtos e dado fragmentado continuam por comparacao: ali ha ordem
+    // local que o radix nao aproveita.
+    let radix_min = if stable { t.radix_min_stable } else { t.radix_min };
+    if K::ENABLED && kind == Chaos::Random && arr.len() >= radix_min {
+        // No estavel a folha por comparacao e o `sort` estavel, mais caro que
+        // o `sort_unstable`: o LSD compensa por mais passadas mesmo com
+        // comparacao barata (texto de 6 bytes em u64, 30M: 384 ms com folha
+        // LSD contra 554 com folha por comparacao).
+        let rx = Radix {
+            cmp,
+            key,
+            stable,
+            t,
+            lsd_max: if cheap && !stable { t.radix_lsd_cheap } else { t.radix_lsd_costly },
+        };
+        if radix_sort(arr, &rx, scratch.as_mut().map(|v| &mut **v)) {
+            return;
+        }
+    }
     // INSTAVEL: o quicksort paralelo trabalha no lugar e sem buffer, mas so
     // em dois casos.
     //
@@ -1101,6 +1334,494 @@ fn sort_chaotic<T, F>(
     offsets.push(n);
     let offsets = coalesce(arr, offsets, cmp);
     merge_segments(arr, &offsets, cmp, t, scratch);
+}
+
+// =====================================================================
+//  CAMINHO CAOTICO COM CHAVE: RADIX
+//
+//  Quando o chamador diz quais sao os bits da chave, o dado aleatorio nao
+//  precisa de comparacao:
+//
+//    1. AMOSTRA (de graca): 1024 elementos espalhados. Se um balde dos bits
+//       altos ficaria com mais de 1/4 deles, a chave e enviesada e a rotina
+//       desiste antes de varrer o array.
+//    2. FAIXA: uma varredura paralela (AND e OR das chaves) diz quais bits
+//       variam. Chave "nua" com ate 16 bits variando: CONTAGEM -- histograma
+//       paralelo e preenchimento paralelo, sem buffer.
+//    3. HISTOGRAMA dos 8 bits mais altos que variam. Se um balde passaria de
+//       1/4 do dado (a amostra errou), desiste: nada foi movido ainda.
+//    4. So entao o buffer e alocado e o array e ESPALHADO em 256 baldes, em
+//       paralelo: o destino e fatiado de antemao em faixas disjuntas
+//       [balde][pedaco], cada pedaco escreve nas suas.
+//    5. Cada balde, em paralelo e dentro do cache: radix LSD sequencial se
+//       sobram poucos bits, sort da std se sobram muitos.
+//    6. Balde grande demais passa pela rotina de novo.
+//
+//  Medido em 30M / 100M aleatorios, 8 threads, buffer alocado no cronometro,
+//  contra o quicksort paralelo (protótipo de 2026-11-17, ver CLAUDE.md):
+//  i32 344 -> 152 ms / 1274 -> 528; u64 406 -> 278 / 1463 -> 1084; 64 valores
+//  em i32 132 -> 23; enviesado (90% em 0..1000) empata.
+//
+//  Por que MSD + folha e nao LSD puro: o LSD varre o array inteiro duas vezes
+//  por byte da chave (16 varreduras em u64, onde perde do quicksort: 540
+//  contra 372 ms). A passada MSD unica deixa o resto no cache e nao depende
+//  da largura da chave.
+//
+//  ESTABILIDADE. O espalhamento percorre os pedacos em ordem e cada balde
+//  recebe primeiro o que veio do pedaco 0, depois do 1...: preserva a ordem
+//  dos iguais. O LSD e estavel por construcao. A folha por comparacao usa o
+//  `sort` estavel quando o motor e o estavel. A contagem so existe para chave
+//  nua, em que iguais sao indistinguiveis.
+//
+//  A rotina devolve `false` SEM TER MOVIDO NADA quando nao serve; o chamador
+//  segue pelo caminho por comparacao.
+// =====================================================================
+
+/// Como o caminho caotico enxerga a chave de um elemento.
+pub(crate) trait Keyer<T>: Sync {
+    /// Ha chave? `NoKey` desliga o radix em tempo de compilacao.
+    const ENABLED: bool;
+    /// Chaves iguais implicam elementos iguais na comparacao. Libera a folha
+    /// LSD. `false` para prefixo: ali o desempate e sempre por comparacao.
+    const EXACT: bool;
+    /// O elemento e a propria chave e se reconstroi dos bits. Libera a
+    /// contagem.
+    const BARE: bool;
+    fn bits(&self, x: &T) -> u64;
+    fn rebuild(&self, bits: u64) -> T;
+}
+
+/// Sem chave: so comparacao. E o que as entradas sem `radix` no nome usam.
+pub(crate) struct NoKey;
+impl<T> Keyer<T> for NoKey {
+    const ENABLED: bool = false;
+    const EXACT: bool = false;
+    const BARE: bool = false;
+    #[inline(always)]
+    fn bits(&self, _: &T) -> u64 {
+        0
+    }
+    fn rebuild(&self, _: u64) -> T {
+        unreachable!("NoKey nao reconstroi elemento")
+    }
+}
+
+/// O elemento e um inteiro: ele e a chave.
+pub(crate) struct Bare;
+impl<T: RadixKey> Keyer<T> for Bare {
+    const ENABLED: bool = true;
+    const EXACT: bool = true;
+    const BARE: bool = true;
+    #[inline(always)]
+    fn bits(&self, x: &T) -> u64 {
+        x.to_radix()
+    }
+    #[inline(always)]
+    fn rebuild(&self, bits: u64) -> T {
+        T::from_radix(bits)
+    }
+}
+
+/// A chave extraida decide a ordem inteira; o elemento pode levar mais dado.
+pub(crate) struct Exact<K>(pub K);
+impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Exact<K> {
+    const ENABLED: bool = true;
+    const EXACT: bool = true;
+    const BARE: bool = false;
+    #[inline(always)]
+    fn bits(&self, x: &T) -> u64 {
+        (self.0)(x)
+    }
+    fn rebuild(&self, _: u64) -> T {
+        unreachable!("chave extraida nao reconstroi elemento")
+    }
+}
+
+/// A chave extraida e so o comeco da ordem; o comparador desempata.
+pub(crate) struct Prefix<K>(pub K);
+impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Prefix<K> {
+    const ENABLED: bool = true;
+    const EXACT: bool = false;
+    const BARE: bool = false;
+    #[inline(always)]
+    fn bits(&self, x: &T) -> u64 {
+        (self.0)(x)
+    }
+    fn rebuild(&self, _: u64) -> T {
+        unreachable!("prefixo nao reconstroi elemento")
+    }
+}
+
+/// O que a rotina carrega de um nivel para o outro.
+struct Radix<'a, F, K> {
+    cmp: &'a F,
+    key: &'a K,
+    stable: bool,
+    t: &'a Tuning,
+    /// Folha LSD: ate quantos bits restantes.
+    lsd_max: u32,
+}
+
+/// Sort por comparacao de um trecho grande, quando o radix nao serve nele.
+fn radix_fallback<T, F>(a: &mut [T], cmp: &F, stable: bool)
+where
+    T: Send,
+    F: Fn(&T, &T) -> Ordering + Sync,
+{
+    if stable {
+        a.par_sort_by(|x, y| cmp(x, y));
+    } else {
+        a.par_sort_unstable_by(|x, y| cmp(x, y));
+    }
+}
+
+/// Ordena `arr` por radix. Devolve `false`, sem ter movido nenhum elemento,
+/// quando a chave e enviesada, quando o prefixo nao distingue nada ou quando
+/// nao ha memoria para o buffer.
+fn radix_sort<T, F, K>(arr: &mut [T], rx: &Radix<F, K>, scratch: Option<&mut Vec<T>>) -> bool
+where
+    T: Copy + Send + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
+{
+    let n = arr.len();
+    if n < 2 {
+        return true;
+    }
+    let t = rx.t;
+    if radix_skewed(arr, rx.key, t) {
+        return false;
+    }
+    let (and, or) = radix_range(arr, rx.key);
+    let diff = and ^ or;
+    if diff == 0 {
+        // Todas as chaves iguais. Com chave exata nao ha o que ordenar; com
+        // prefixo, ele nao distingue nada e a comparacao assume.
+        return K::EXACT;
+    }
+    let hi = 64 - diff.leading_zeros();
+    if K::BARE && hi <= t.radix_count_bits {
+        radix_count(arr, rx.key, or, hi);
+        return true;
+    }
+    // O histograma vem ANTES do buffer: se a chave for enviesada, desistir
+    // nao custou nem a alocacao.
+    let plan = match radix_plan(arr, rx.key, t, hi) {
+        Some(p) => p,
+        None => return false,
+    };
+    let mut owned: Vec<T> = Vec::new();
+    let buf: &mut [T] = match scratch {
+        Some(v) if v.len() >= n => &mut v[..n],
+        Some(v) => {
+            v.clear();
+            if v.try_reserve_exact(n).is_err() {
+                return false;
+            }
+            arr.par_iter().copied().collect_into_vec(v);
+            &mut v[..]
+        }
+        None => {
+            if owned.try_reserve_exact(n).is_err() {
+                return false;
+            }
+            arr.par_iter().copied().collect_into_vec(&mut owned);
+            &mut owned[..]
+        }
+    };
+    radix_scatter(arr, buf, &plan, rx.key);
+    radix_buckets(arr, buf, &plan, rx, 0);
+    true
+}
+
+/// A chave e enviesada? Olha 1024 elementos espalhados: se a faixa deles e
+/// larga e um balde dos bits altos fica com mais de 1/`radix_skew` da amostra,
+/// o espalhamento nao dividiria o trabalho.
+fn radix_skewed<T, K>(a: &[T], key: &K, t: &Tuning) -> bool
+where
+    K: Keyer<T>,
+{
+    let n = a.len();
+    let m = 1024.min(n);
+    let step = n / m;
+    let (mut and, mut or) = (u64::MAX, 0u64);
+    for i in 0..m {
+        let b = key.bits(&a[i * step]);
+        and &= b;
+        or |= b;
+    }
+    let hi = 64 - (and ^ or).leading_zeros();
+    if K::BARE && hi <= t.radix_count_bits {
+        return false; // candidato a contagem; a varredura exata decide
+    }
+    if hi == 0 {
+        return true; // a amostra inteira tem a mesma chave
+    }
+    let b = t.radix_digit.clamp(1, hi.min(16));
+    let shift = hi - b;
+    let mask = (1u64 << b) - 1;
+    let mut h = vec![0usize; 1usize << b];
+    for i in 0..m {
+        h[((key.bits(&a[i * step]) >> shift) & mask) as usize] += 1;
+    }
+    h.iter().any(|&c| c * t.radix_skew > m)
+}
+
+/// AND e OR de todas as chaves: os bits em que diferem sao os que variam.
+fn radix_range<T, K>(a: &[T], key: &K) -> (u64, u64)
+where
+    T: Sync,
+    K: Keyer<T>,
+{
+    a.par_chunks(1 << 16)
+        .map(|c| {
+            c.iter().fold((u64::MAX, 0u64), |(and, or), x| {
+                let b = key.bits(x);
+                (and & b, or | b)
+            })
+        })
+        .reduce(|| (u64::MAX, 0u64), |l, r| (l.0 & r.0, l.1 | r.1))
+}
+
+/// Chave nua de faixa pequena: conta e preenche, sem buffer. `or` e o OU de
+/// todas as chaves e `hi` quantos bits de baixo variam.
+fn radix_count<T, K>(a: &mut [T], key: &K, or: u64, hi: u32)
+where
+    T: Copy + Send + Sync,
+    K: Keyer<T>,
+{
+    let n = a.len();
+    let nb = 1usize << hi;
+    let low = (nb - 1) as u64;
+    let base = or & !low; // os bits de cima sao iguais em todas as chaves
+    let pieces = (n >> 20).clamp(1, 16);
+    let chunk = (n + pieces - 1) / pieces;
+    let hists: Vec<Vec<usize>> = a
+        .par_chunks(chunk)
+        .map(|c| {
+            let mut h = vec![0usize; nb];
+            for x in c {
+                h[(key.bits(x) & low) as usize] += 1;
+            }
+            h
+        })
+        .collect();
+    let mut parts: Vec<(&mut [T], T)> = Vec::new();
+    let mut rest: &mut [T] = a;
+    for d in 0..nb {
+        let c: usize = hists.iter().map(|h| h[d]).sum();
+        if c > 0 {
+            let (s, r) = rest.split_at_mut(c);
+            parts.push((s, key.rebuild(base | d as u64)));
+            rest = r;
+        }
+    }
+    parts.into_par_iter().for_each(|(s, v)| {
+        if s.len() > (1 << 17) {
+            s.par_chunks_mut(1 << 16).for_each(|c| c.fill(v));
+        } else {
+            s.fill(v);
+        }
+    });
+}
+
+/// Histograma da passada MSD de um trecho.
+struct RadixPlan {
+    /// Bits abaixo do digito: o que sobra para a folha.
+    shift: u32,
+    mask: u64,
+    nb: usize,
+    /// Elementos por pedaco.
+    chunk: usize,
+    /// Um histograma por pedaco.
+    hists: Vec<Vec<usize>>,
+    /// Limites dos baldes no destino (`nb + 1` valores).
+    bounds: Vec<usize>,
+}
+
+/// Conta o digito MSD -- os `radix_digit` bits mais altos entre os `hi` que
+/// variam. `None` se um balde ficaria com mais de 1/`radix_skew` do trecho.
+fn radix_plan<T, K>(a: &[T], key: &K, t: &Tuning, hi: u32) -> Option<RadixPlan>
+where
+    T: Sync,
+    K: Keyer<T>,
+{
+    let n = a.len();
+    let b = t.radix_digit.clamp(1, hi.min(16));
+    let shift = hi - b;
+    let nb = 1usize << b;
+    let mask = (nb - 1) as u64;
+    let pieces = (n / t.radix_piece.max(1)).clamp(1, 128);
+    let chunk = (n + pieces - 1) / pieces;
+    let hists: Vec<Vec<usize>> = a
+        .par_chunks(chunk)
+        .map(|c| {
+            let mut h = vec![0usize; nb];
+            for x in c {
+                h[((key.bits(x) >> shift) & mask) as usize] += 1;
+            }
+            h
+        })
+        .collect();
+    let mut bounds = vec![0usize; nb + 1];
+    for d in 0..nb {
+        bounds[d + 1] = bounds[d] + hists.iter().map(|h| h[d]).sum::<usize>();
+    }
+    let limit = n / t.radix_skew.max(1);
+    if (0..nb).any(|d| bounds[d + 1] - bounds[d] > limit) {
+        return None;
+    }
+    Some(RadixPlan { shift, mask, nb, chunk, hists, bounds })
+}
+
+/// Espalha `src` em `dst` conforme o plano, em paralelo. O destino e fatiado
+/// antes: balde por balde e, dentro do balde, pedaco por pedaco. Cada pedaco
+/// recebe as suas `nb` faixas e escreve por elas -- sem `unsafe`, e na ordem
+/// que mantem os iguais como vieram.
+fn radix_scatter<T, K>(src: &[T], dst: &mut [T], p: &RadixPlan, key: &K)
+where
+    T: Copy + Send + Sync,
+    K: Keyer<T>,
+{
+    let mut slots: Vec<Vec<&mut [T]>> =
+        (0..p.hists.len()).map(|_| Vec::with_capacity(p.nb)).collect();
+    let mut rest: &mut [T] = dst;
+    for d in 0..p.nb {
+        for (piece, h) in p.hists.iter().enumerate() {
+            let (a, r) = rest.split_at_mut(h[d]);
+            slots[piece].push(a);
+            rest = r;
+        }
+    }
+    src.par_chunks(p.chunk).zip(slots.into_par_iter()).for_each(|(c, mut cur)| {
+        for x in c {
+            let d = ((key.bits(x) >> p.shift) & p.mask) as usize;
+            let s = std::mem::take(&mut cur[d]);
+            if let Some((head, tail)) = s.split_first_mut() {
+                *head = *x;
+                cur[d] = tail;
+            }
+        }
+    });
+}
+
+/// Ordena cada balde. O dado esta em `buf`; o resultado termina em `arr`.
+fn radix_buckets<T, F, K>(arr: &mut [T], buf: &mut [T], p: &RadixPlan, rx: &Radix<F, K>, depth: u32)
+where
+    T: Copy + Send + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
+{
+    let t = rx.t;
+    let big = (arr.len() / t.radix_big_div.max(1)).max(t.radix_big);
+    let shift = p.shift;
+    // Folha estreita = LSD de poucas passadas: ali so reentra o balde grande
+    // de verdade. Folha larga (muitas passadas ou comparacao): um segundo
+    // corte MSD sai mais barato que ordenar um balde que nao cabe no cache.
+    let narrow = K::EXACT && shift <= t.radix_lsd_cheap;
+    let recut = if narrow { big } else { t.radix_recut.min(big) };
+    let mut pairs: Vec<(&mut [T], &mut [T])> = Vec::with_capacity(p.nb);
+    let (mut ra, mut rb): (&mut [T], &mut [T]) = (arr, buf);
+    for w in p.bounds.windows(2) {
+        let len = w[1] - w[0];
+        let (a, r) = ra.split_at_mut(len);
+        ra = r;
+        let (s, r) = rb.split_at_mut(len);
+        rb = r;
+        if len > 0 {
+            pairs.push((a, s));
+        }
+    }
+    pairs.into_par_iter().for_each(|(a, s)| {
+        let len = a.len();
+        if K::EXACT && shift == 0 {
+            // O digito cobriu todos os bits que variam: chaves identicas.
+            a.copy_from_slice(s);
+        } else if len > recut && depth < 6 {
+            // Balde grande (dado com concentracao, ou folha larga): de volta
+            // para `arr` e a rotina de novo, paralela por dentro, com o
+            // proprio pedaco do buffer como rascunho.
+            par_copy(a, s, t.par_grain);
+            radix_bucket(a, s, rx, depth + 1);
+        } else if K::EXACT && len >= t.radix_leaf_min && shift <= rx.lsd_max {
+            radix_lsd(s, a, rx.key, shift);
+        } else {
+            a.copy_from_slice(s);
+            if len > big {
+                radix_fallback(a, rx.cmp, rx.stable);
+            } else {
+                leaf_sort(a, rx.cmp, rx.stable);
+            }
+        }
+    });
+}
+
+/// A rotina de novo em um balde grande. O dado esta em `a`; `s` e rascunho.
+fn radix_bucket<T, F, K>(a: &mut [T], s: &mut [T], rx: &Radix<F, K>, depth: u32)
+where
+    T: Copy + Send + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
+{
+    let (and, or) = radix_range(a, rx.key);
+    let diff = and ^ or;
+    if diff == 0 {
+        if !K::EXACT {
+            radix_fallback(a, rx.cmp, rx.stable);
+        }
+        return;
+    }
+    let hi = 64 - diff.leading_zeros();
+    if K::BARE && hi <= rx.t.radix_count_bits {
+        radix_count(a, rx.key, or, hi);
+        return;
+    }
+    match radix_plan(a, rx.key, rx.t, hi) {
+        Some(p) => {
+            radix_scatter(a, s, &p, rx.key);
+            radix_buckets(a, s, &p, rx, depth);
+        }
+        None => radix_fallback(a, rx.cmp, rx.stable),
+    }
+}
+
+/// Radix LSD sequencial de um balde, sobre os `low_bits` de baixo da chave
+/// (os de cima sao iguais no balde inteiro). O dado esta em `src`; o
+/// resultado termina em `dst`. Passada de digito constante e pulada.
+fn radix_lsd<T, K>(src: &mut [T], dst: &mut [T], key: &K, low_bits: u32)
+where
+    T: Copy,
+    K: Keyer<T>,
+{
+    let passes = (low_bits + 7) / 8;
+    let mut in_src = true;
+    for p in 0..passes {
+        let sh = p * 8;
+        let (a, b): (&[T], &mut [T]) =
+            if in_src { (&*src, &mut *dst) } else { (&*dst, &mut *src) };
+        let mut h = [0usize; 256];
+        for x in a {
+            h[((key.bits(x) >> sh) & 0xFF) as usize] += 1;
+        }
+        if h.iter().any(|&c| c == a.len()) {
+            continue;
+        }
+        let mut pos = [0usize; 256];
+        let mut acc = 0usize;
+        for d in 0..256 {
+            pos[d] = acc;
+            acc += h[d];
+        }
+        for x in a {
+            let d = ((key.bits(x) >> sh) & 0xFF) as usize;
+            b[pos[d]] = *x;
+            pos[d] += 1;
+        }
+        in_src = !in_src;
+    }
+    if in_src {
+        dst.copy_from_slice(src);
+    }
 }
 
 // =====================================================================

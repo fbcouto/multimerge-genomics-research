@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use rayon::prelude::*;
 use flate2::read::MultiGzDecoder;
-use crate::kmer::Kmer128;
 
 /// Processa múltiplos ficheiros FASTA (suporta .gz e texto limpo) em paralelo
 pub fn processar_fasta_lote(caminhos: Vec<String>, k: u8) -> Vec<u128> {
@@ -28,13 +27,8 @@ pub fn processar_fasta_lote(caminhos: Vec<String>, k: u8) -> Vec<u128> {
             let l = linha.trim();
             if l.starts_with('>') {
                 // Quando acha um novo cabeçalho, processa a sequência acumulada anterior
-                if seq_atual.len() >= k as usize {
-                    for janela in seq_atual.as_bytes().windows(k as usize) {
-                        if !janela.contains(&b'N') && !janela.contains(&b'n') {
-                            kmers_locais.push(Kmer128::encode(janela).bits);
-                        }
-                    }
-                }
+                // Uma base por vez, e um cromossomo dividido entre as threads.
+                crate::kmer::kmers_da_sequencia(seq_atual.as_bytes(), k as usize, &mut kmers_locais);
                 seq_atual.clear();
             } else {
                 seq_atual.push_str(l);
@@ -43,19 +37,14 @@ pub fn processar_fasta_lote(caminhos: Vec<String>, k: u8) -> Vec<u128> {
         }
         
         // Não esquecer de processar a última sequência do ficheiro!
-        if seq_atual.len() >= k as usize {
-            for janela in seq_atual.as_bytes().windows(k as usize) {
-                if !janela.contains(&b'N') && !janela.contains(&b'n') {
-                    kmers_locais.push(Kmer128::encode(janela).bits);
-                }
-            }
-        }
-        
+        crate::kmer::kmers_da_sequencia(seq_atual.as_bytes(), k as usize, &mut kmers_locais);
+
         kmers_locais
     }).collect();
 
     println!("🔄 Sorting {} k-mers from the FASTA batch...", todos_kmers.len());
-    crate::multimerge_core::multi_merge_sort_stable(&mut todos_kmers);
+    // Motor estavel, com a chave informada: dado sem estrutura vai por radix.
+    crate::kmer_count::sort_kmers(&mut todos_kmers, k);
     todos_kmers.dedup(); 
 
     todos_kmers

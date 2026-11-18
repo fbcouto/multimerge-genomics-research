@@ -90,7 +90,7 @@
 // =====================================================================
 
 use crate::externo::{abre_leitura, Escritor};
-use crate::multimerge_core::{multi_merge_sort_stable, multi_merge_sort_stable_by};
+use crate::multimerge_core::{multi_merge_sort_stable, multi_merge_sort_stable_by, multi_merge_sort_stable_radix};
 use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -1097,12 +1097,12 @@ fn sketch_files(files: &[String], k: usize, max_hash: u64) -> Result<(RefSketch,
         // Keeps the memory near the number of distinct hashes even for a
         // genome full of repeats.
         if all.len() > (1 << 24) {
-            multi_merge_sort_stable(&mut all);
+            multi_merge_sort_stable_radix(&mut all);
             all.dedup();
         }
         Ok(())
     })?;
-    multi_merge_sort_stable(&mut all);
+    multi_merge_sort_stable_radix(&mut all);
     all.dedup();
     s.hashes = all;
     Ok((s, first))

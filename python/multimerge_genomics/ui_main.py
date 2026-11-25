@@ -903,7 +903,7 @@ def example_files(chosen, EXAMPLES_DIR, mmg, mo, os, pl):
     # Downloaded from the GitHub release the first time an example needs them,
     # unless the zip is already in this folder. The 16S data (the mothur MiSeq
     # SOP) carry no explicit licence and are not published.
-    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.1/"
+    _PACKS_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.2/"
     DEMO_PACKS = {
         "human": (HUMAN_DIR, "3", "mmgen_demo_human_v3.zip", _PACKS_URL + "mmgen_demo_human_v3.zip",
                   "49 MB of public data cut from Genome in a Bottle, ClinVar, RefSeq, 1000 Genomes and the PGS Catalog"),
@@ -5186,7 +5186,7 @@ def pgx_page_download(btn_get_hla, btn_get_pgx_tables, btn_get_pharmcat, error_p
     PGX_TABLES_VERSION = "cpic-v1.61.0"
     PGX_TABLES_DIR = f"mmgen_tools/pgx/{PGX_TABLES_VERSION}"
     PGX_TABLES_ZIP = f"mmgen_pgx_tables_{PGX_TABLES_VERSION}.zip"
-    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.1/" + PGX_TABLES_ZIP
+    PGX_TABLES_URL = "https://github.com/fbcouto/multimerge-genomics-research/releases/download/v2.5.2/" + PGX_TABLES_ZIP
     PGX_TABLES_SHA256 = "e329b8ec6e8567dc2570cd3823a96401e54135b3a5545305fb05c7265caa1f85"
     PGX_HLA_FILES = ("A_gen.fasta", "B_gen.fasta", "C_gen.fasta")
     # The IPD-IMGT/HLA release the tables pin in bam_genes.json (the engine uses no other):

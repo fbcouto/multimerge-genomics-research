@@ -928,7 +928,7 @@ try:
              lambda t: "gene03" in t, None),
             (30, "Test variants against an outcome", "Recovery score, adjusted for age, sex, hospital and ancestry", "📐 Test",
              "People analysed|ERROR", lambda t: "rs12190259" in t and "115" in t, "mmgen_examples/association/phenotypes.association.tsv"),
-            (30, "Study power: how many people?", "Five patients: can anything be detected?", "Compute the power", "Study power|ERROR",
+            (30, "Study power: how many people?", "Five patients: can anything be detected?", "Compute the power", "🧮 Study power|ERROR",
              lambda t: "164" in t, None),
             (31, "Screen samples for adventitious agents", "A raw material and its reagent blank (simulated)", "🛡️ Screen",
              "organisms with reads|ERROR", lambda t: "background" in t and "recovered" in t, "mmgen_examples/contaminants/screen.html"),

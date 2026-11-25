@@ -3,49 +3,51 @@
 // esta copia -- altere la, rode os testes la e copie de novo.
 
 // =====================================================================
-//  ADAPTIVE PARALLEL MULTIMERGE SORT -- motor Rust
+//  ADAPTIVE PARALLEL MULTIMERGE SORT -- Rust engine
 //
-//  Dois motores sobre a mesma deteccao de runs e a mesma arvore de merge:
+//  Two engines over the same run detection and the same merge tree:
 //
-//    multi_merge_sort          NAO estavel. E o padrao.
-//    multi_merge_sort_stable   estavel. Para quando a ordem relativa de chaves
-//                              iguais importa (SGBD, ordenacao em cascata).
+//    multi_merge_sort          NOT stable. The default.
+//    multi_merge_sort_stable   stable. For when the relative order of equal
+//                              keys matters (DBMS, cascaded sorting).
 //
-//  Cada um tem as variantes `_by` (comparador) e `_by_key` (extrator de chave).
+//  Each one has the variants `_by` (comparator) and `_by_key` (key extractor).
 //
 //  sort(arr)
-//    |- n pequeno .......................... sort da std
-//    |- ESCUDO (janelas espalhadas) ........ caotico -> caminho caotico
-//    '- DETECCAO de runs (monoide, paralela)
-//         |- runs curtos consecutivos ...... viram UM bloco, ordenado pela std
-//         |- runs descendentes ............. revertidos no lugar
-//         |- runs ja em ordem global ....... fundidos sem mover dado
-//         '- o que sobrar .................. arvore de merge k-vias
+//    |- small n ............................ std sort
+//    |- SHIELD (scattered windows) ......... chaotic -> chaotic path
+//    '- run DETECTION (monoid, parallel)
+//         |- consecutive short runs ........ become ONE block, sorted by the std
+//         |- descending runs ............... reversed in place
+//         |- runs already in global order .. merged without moving data
+//         '- whatever is left .............. k-way merge tree
 //
-//  ONDE OS DOIS MOTORES DIFEREM
+//  WHERE THE TWO ENGINES DIFFER
 //
-//  1. Run descendente com chaves repetidas. Um trecho 9 9 7 7 3 e descendente
-//     (nao-crescente), mas inverte-lo troca a ordem dos iguais. O instavel
-//     inverte e pronto. O estavel inverte e depois desinverte cada bloco de
-//     iguais (`restore_ties`), o que devolve a ordem original entre eles. Os
-//     dois resolvem o caso em O(n); antes o motor quebrava o trecho em um run
-//     por plato e pagava a arvore inteira.
-//  2. Bloco sem estrutura. O estavel usa o `sort` da std (driftsort), o
-//     instavel usa o `sort_unstable` (ipnsort).
-//  3. Dado caotico. O estavel ordena em blocos e funde pela arvore; o instavel
-//     delega ao quicksort paralelo, que trabalha no lugar e nao aloca buffer.
+//  1. Descending run with repeated keys. A stretch 9 9 7 7 3 is descending
+//     (non-increasing), but reversing it swaps the order of the equals. The
+//     unstable engine reverses and is done. The stable one reverses and then
+//     un-reverses each block of equals (`restore_ties`), which gives back the
+//     original order among them. Both solve the case in O(n); before, the
+//     engine broke the stretch into one run per plateau and paid for the
+//     whole tree.
+//  2. Block without structure. The stable engine uses the std `sort`
+//     (driftsort), the unstable one uses `sort_unstable` (ipnsort).
+//  3. Chaotic data. The stable engine sorts in blocks and merges through the
+//     tree; the unstable one delegates to the parallel quicksort, which works
+//     in place and allocates no buffer.
 //
-//  CHAVE RADIX
+//  RADIX KEY
 //
-//  As entradas `_radix`, `_by_radix_key` e `_by_prefix_key` dizem ao motor
-//  quais sao os BITS da chave. Com isso o dado aleatorio deixa de passar por
-//  comparacao: uma passada de radix pelos bits altos e cada balde resolvido
-//  dentro do cache (ver "CAMINHO CAOTICO COM CHAVE"). Vale para os dois
-//  motores; o resto do caminho -- escudo, runs, arvore -- nao muda.
+//  The `_radix`, `_by_radix_key` and `_by_prefix_key` entries tell the engine
+//  what the BITS of the key are. With that, random data no longer goes
+//  through comparison: one radix pass over the high bits and each bucket
+//  solved inside the cache (see "CHAOTIC PATH WITH A KEY"). This holds for
+//  both engines; the rest of the path -- shield, runs, tree -- does not change.
 //
-//  O motor nao tem `unsafe`. `T: Copy` e o que permite ao borrow checker
-//  provar o merge bidirecional: as duas threads leem as fontes por referencia
-//  compartilhada e escrevem em metades disjuntas do destino.
+//  The engine has no `unsafe`. `T: Copy` is what lets the borrow checker
+//  prove the bidirectional merge: the two threads read the sources through a
+//  shared reference and write to disjoint halves of the destination.
 // =====================================================================
 
 use rayon::prelude::*;
@@ -56,7 +58,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 pub const KWAY_FANOUT: usize = 8;
 
 // =====================================================================
-//  API PUBLICA
+//  PUBLIC API
 // =====================================================================
 
 /// Sorts the slice. **Not stable**: equal elements may be reordered.
@@ -273,120 +275,133 @@ pub fn detect_global_trend<T: Ord + Sync>(arr: &[T]) -> Vec<i64> {
 }
 
 // =====================================================================
-//  AJUSTES
+//  TUNING
 //
-//  Um unico lugar para os limiares. `pub(crate)` para que os testes forcem
-//  recursao profunda com dados pequenos, e para que uma sonda de medicao
-//  varra valores sem recompilar o motor.
+//  A single place for the thresholds. `pub(crate)` so that the tests can force
+//  deep recursion with small data, and so that a measurement probe can sweep
+//  values without recompiling the engine.
 // =====================================================================
 
-// `Structured` e `Chaotic` so sao construidos pelos testes e pela sonda de
-// medicao: forcam um caminho para exercita-lo ou cronometra-lo isolado.
+// `Structured` and `Chaotic` are only built by the tests and by the measurement
+// probe: they force a path in order to exercise it or time it in isolation.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    /// O escudo decide.
+    /// The shield decides.
     Auto,
-    /// Forca deteccao de runs + arvore.
+    /// Forces run detection + tree.
     Structured,
-    /// Forca o caminho caotico.
+    /// Forces the chaotic path.
     Chaotic,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Tuning {
-    /// Ate aqui o sort da std resolve sozinho.
+    /// Up to this size the std sort handles it alone.
     pub small_sort: usize,
-    /// Bloco da deteccao de runs (com 1 elemento de sobreposicao).
+    /// Block of the run detection (with 1 element of overlap).
     pub detect_block: usize,
-    /// Run mais curto que isto nao vale um no da arvore: runs curtos
-    /// consecutivos sao agrupados e ordenados como um bloco.
+    /// A run shorter than this is not worth a tree node: consecutive short
+    /// runs are grouped and sorted as one block.
     pub min_run: usize,
-    /// A arvore so entra quando, depois de encadear, os runs tem em media
-    /// pelo menos este comprimento.
+    /// The tree only comes in when, after chaining, the runs have on average
+    /// at least this length.
     ///
-    /// Em u64 a arvore sobre runs naturais e o caminho de blocos empatam de
-    /// 256 ate 16384 elementos por run, e os blocos ganham de 8% a 15% entre
-    /// 32 e 64. Com chave cara (`&str`) a arvore ganha com folga mesmo em run
-    /// curto, porque reordenar o bloco repete comparacoes que os runs ja
-    /// tinham resolvido: ordenado com 1% de trocas (run medio ~50), 367 ms
-    /// contra 520; 64 runs de 31 mil strings, 175 contra 262. O valor fica
-    /// baixo para proteger a chave cara, que e onde o erro custa mais.
+    /// On u64 the tree over natural runs and the block path tie from 256
+    /// up to 16384 elements per run, and the blocks win by 8% to 15% between
+    /// 32 and 64. With an expensive key (`&str`) the tree wins comfortably even
+    /// on a short run, because re-sorting the block repeats comparisons the runs
+    /// had already resolved: sorted with 1% swaps (average run ~50), 367 ms
+    /// vs 520; 64 runs of 31K strings, 175 vs 262. The value stays low
+    /// to protect the expensive key, which is where a mistake costs the most.
     pub struct_min_avg_run: usize,
-    /// O mesmo limiar quando a comparacao e barata. Ali o custo e mover
-    /// memoria, nao comparar, e os blocos empatam com a arvore de 256 para
-    /// cima e ganham abaixo: ordenado com 1% de trocas em 10M u64, 128 ms nos
-    /// blocos contra 146 na arvore.
+    /// The same threshold when the comparison is cheap. There the cost is
+    /// moving memory, not comparing, and the blocks tie with the tree from 256
+    /// up and win below: sorted with 1% swaps on 10M u64, 128 ms with the
+    /// blocks vs 146 with the tree.
     pub struct_min_avg_run_cheap: usize,
-    /// Piso do numero de segmentos aceitos, para arrays pequenos.
+    /// Floor on the number of accepted segments, for small arrays.
     pub min_segs: usize,
-    /// Folga do aborto antecipado da deteccao.
+    /// Slack of the detection's early abort.
     pub abort_slack: usize,
-    /// Tamanho do bloco ordenado pela std (caminho caotico estavel e teto do
-    /// agrupamento de runs curtos).
+    /// Size of the block sorted by the std (stable chaotic path, and cap on
+    /// the grouping of short runs).
     pub chunk: usize,
-    /// Grao paralelo do merge: acima disto corta por co-rank / multisequencia.
+    /// Parallel grain of the merge: above this it cuts by co-rank / multisequence.
     pub par_grain: usize,
-    /// Acima disto um pedaco de merge binario roda bidirecional (2 tarefas).
+    /// Above this a binary merge piece runs bidirectionally (2 tasks).
     pub bidir_min: usize,
-    /// No da arvore binaria abaixo disto recursa sem `rayon::join`.
+    /// A binary-tree node below this recurses without `rayon::join`.
     pub seq_node: usize,
-    /// Subarvore ate este tamanho usa merge binario; acima, k-vias.
+    /// A subtree up to this size uses the binary merge; above it, k-way.
     pub kway_min_elems: usize,
-    /// Tile do merge k-vias, em elementos.
+    /// Tile of the k-way merge, in elements.
     pub tile: usize,
-    /// Escudo: acima deste percentual de inversoes de direcao os runs sao
-    /// curtos demais para a deteccao valer a passada.
+    /// Shield: above this percentage of direction reversals the runs are too
+    /// short for detection to be worth the pass.
     pub chaos_percent: usize,
-    /// Escudo: acima deste percentual o dado e aleatorio de fato, nao apenas
-    /// de runs curtos. So interessa ao motor instavel.
+    /// Shield: above this percentage the data is truly random, not just made
+    /// of short runs. Only matters to the unstable engine.
     pub random_percent: usize,
-    /// Comparacao "barata": ate este custo medio, em nanossegundos, medido na
-    /// amostra do escudo.
+    /// "Cheap" comparison: up to this average cost, in nanoseconds, measured
+    /// on the shield's sample.
     pub cheap_ns: usize,
-    /// Fixa o veredito de custo em vez de medir. Para os testes.
+    /// Pins the cost verdict instead of measuring it. For the tests.
     pub force_cheap: Option<bool>,
-    /// Radix: abaixo deste tamanho o caminho caotico do INSTAVEL segue por
-    /// comparacao. Medido com o motor (minimo de 60, 8 threads): em i32 o
-    /// radix perde ate 65 mil (0,87 contra 0,64 ms) e ganha de 131 mil em
-    /// diante (1,04 contra 1,30); em u64 empata em 262 mil e ganha em 1M.
+    /// Radix: below this size the chaotic path of the UNSTABLE engine goes by
+    /// comparison. Measured with the engine (minimum of 60, 8 threads): on i32
+    /// radix loses up to 65K (0.87 vs 0.64 ms) and wins from 131K
+    /// on (1.04 vs 1.30); on u64 it ties at 262K and wins at 1M.
     pub radix_min: usize,
-    /// O mesmo piso para o ESTAVEL, que e mais baixo: ali o concorrente e o
-    /// sort estavel em blocos, e o radix ja ganha em 32 mil (0,59 contra 0,79
-    /// ms em i32; 0,54 contra 0,80 em u64) e empata em 16 mil.
+    /// The same floor for the STABLE engine, which is lower: there the
+    /// competitor is the stable sort in blocks, and radix already wins at 32K
+    /// (0.59 vs 0.79 ms on i32; 0.54 vs 0.80 on u64) and ties at 16K.
     pub radix_min_stable: usize,
-    /// Radix: bits do digito da passada MSD. 8 venceu 10 (mais baldes custam
-    /// mais no espalhamento do que economizam nas folhas).
+    /// Radix: the UNSTABLE engine's floor on random data with 1 thread. `radix_min` was
+    /// measured with 8 threads, against the parallel quicksort; without parallelism radix wins
+    /// from 8K elements on (1.3x to 1.9x at 8K; 1.4x to 3.1x from 16K to 262K).
+    pub radix_min_serial: usize,
+    /// Radix: the same floor with more than one thread, in elements PER THREAD, capped
+    /// at `radix_min`. The parallel quicksort scales with the threads and a small radix
+    /// does not. Measured: u64 starts winning at 16-32K with 2 threads, 32-65K with 4, 131K
+    /// with 8 and 262-524K with 24; a 16-byte pair, at 16-65K, 131K, 262K and 524K.
+    pub radix_min_thread: usize,
+    /// Radix: bits of the digit of the MSD pass. 8 beat 10 (more buckets cost
+    /// more in the scatter than they save in the leaves).
     pub radix_digit: u32,
-    /// Radix: chave "nua" cuja faixa cabe nestes bits e resolvida por
-    /// contagem, sem buffer.
+    /// Radix: a "bare" key whose range fits in these bits is solved by
+    /// counting, without a buffer.
     pub radix_count_bits: u32,
-    /// Radix: o balde e ordenado por LSD quando sobram ate estes bits e a
-    /// comparacao e barata; acima, pelo sort da std. Em i32 (sobram 24) o LSD
-    /// vence; em u64 de faixa inteira (sobram 56) perde.
+    /// Radix: the bucket is sorted by LSD when up to these bits remain and the
+    /// comparison is cheap; above that, by the std sort. On i32 (24 remain)
+    /// LSD wins; on full-range u64 (56 remain) it loses.
     pub radix_lsd_cheap: u32,
-    /// O mesmo limiar quando a comparacao e cara: ali o LSD compensa por mais
-    /// passadas (registro de 6 bytes, sobram 39: 411 ms contra 741 em 30M).
+    /// The same threshold when the comparison is expensive: there LSD pays off
+    /// even with more passes (6-byte record, 39 remain: 411 ms vs 741 on 30M).
     pub radix_lsd_costly: u32,
-    /// Radix: elementos por pedaco do histograma e do espalhamento paralelos.
+    /// Radix: elements per piece of the parallel histogram and scatter.
     pub radix_piece: usize,
-    /// Radix: balde acima disto, e de 1/`radix_big_div` do trecho, passa pela
-    /// rotina de novo em vez de ir para uma folha sequencial.
+    /// Radix: a bucket above this, and above 1/`radix_big_div` of the stretch,
+    /// goes through the routine again instead of going to a sequential leaf.
     pub radix_big: usize,
     pub radix_big_div: usize,
-    /// Radix: quando a folha NAO e um LSD curto (sobram mais bits que
-    /// `radix_lsd_cheap`: chave larga, texto), o balde acima deste tamanho
-    /// leva um segundo corte MSD antes da folha. Medido com o motor, 8
-    /// threads, corte em 64 mil contra sem corte: texto de 6 bytes em u64,
-    /// 30M, 356 -> 320 ms; u64 aleatorio, 100M, 1190 -> 1073 (estavel 1796 ->
-    /// 1211). Com folha LSD curta o corte ATRAPALHA (i32, 100M: 562 -> 606),
-    /// por isso a regra olha a folha.
+    /// Radix: when the leaf is NOT a short LSD (more bits remain than
+    /// `radix_lsd_cheap`: wide key, text), a bucket above this size gets
+    /// a second MSD cut before the leaf. Measured with the engine, 8
+    /// threads, cut at 64K vs no cut: 6-byte text in u64,
+    /// 30M, 356 -> 320 ms; random u64, 100M, 1190 -> 1073 (stable 1796 ->
+    /// 1211). With a short LSD leaf the cut HURTS (i32, 100M: 562 -> 606),
+    /// which is why the rule looks at the leaf.
     pub radix_recut: usize,
-    /// Radix: um balde com mais de 1/`radix_skew` do dado denuncia chave
-    /// enviesada; nada e movido e o caminho por comparacao assume.
+    /// Radix: a bucket with more than 1/`radix_skew` of the data reveals a
+    /// skewed key; nothing is moved and the comparison path takes over.
     pub radix_skew: usize,
-    /// Radix: balde menor que isto vai direto para o sort da std.
+    /// Radix: a bucket smaller than this goes straight to the std sort.
     pub radix_leaf_min: usize,
+    /// Radix: with a radix key and a cheap comparison, the merge tree is only used when at most
+    /// this many runs remain after chaining. Measured from 320K to 5M elements, 1 to 24 threads:
+    /// with 8 runs the tree wins or ties; with 48 radix already wins or ties in every case.
+    pub radix_max_runs: usize,
     pub route: Route,
 }
 
@@ -412,7 +427,11 @@ impl Tuning {
             cheap_ns: 10,
             force_cheap: None,
             radix_min: if e <= 4 { 131_072 } else { 524_288 },
-            radix_min_stable: 32_768,
+            // Was 32_768. Measured again, against the stable block: at 8K radix wins
+            // by 1.2x to 1.7x with 1 to 8 threads, at 16K by 1.1x to 2.5x.
+            radix_min_stable: 8_192,
+            radix_min_serial: 8_192,
+            radix_min_thread: if e <= 8 { 16_384 } else { 32_768 },
             radix_digit: 8,
             radix_count_bits: 16,
             radix_lsd_cheap: 24,
@@ -423,12 +442,32 @@ impl Tuning {
             radix_recut: 65_536,
             radix_skew: 4,
             radix_leaf_min: 128,
+            radix_max_runs: 32,
             route: Route::Auto,
         }
     }
 
-    /// Quantos segmentos um array de `n` elementos pode ter para a arvore
-    /// ainda compensar.
+    /// Below how many elements the chaotic path goes by comparison. It depends on who
+    /// radix's competitor is on that data.
+    fn radix_floor(&self, stable: bool, kind: Chaos) -> usize {
+        let threads = rayon::current_num_threads().max(1);
+        // Sorted and merged blocks: the stable engine's path, and the unstable engine's when
+        // the quicksort is not suitable (short runs, fragmented data). Radix beats them from
+        // early on. With many threads the floor rises up to the old value: with 24 threads
+        // radix loses at 8K elements (0.7x) and ties at 16K.
+        if stable || kind != Chaos::Random {
+            return self.radix_min_stable.max(1024 * threads).min(4 * self.radix_min_stable);
+        }
+        // Parallel quicksort.
+        if threads == 1 {
+            self.radix_min_serial
+        } else {
+            self.radix_min.min(self.radix_min_thread.saturating_mul(threads))
+        }
+    }
+
+    /// How many segments an array of `n` elements may have for the tree to
+    /// still pay off.
     fn allowed_segs(&self, n: usize, cheap: bool) -> usize {
         let avg = if cheap { self.struct_min_avg_run_cheap } else { self.struct_min_avg_run };
         (n / avg.max(1)).max(self.min_segs)
@@ -436,7 +475,7 @@ impl Tuning {
 }
 
 // =====================================================================
-//  ENTRADA
+//  ENTRY
 // =====================================================================
 
 pub(crate) fn sort_with<T, F>(
@@ -452,8 +491,8 @@ pub(crate) fn sort_with<T, F>(
     sort_with_key(arr, cmp, stable, t, scratch, &NoKey);
 }
 
-/// `sort_with` com a estrategia de chave do caminho caotico: `NoKey` (so
-/// comparacao), `Bare`, `Exact` ou `Prefix`.
+/// `sort_with` with the key strategy of the chaotic path: `NoKey` (comparison
+/// only), `Bare`, `Exact` or `Prefix`.
 pub(crate) fn sort_with_key<T, F, K>(
     arr: &mut [T],
     cmp: &F,
@@ -480,18 +519,20 @@ pub(crate) fn sort_with_key<T, F, K>(
         Route::Auto => sample(arr, cmp, t.cheap_ns),
     };
     let rate = probe.rate;
-    let cheap = t.force_cheap.unwrap_or(probe.cheap);
+    // With a bare key the element is an integer and the comparison is cheap by definition:
+    // the clock does not decide.
+    let cheap = t.force_cheap.unwrap_or(probe.cheap || K::BARE);
     if rate > t.chaos_percent {
         let kind = if rate > t.random_percent { Chaos::Random } else { Chaos::ShortRuns };
         sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap, key);
         return;
     }
-    // ATALHO DO INSTAVEL: dado globalmente ascendente, com desordem espalhada
-    // e comparacao barata, e o melhor caso do quicksort paralelo -- ordenado
-    // com 1% de trocas em 10M u64 sai em 55 ms, contra 113-128 de qualquer
-    // caminho de merge. Exige que haja desordem na amostra (senao a deteccao
-    // resolve em uma passada) e que a comparacao seja barata (com `&str` o
-    // mesmo dado leva 733 ms nele contra 367 da arvore).
+    // UNSTABLE SHORTCUT: globally ascending data, with scattered disorder
+    // and a cheap comparison, is the best case of the parallel quicksort --
+    // sorted with 1% swaps on 10M u64 finishes in 55 ms, vs 113-128 for any
+    // merge path. It requires disorder in the sample (otherwise detection
+    // solves it in one pass) and a cheap comparison (with `&str` the
+    // same data takes 733 ms in it vs 367 in the tree).
     if !stable
         && t.route == Route::Auto
         && cheap
@@ -501,9 +542,9 @@ pub(crate) fn sort_with_key<T, F, K>(
         arr.par_sort_unstable_by(|a, b| cmp(a, b));
         return;
     }
-    // A deteccao desiste sozinha quando o dado se mostra fragmentado demais
-    // para a arvore: o custo de ter perguntado fica limitado a uma fracao da
-    // varredura, em vez da passada inteira.
+    // Detection gives up on its own when the data turns out too fragmented
+    // for the tree: the cost of having asked stays limited to a fraction of
+    // the scan, instead of the whole pass.
     let limit = match t.route {
         Route::Auto => 2 * t.allowed_segs(n, cheap) + t.abort_slack,
         _ => usize::MAX,
@@ -527,36 +568,37 @@ where
 }
 
 // =====================================================================
-//  FASE 0: ESCUDO
+//  PHASE 0: SHIELD
 //
-//  Oito janelas espalhadas pelo array inteiro, nao uma janela no meio: um
-//  ponto unico deixava 0,004% do dado decidir o caminho dos outros 99,996%.
+//  Eight windows spread across the whole array, not one window in the middle:
+//  a single spot let 0.004% of the data decide the path of the other 99.996%.
 //
-//  Empates NAO contam como direcao. 4 4 3 3 2 2 e um run descendente perfeito,
-//  e contar `<=` como "subindo" o classificava como caos puro.
+//  Ties do NOT count as direction. 4 4 3 3 2 2 is a perfect descending run,
+//  and counting `<=` as "going up" classified it as pure chaos.
 //
-//  O veredito deixou de ser critico: errar para "estruturado" custa uma
-//  passada de deteccao, porque runs curtos sao agrupados e ordenados em bloco
-//  de qualquer forma; errar para "caotico" custa a mesma passada, porque os
-//  blocos ja ordenados sao fundidos sem mover dado.
+//  The verdict is no longer critical: erring toward "structured" costs one
+//  detection pass, because short runs are grouped and sorted as a block
+//  anyway; erring toward "chaotic" costs the same pass, because the blocks
+//  that are already sorted are merged without moving data.
 // =====================================================================
 
-/// O que a amostra do escudo diz sobre o dado.
+/// What the shield's sample says about the data.
 struct Probe {
-    /// Percentual de comparacoes em que a direcao inverteu. Aleatorio de alta
-    /// cardinalidade da ~66; de duas chaves, ~50; um dente de serra de
-    /// comprimento L da 200/L. Ordenado, invertido e platos dao zero.
+    /// Percentage of comparisons in which the direction reversed. Random data of
+    /// high cardinality gives ~66; with two keys, ~50; a sawtooth of
+    /// length L gives 200/L. Sorted, reversed and plateaus give zero.
     rate: usize,
-    /// A comparacao e barata? Medido no relogio, sobre as mesmas 512
-    /// comparacoes: um inteiro custa 1 a 3 ns, uma string fora de cache passa
-    /// de 50. O erro so tem uma direcao possivel -- uma preempcao no meio da
-    /// amostra faz o barato parecer caro -- e essa e a direcao conservadora:
-    /// o motor deixa de usar um atalho, nunca usa um que nao devia.
+    /// Is the comparison cheap? Measured on the clock, over the same 512
+    /// comparisons: an integer costs 1 to 3 ns, an out-of-cache string goes over
+    /// 50. The error has only one possible direction -- a preemption in the middle
+    /// of the sample makes cheap look expensive -- and that is the conservative
+    /// direction: the engine forgoes a shortcut, it never uses one it should not.
     cheap: bool,
 }
 
 fn sample<T, F>(arr: &[T], cmp: &F, cheap_ns: usize) -> Probe
 where
+    T: Copy,
     F: Fn(&T, &T) -> Ordering,
 {
     const WINDOWS: usize = 8;
@@ -565,9 +607,27 @@ where
     if n < 3 {
         return Probe { rate: 0, cheap: false };
     }
-    let clock = std::time::Instant::now();
     let span = SPAN.min(n - 1);
     let last_start = n - 1 - span;
+    // The windows are read once BEFORE the clock starts. The clock measures the cost of the
+    // comparison, and until now it also measured the cache miss of bringing each window from
+    // memory, which is a cost of reading the array: with u64 (one-instruction comparison) the
+    // 512 comparisons took 4.7 us cold vs 1.3 warm, the limit is 5.1, and the verdict came out
+    // "expensive" in 19 of 60 calls on 100M (25 of 60 on 10M on an i7). With the wrong verdict
+    // the unstable engine loses the quicksort shortcut: 100M nearly sorted, ~735 ms in 7 of 12
+    // calls vs ~295 in the others. What the comparison fetches OUTSIDE the element (the bytes
+    // of a string) is still cold and still counts: &str of 12 to 27 letters gives 30 to 60 us
+    // in both forms, "expensive" in 60 of 60.
+    for w in 0..WINDOWS {
+        let start = last_start / (WINDOWS - 1) * w;
+        for x in &arr[start..=start + span] {
+            std::hint::black_box(*x);
+        }
+        if last_start == 0 {
+            break;
+        }
+    }
+    let clock = std::time::Instant::now();
     let (mut seen, mut changes) = (0usize, 0usize);
     for w in 0..WINDOWS {
         let start = last_start / (WINDOWS - 1) * w;
@@ -593,15 +653,15 @@ where
     }
 }
 
-/// O array e globalmente ascendente, a menos de elementos fora do lugar?
+/// Is the array globally ascending, apart from out-of-place elements?
 ///
-/// 256 amostras igualmente espacadas, em 16 grupos; a MEDIANA de cada grupo
-/// tem que nao decrescer. A mediana ignora elementos isolados fora do lugar
-/// (ordenado com 1% de trocas passa), e runs intercalados reprovam: a cada
-/// troca de run o nivel cai e fica la embaixo.
+/// 256 equally spaced samples, in 16 groups; the MEDIAN of each group
+/// must not decrease. The median ignores isolated out-of-place elements
+/// (sorted with 1% swaps passes), and interleaved runs fail: at each
+/// change of run the level drops and stays down there.
 ///
-/// Serve para uma decisao so: se o motor instavel pode entregar um dado
-/// fragmentado ao quicksort. Ver `sort_chaotic`.
+/// It serves a single decision: whether the unstable engine may hand
+/// fragmented data to the quicksort. See `sort_chaotic`.
 fn globally_ascending<T, F>(arr: &[T], cmp: &F) -> bool
 where
     T: Copy,
@@ -614,11 +674,23 @@ where
         return false;
     }
     let step = n / (GROUPS * PER);
+    // A random position inside each step, instead of the start of the step. With a fixed
+    // step the sample falls in phase with periodic data: on 100M u64 with 64 interleaved runs
+    // there are exactly 4 samples per run, always at the same fractions of the run, the 16
+    // medians come out nearly equal and do not decrease, and the function answers "ascending"
+    // for the worst shape the quicksort can receive (762 ms vs 382 for the tree). Until
+    // 2026-11-20 the question was only asked for data with thousands of short runs; since data
+    // with more than `radix_max_runs` long runs also goes to the chaotic path, the question
+    // comes up with dozens of runs, and that is where the phase effect shows up.
+    let mut seed = 0xA5A5_1F3D_9E37_79B9u64 ^ n as u64;
     let mut prev: Option<T> = None;
     for g in 0..GROUPS {
         let mut s = [arr[0]; PER];
         for (k, slot) in s.iter_mut().enumerate() {
-            *slot = arr[(g * PER + k) * step];
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *slot = arr[(g * PER + k) * step + (seed % step as u64) as usize];
         }
         s.sort_unstable_by(|a, b| cmp(a, b));
         let med = s[PER / 2];
@@ -633,20 +705,20 @@ where
 }
 
 // =====================================================================
-//  FASE 1: DETECCAO DE RUNS
+//  PHASE 1: RUN DETECTION
 //
-//  Um run e descrito por (tipo, comprimento) empacotado em 64 bits.
+//  A run is described by (kind, length) packed into 64 bits.
 //
-//    ASC        nao-decrescente
-//    FLAT       todos iguais -- neutro: serve tanto a um vizinho ascendente
-//               quanto a um descendente
-//    DESC       estritamente decrescente
-//    DESC_TIES  nao-crescente COM chaves repetidas
+//    ASC        non-decreasing
+//    FLAT       all equal -- neutral: serves an ascending neighbor as well
+//               as a descending one
+//    DESC       strictly decreasing
+//    DESC_TIES  non-increasing WITH repeated keys
 //
-//  A direcao de um run e decidida pelo PRIMEIRO par estritamente diferente,
-//  nao pelo primeiro par. Comecar por `<=` classificava todo plato como
-//  ascendente, e um array invertido com chaves repetidas nunca era visto como
-//  invertido: virava um run por plato.
+//  The direction of a run is decided by the FIRST strictly different pair,
+//  not by the first pair. Starting with `<=` classified every plateau as
+//  ascending, and a reversed array with repeated keys was never seen as
+//  reversed: it became one run per plateau.
 // =====================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -676,12 +748,12 @@ impl Run {
     }
 }
 
-/// Decompoe `arr` em runs, acrescentando a `out`.
+/// Decomposes `arr` into runs, appending to `out`.
 ///
-/// Devolve uma estimativa de quantos SEGMENTOS este trecho custaria a arvore:
-/// um trecho de runs curtos conta uma vez (vira um bloco ordenado), e um run
-/// longo que encadeia com o anterior nao conta (vai ser fundido sem mover
-/// dado). E essa contagem que alimenta o aborto antecipado da deteccao.
+/// Returns an estimate of how many SEGMENTS this stretch would cost the tree:
+/// a stretch of short runs counts once (it becomes a sorted block), and a long
+/// run that chains with the previous one does not count (it will be merged
+/// without moving data). It is this count that feeds the early abort of detection.
 fn scan_runs<T, F>(arr: &[T], cmp: &F, out: &mut Vec<Run>, min_run: usize) -> usize
 where
     F: Fn(&T, &T) -> Ordering,
@@ -691,7 +763,7 @@ where
     let mut head = 0usize;
     let mut count = SegCount { segs: 0, have_prev: false, prev_long: false, prev_max: 0, in_short: false };
     while head < n {
-        // Plato inicial: anda ate o primeiro par estritamente diferente.
+        // Initial plateau: walk up to the first strictly different pair.
         let mut tail = head + 1;
         let mut ord = Equal;
         while tail < n {
@@ -724,22 +796,22 @@ where
                 }
                 tail += 1;
             }
-            // ELEMENTO ROUBADO. A varredura gulosa entrega ao run ascendente
-            // anterior o primeiro elemento deste run descendente -- que e o
-            // MAXIMO dele. Em ... 3 9 | 8 7 6 5 4 o 9 fica a esquerda, e ai o
-            // run ascendente termina em 9 e nunca encadeia com o descendente,
-            // cujo minimo e 4. Devolver o 9 deixa 3 <= 4 e os dois viram um
-            // run so. Sem isto o dente de serra em faixas disjuntas ficava com
-            // um run a cada troca de direcao (medido: 1,25x de ganho contra
-            // 11x com a devolucao).
+            // STOLEN ELEMENT. The greedy scan hands the previous ascending run
+            // the first element of this descending run -- which is its
+            // MAXIMUM. In ... 3 9 | 8 7 6 5 4 the 9 stays on the left, and then
+            // the ascending run ends at 9 and never chains with the descending
+            // one, whose minimum is 4. Giving the 9 back leaves 3 <= 4 and the
+            // two become a single run. Without this the sawtooth over disjoint
+            // ranges ended up with one run per change of direction (measured:
+            // 1.25x gain vs 11x with the element given back).
             //
-            // O roubo pode levar MAIS de um elemento: a varredura ascendente
-            // aceita empate, entao em ... 3 9 9 | 8 7 6 os dois 9 ficam a
-            // esquerda. Devolver so um deixava o ascendente terminando em 9 e
-            // o array inteiro ia para um merge (medido em int32, 30M, 1000
-            // dentes: 13,6 ms sem a duplicata, 66 ms com UMA duplicata no
-            // topo de um dente). Devolve-se o plato final inteiro; com dois ou
-            // mais iguais o descendente passa a ter chave repetida.
+            // The theft can take MORE than one element: the ascending scan
+            // accepts ties, so in ... 3 9 9 | 8 7 6 both 9s stay on the
+            // left. Giving back only one left the ascending run ending at 9 and
+            // the whole array went to a merge (measured on int32, 30M, 1000
+            // teeth: 13.6 ms without the duplicate, 66 ms with ONE duplicate at
+            // the top of a tooth). The whole final plateau is given back; with
+            // two or more equals the descending run now has a repeated key.
             let mut start = head;
             if out.len() > first {
                 let last = out.len() - 1;
@@ -768,28 +840,28 @@ where
     count.segs
 }
 
-/// Contabilidade de segmentos de um bloco, para o aborto antecipado.
+/// Segment accounting of a block, for the early abort.
 struct SegCount {
     segs: usize,
     have_prev: bool,
-    /// O run anterior era longo?
+    /// Was the previous run long?
     prev_long: bool,
-    /// Indice do MAIOR elemento do run anterior.
+    /// Index of the LARGEST element of the previous run.
     prev_max: usize,
-    /// Estamos dentro de um trecho de runs curtos (ja contado)?
+    /// Are we inside a stretch of short runs (already counted)?
     in_short: bool,
 }
 
 impl SegCount {
-    /// Registra o run `arr[start..end]`.
+    /// Records the run `arr[start..end]`.
     fn add<T, F>(&mut self, arr: &[T], cmp: &F, start: usize, end: usize, desc: bool, min_run: usize)
     where
         F: Fn(&T, &T) -> Ordering,
     {
         let (min_i, max_i) = if desc { (end - 1, start) } else { (start, end - 1) };
         if end - start >= min_run {
-            // O primeiro run do bloco nao conta: nao da para saber daqui se
-            // ele encadeia com o bloco anterior.
+            // The first run of the block does not count: from here there is no
+            // way to know whether it chains with the previous block.
             let chained = !self.have_prev
                 || (self.prev_long && cmp(&arr[self.prev_max], &arr[min_i]) != Greater);
             if !chained {
@@ -809,30 +881,30 @@ impl SegCount {
     }
 }
 
-/// Costura dois runs que COMPARTILHAM um elemento: o ultimo de `l` e o
-/// primeiro de `r`. Opera so sobre o metadata, sem ler o array -- e a operacao
-/// do monoide. Devolve o run da esquerda e, se sobrar, o da direita.
+/// Stitches two runs that SHARE an element: the last one of `l` and the
+/// first one of `r`. Works on the metadata only, without reading the array --
+/// it is the monoid operation. Returns the left run and, if any is left, the right one.
 ///
-/// A associatividade vale a menos de decomposicoes equivalentes: agrupamentos
-/// diferentes podem cortar um elemento isolado em lugares diferentes, e todas
-/// as respostas descrevem o mesmo array corretamente.
+/// Associativity holds up to equivalent decompositions: different groupings
+/// may cut an isolated element at different places, and all the answers
+/// describe the same array correctly.
 fn join_runs(l: Run, r: Run) -> (Run, Option<Run>) {
     let (lk, ll, rk, rl) = (l.kind(), l.len(), r.kind(), r.len());
     let kind = match (lk, rk) {
         (FLAT, FLAT) => Some(FLAT),
         (ASC, ASC) | (ASC, FLAT) | (FLAT, ASC) => Some(ASC),
-        // FLAT ao lado de um descendente: entra no run. Se o plato tem mais
-        // de um elemento, o run passa a ter chaves repetidas.
+        // FLAT next to a descending run: it joins the run. If the plateau has
+        // more than one element, the run now has repeated keys.
         (FLAT, _) => Some(if ll > 1 { DESC_TIES } else { rk }),
         (_, FLAT) => Some(if rl > 1 { DESC_TIES } else { lk }),
-        // Direcoes opostas: nao ha como unir.
+        // Opposite directions: there is no way to join them.
         (ASC, _) | (_, ASC) => None,
         _ => Some(if lk == DESC_TIES || rk == DESC_TIES { DESC_TIES } else { DESC }),
     };
     match kind {
         Some(k) => (Run::new(k, ll + rl - 1), None),
         None => {
-            // O elemento compartilhado fica com a esquerda.
+            // The shared element stays with the left one.
             let rest = match rl - 1 {
                 0 => None,
                 1 => Some(Run::new(FLAT, 1)),
@@ -843,7 +915,7 @@ fn join_runs(l: Run, r: Run) -> (Run, Option<Run>) {
     }
 }
 
-/// Costura, no lugar, o run em `mark - 1` com o run em `mark`.
+/// Stitches, in place, the run at `mark - 1` with the run at `mark`.
 fn stitch_at(v: &mut Vec<Run>, mark: usize) {
     if mark == 0 || mark >= v.len() {
         return;
@@ -875,19 +947,19 @@ fn stitch(mut left: Vec<Run>, right: Vec<Run>) -> Vec<Run> {
     left
 }
 
-/// Deteccao paralela. Blocos com 1 elemento de sobreposicao, reduzidos pelo
-/// monoide. O `fold` do Rayon da a cada tarefa UM vetor que acumula os blocos
-/// consecutivos dela, em vez de um vetor por bloco.
+/// Parallel detection. Blocks with 1 element of overlap, reduced by the
+/// monoid. Rayon's `fold` gives each task ONE vector that accumulates its
+/// consecutive blocks, instead of one vector per block.
 ///
-/// A versao anterior tinha dois niveis (macro 32768 / micro 512). Medido em
-/// dado ordenado, um nivel e dois niveis empatam, e ambos empatam com um
-/// `is_sorted` paralelo cru: a varredura e sequencial e a largura de banda
-/// manda. O nivel micro so custava -- um `Vec` a cada 512 elementos.
+/// The previous version had two levels (macro 32768 / micro 512). Measured on
+/// sorted data, one level and two levels tie, and both tie with a raw parallel
+/// `is_sorted`: the scan is sequential and bandwidth is what counts. The micro
+/// level only cost -- a `Vec` every 512 elements.
 ///
-/// `seg_limit` e o aborto antecipado: quando a soma dos segmentos estimados
-/// passa do limite, os blocos restantes nao sao varridos e a funcao devolve
-/// `None`. Dado quase ordenado com 1% de trocas, por exemplo, estoura o
-/// limite depois de varrer uma fracao minima do array.
+/// `seg_limit` is the early abort: when the sum of the estimated segments
+/// goes past the limit, the remaining blocks are not scanned and the function
+/// returns `None`. Nearly sorted data with 1% swaps, for example, blows the
+/// limit after scanning a tiny fraction of the array.
 fn detect_runs<T, F>(
     arr: &[T],
     cmp: &F,
@@ -933,16 +1005,16 @@ where
 }
 
 // =====================================================================
-//  FASE 2: NORMALIZACAO
+//  PHASE 2: NORMALIZATION
 //
-//  Transforma a lista de runs em segmentos ASCENDENTES, no lugar:
+//  Turns the list of runs into ASCENDING segments, in place:
 //
-//    Keep      ja ascendente
-//    Reverse   descendente -> inverte (e desfaz os empates, se estavel)
-//    Sort      varios runs curtos seguidos -> ordena o trecho de uma vez
+//    Keep      already ascending
+//    Reverse   descending -> reverse (and un-reverse the ties, if stable)
+//    Sort      several short runs in a row -> sort the stretch in one go
 //
-//  Depois disso a arvore so enxerga runs ascendentes, e a direcao deixa de
-//  ser assunto dela.
+//  After that the tree only sees ascending runs, and direction is no longer
+//  its concern.
 // =====================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -955,7 +1027,7 @@ enum Op {
 struct Plan {
     lens: Vec<usize>,
     ops: Vec<Op>,
-    /// Elementos que cairam em segmentos `Sort`.
+    /// Elements that fell into `Sort` segments.
     sorted_elems: usize,
 }
 
@@ -978,7 +1050,7 @@ impl Plan {
     fn flush(&mut self, p: &mut Pending) {
         match p.count {
             0 => {}
-            // Um run curto isolado ja e monotono: nao precisa de sort.
+            // An isolated short run is already monotonic: it needs no sort.
             1 => self.natural(p.first),
             _ => {
                 self.lens.push(p.len);
@@ -991,13 +1063,13 @@ impl Plan {
     }
 }
 
-/// Agrupa runs curtos consecutivos em blocos a ordenar.
+/// Groups consecutive short runs into blocks to be sorted.
 ///
-/// Fundir run a run so compensa quando o run e longo. Medido em dente de
-/// serra de comprimento L: com L=16 ordenar em bloco ganha da arvore, com L=32
-/// empata, com L>=64 a arvore ganha. Um trecho de runs curtos vira um bloco de
-/// ate `chunk` elementos -- e um array aleatorio que escapou do escudo vira
-/// simplesmente uma sequencia de blocos, sem penhasco.
+/// Merging run by run only pays off when the run is long. Measured on a
+/// sawtooth of length L: with L=16 sorting as a block beats the tree, with L=32
+/// it ties, with L>=64 the tree wins. A stretch of short runs becomes a block of
+/// up to `chunk` elements -- and a random array that slipped past the shield
+/// simply becomes a sequence of blocks, with no cliff.
 fn plan_segments(runs: &[Run], min_run: usize, chunk: usize) -> Plan {
     let mut plan = Plan {
         lens: Vec::with_capacity(runs.len()),
@@ -1025,7 +1097,7 @@ fn plan_segments(runs: &[Run], min_run: usize, chunk: usize) -> Plan {
     plan
 }
 
-/// Aplica as operacoes em paralelo, cada uma na sua fatia.
+/// Applies the operations in parallel, each one on its own slice.
 fn apply_ops<T, F>(arr: &mut [T], plan: &Plan, cmp: &F, stable: bool)
 where
     T: Send,
@@ -1064,11 +1136,11 @@ fn parallel_reverse<T: Send>(arr: &mut [T]) {
         .for_each(|(a, b)| std::mem::swap(a, b));
 }
 
-/// `s` esta ordenado, mas cada bloco de chaves iguais ficou na ordem INVERSA
-/// da original (acabou de sair de um `reverse`). Desinverte cada bloco.
+/// `s` is sorted, but each block of equal keys ended up in the REVERSE of the
+/// original order (it just came out of a `reverse`). Un-reverses each block.
 ///
-/// Como `s` ja esta ordenado, as bordas do bloco que contem o meio saem por
-/// busca binaria, e as duas metades seguem em paralelo.
+/// Since `s` is already sorted, the edges of the block that contains the middle
+/// come out of a binary search, and the two halves proceed in parallel.
 fn restore_ties<T, F>(s: &mut [T], cmp: &F)
 where
     T: Send,
@@ -1112,13 +1184,13 @@ where
     );
 }
 
-/// Funde, so nos offsets, segmentos ascendentes adjacentes que ja estao em
-/// ordem global (ultimo de um <= primeiro do seguinte). Uma comparacao por
-/// fronteira, nenhum elemento movido.
+/// Merges, in the offsets only, adjacent ascending segments that are already in
+/// global order (last of one <= first of the next). One comparison per
+/// boundary, no element moved.
 ///
-/// Antes, o atalho "ja em ordem" vivia DENTRO da arvore e era um memcpy por
-/// nivel: mil dentes em faixas disjuntas pagavam log(1000) passadas de copia.
-/// Medido em 10M u64: 112 ms -> 9,9 ms.
+/// Before, the "already in order" shortcut lived INSIDE the tree and was a memcpy
+/// per level: a thousand teeth over disjoint ranges paid log(1000) copy passes.
+/// Measured on 10M u64: 112 ms -> 9.9 ms.
 fn coalesce<T, F>(arr: &[T], offsets: Vec<usize>, cmp: &F) -> Vec<usize>
 where
     T: Sync,
@@ -1176,9 +1248,9 @@ fn sort_structured<T, F, K>(
     let offsets = prefix_sums(&plan.lens);
 
     if t.route == Route::Auto {
-        // A decisao exata, com o metadata inteiro na mao: quantos runs sobram
-        // DEPOIS de encadear? Mil dentes em faixas disjuntas sao mil runs e
-        // um unico run encadeado; mil dentes intercalados sao mil runs mesmo.
+        // The exact decision, with all the metadata at hand: how many runs remain
+        // AFTER chaining? A thousand teeth over disjoint ranges are a thousand runs and
+        // one single chained run; a thousand interleaved teeth really are a thousand runs.
         let allowed = t.allowed_segs(n, cheap);
         let fragmented = plan.lens.len() > allowed
             && runs_after_coalesce(arr, &plan, &offsets, cmp) > allowed;
@@ -1186,11 +1258,24 @@ fn sort_structured<T, F, K>(
             sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap, key);
             return;
         }
-        // O escudo foi enganado e a maior parte do dado nao tem run que se
-        // aproveite. O estavel segue: os blocos `Sort` do plano ja sao o
-        // caminho caotico dele. O instavel escolhe pelo comprimento medio do
-        // run bruto -- aleatorio da ~2,4, dente de serra curto da o proprio
-        // comprimento do dente.
+        // With a radix key and a cheap comparison, merging run by run only beats radix when
+        // the runs are few: each level of the tree moves the whole array, and radix solves it
+        // in two passes whatever the order. Only from 4 scatter pieces on (262K elements): at
+        // 20K and 80K the tree fits in cache and wins (up to 2x with 4 to 8 threads).
+        if K::ENABLED
+            && cheap
+            && n >= 4 * t.radix_piece
+            && plan.lens.len() > t.radix_max_runs
+            && runs_after_coalesce(arr, &plan, &offsets, cmp) > t.radix_max_runs
+        {
+            sort_chaotic(arr, cmp, stable, t, scratch, Chaos::Fragmented, cheap, key);
+            return;
+        }
+        // The shield was fooled and most of the data has no run worth using.
+        // The stable engine carries on: the plan's `Sort` blocks already are
+        // its chaotic path. The unstable engine chooses by the average length
+        // of the raw run -- random gives ~2.4, a short sawtooth gives the
+        // tooth length itself.
         if !stable && plan.sorted_elems * 2 > n {
             let kind = if runs.len() * 6 > n { Chaos::Random } else { Chaos::ShortRuns };
             sort_chaotic(arr, cmp, stable, t, scratch, kind, cheap, key);
@@ -1203,9 +1288,9 @@ fn sort_structured<T, F, K>(
     merge_segments(arr, &offsets, cmp, t, scratch);
 }
 
-/// Quantos runs sobrariam depois de normalizar e encadear -- calculado ANTES
-/// de mover qualquer elemento, so com os extremos de cada segmento. Um
-/// segmento `Sort` nao tem extremos conhecidos e conta como quebra.
+/// How many runs would remain after normalizing and chaining -- computed BEFORE
+/// moving any element, using only the extremes of each segment. A
+/// `Sort` segment has no known extremes and counts as a break.
 fn runs_after_coalesce<T, F>(arr: &[T], plan: &Plan, offsets: &[usize], cmp: &F) -> usize
 where
     T: Sync,
@@ -1239,17 +1324,17 @@ where
 }
 
 // =====================================================================
-//  CAMINHO CAOTICO
+//  CHAOTIC PATH
 // =====================================================================
 
-/// Por que o dado veio parar no caminho caotico.
+/// Why the data ended up on the chaotic path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Chaos {
-    /// Aleatorio de fato: a direcao inverte em mais de um terco da amostra.
+    /// Truly random: the direction reverses in more than a third of the sample.
     Random,
-    /// Runs curtos, mas com ordem local (dente de serra de 16 a 60).
+    /// Short runs, but with local order (sawtooth of 16 to 60).
     ShortRuns,
-    /// Runs de verdade, so que em numero grande demais para a arvore.
+    /// Real runs, only too many of them for the tree.
     Fragmented,
 }
 
@@ -1268,17 +1353,24 @@ fn sort_chaotic<T, F, K>(
     F: Fn(&T, &T) -> Ordering + Sync,
     K: Keyer<T>,
 {
-    // RADIX: dado aleatorio de fato e chave conhecida. Vale para os dois
-    // motores. Se a rotina desistir (chave enviesada, sem memoria para o
-    // buffer) nada foi movido e o caminho por comparacao abaixo segue igual.
-    // Runs curtos e dado fragmentado continuam por comparacao: ali ha ordem
-    // local que o radix nao aproveita.
-    let radix_min = if stable { t.radix_min_stable } else { t.radix_min };
-    if K::ENABLED && kind == Chaos::Random && arr.len() >= radix_min {
-        // No estavel a folha por comparacao e o `sort` estavel, mais caro que
-        // o `sort_unstable`: o LSD compensa por mais passadas mesmo com
-        // comparacao barata (texto de 6 bytes em u64, 30M: 384 ms com folha
-        // LSD contra 554 com folha por comparacao).
+    // RADIX: truly random data and a known key. Holds for both
+    // engines. If the routine gives up (skewed key, no memory for the
+    // buffer) nothing was moved and the comparison path below proceeds unchanged.
+    // Short runs and fragmented data still go by comparison: there is local
+    // order there that radix does not exploit.
+    // The quicksort's best case: fragmented but globally ascending data, with a
+    // cheap comparison. It beats radix there, so it is checked first.
+    let ascending_noise = !stable && cheap && kind == Chaos::Fragmented && globally_ascending(arr, cmp);
+    // With a radix key and a cheap comparison, short runs and fragmented data also go to
+    // radix: it costs almost the same in any order, and comparison blocks take twice as long.
+    let radix_fits = kind == Chaos::Random || (cheap && !ascending_noise);
+    // The floor depends on who radix's competitor is on this data: see `radix_floor`.
+    let radix_min = t.radix_floor(stable, kind);
+    if K::ENABLED && radix_fits && arr.len() >= radix_min {
+        // In the stable engine the comparison leaf is the stable `sort`, more expensive
+        // than `sort_unstable`: LSD pays off with more passes even with a
+        // cheap comparison (6-byte text in u64, 30M: 384 ms with an LSD
+        // leaf vs 554 with a comparison leaf).
         let rx = Radix {
             cmp,
             key,
@@ -1290,39 +1382,39 @@ fn sort_chaotic<T, F, K>(
             return;
         }
     }
-    // INSTAVEL: o quicksort paralelo trabalha no lugar e sem buffer, mas so
-    // em dois casos.
+    // UNSTABLE: the parallel quicksort works in place and without a buffer, but
+    // only in two cases.
     //
-    //  - Dado aleatorio. Contra ordenar blocos e fundir, em 10M u64: 124 ms
-    //    contra 138-154; 52 contra 64-82 (64 chaves); 18 contra 50-59
-    //    (2 chaves).
-    //  - Dado globalmente ascendente com elementos fora do lugar E comparacao
-    //    barata (ver o atalho em `sort_with`).
+    //  - Random data. Against sorting blocks and merging, on 10M u64: 124 ms
+    //    vs 138-154; 52 vs 64-82 (64 keys); 18 vs 50-59
+    //    (2 keys).
+    //  - Globally ascending data with out-of-place elements AND a cheap
+    //    comparison (see the shortcut in `sort_with`).
     //
-    // Fora disso ele NAO e seguro. Runs intercalados sao um padrao ruim para
-    // a escolha de pivo, e com chave cara o estrago e de ordem de grandeza:
-    // 8 runs de 250 mil strings levam 1942 ms nele contra 109 ms da arvore;
-    // 64 runs, 1121 ms contra 175. E em dente de serra curto de u64 os blocos
-    // ja ganham (L=32: 116 ms contra 148).
+    // Outside of that it is NOT safe. Interleaved runs are a bad pattern for
+    // pivot selection, and with an expensive key the damage is an order of
+    // magnitude: 8 runs of 250K strings take 1942 ms in it vs 109 ms in the
+    // tree; 64 runs, 1121 ms vs 175. And on a short u64 sawtooth the blocks
+    // already win (L=32: 116 ms vs 148).
     if !stable {
         let quick = match kind {
             Chaos::Random => true,
             Chaos::ShortRuns => false,
-            Chaos::Fragmented => cheap && globally_ascending(arr, cmp),
+            Chaos::Fragmented => ascending_noise,
         };
         if quick {
             arr.par_sort_unstable_by(|a, b| cmp(a, b));
             return;
         }
     }
-    // BLOCOS: ordenados pelo `sort` da std (driftsort, que aproveita os runs
-    // de dentro do bloco) e fundidos pela arvore. E o caminho do motor
-    // estavel, e o do instavel quando o quicksort nao serve.
+    // BLOCKS: sorted by the std `sort` (driftsort, which exploits the runs
+    // inside the block) and merged by the tree. It is the path of the stable
+    // engine, and of the unstable one when the quicksort is not suitable.
     //
-    // Contra o `par_sort` do Rayon, em 10M u64: 175 ms contra 191 (aleatorio),
-    // 102 contra 185 (1024 chaves), 89 contra 190 (64 chaves), 78 contra 154
-    // (2 chaves). O bloco de 65536 venceu ou empatou em toda a varredura
-    // (16K, 64K, 256K, n/8, n/4) -- o mesmo valor que o motor C++ ja usava.
+    // Against Rayon's `par_sort`, on 10M u64: 175 ms vs 191 (random),
+    // 102 vs 185 (1024 keys), 89 vs 190 (64 keys), 78 vs 154
+    // (2 keys). The block of 65536 won or tied across the whole sweep
+    // (16K, 64K, 256K, n/8, n/4) -- the same value the C++ engine already used.
     let chunk = t.chunk.max(1);
     let n = arr.len();
     if n <= chunk {
@@ -1337,61 +1429,61 @@ fn sort_chaotic<T, F, K>(
 }
 
 // =====================================================================
-//  CAMINHO CAOTICO COM CHAVE: RADIX
+//  CHAOTIC PATH WITH A KEY: RADIX
 //
-//  Quando o chamador diz quais sao os bits da chave, o dado aleatorio nao
-//  precisa de comparacao:
+//  When the caller says what the bits of the key are, random data does not
+//  need comparison:
 //
-//    1. AMOSTRA (de graca): 1024 elementos espalhados. Se um balde dos bits
-//       altos ficaria com mais de 1/4 deles, a chave e enviesada e a rotina
-//       desiste antes de varrer o array.
-//    2. FAIXA: uma varredura paralela (AND e OR das chaves) diz quais bits
-//       variam. Chave "nua" com ate 16 bits variando: CONTAGEM -- histograma
-//       paralelo e preenchimento paralelo, sem buffer.
-//    3. HISTOGRAMA dos 8 bits mais altos que variam. Se um balde passaria de
-//       1/4 do dado (a amostra errou), desiste: nada foi movido ainda.
-//    4. So entao o buffer e alocado e o array e ESPALHADO em 256 baldes, em
-//       paralelo: o destino e fatiado de antemao em faixas disjuntas
-//       [balde][pedaco], cada pedaco escreve nas suas.
-//    5. Cada balde, em paralelo e dentro do cache: radix LSD sequencial se
-//       sobram poucos bits, sort da std se sobram muitos.
-//    6. Balde grande demais passa pela rotina de novo.
+//    1. SAMPLE (for free): 1024 scattered elements. If one bucket of the high
+//       bits would get more than 1/4 of them, the key is skewed and the
+//       routine gives up before scanning the array.
+//    2. RANGE: one parallel scan (AND and OR of the keys) tells which bits
+//       vary. A "bare" key with up to 16 varying bits: COUNTING -- parallel
+//       histogram and parallel fill, without a buffer.
+//    3. HISTOGRAM of the 8 highest bits that vary. If a bucket would exceed
+//       1/4 of the data (the sample was wrong), it gives up: nothing was moved yet.
+//    4. Only then is the buffer allocated and the array SCATTERED into 256
+//       buckets, in parallel: the destination is sliced beforehand into
+//       disjoint ranges [bucket][piece], each piece writes into its own.
+//    5. Each bucket, in parallel and inside the cache: sequential LSD radix
+//       if few bits remain, std sort if many remain.
+//    6. A bucket that is too big goes through the routine again.
 //
-//  Medido em 30M / 100M aleatorios, 8 threads, buffer alocado no cronometro,
-//  contra o quicksort paralelo (protótipo de 2026-11-17, ver CLAUDE.md):
-//  i32 344 -> 152 ms / 1274 -> 528; u64 406 -> 278 / 1463 -> 1084; 64 valores
-//  em i32 132 -> 23; enviesado (90% em 0..1000) empata.
+//  Measured on 30M / 100M random, 8 threads, buffer allocated on the clock,
+//  against the parallel quicksort (prototype of 2026-11-17):
+//  i32 344 -> 152 ms / 1274 -> 528; u64 406 -> 278 / 1463 -> 1084; 64 values
+//  on i32 132 -> 23; skewed (90% in 0..1000) ties.
 //
-//  Por que MSD + folha e nao LSD puro: o LSD varre o array inteiro duas vezes
-//  por byte da chave (16 varreduras em u64, onde perde do quicksort: 540
-//  contra 372 ms). A passada MSD unica deixa o resto no cache e nao depende
-//  da largura da chave.
+//  Why MSD + leaf and not pure LSD: LSD scans the whole array twice per
+//  key byte (16 scans on u64, where it loses to the quicksort: 540
+//  vs 372 ms). The single MSD pass leaves the rest in cache and does not
+//  depend on the width of the key.
 //
-//  ESTABILIDADE. O espalhamento percorre os pedacos em ordem e cada balde
-//  recebe primeiro o que veio do pedaco 0, depois do 1...: preserva a ordem
-//  dos iguais. O LSD e estavel por construcao. A folha por comparacao usa o
-//  `sort` estavel quando o motor e o estavel. A contagem so existe para chave
-//  nua, em que iguais sao indistinguiveis.
+//  STABILITY. The scatter walks the pieces in order and each bucket receives
+//  first what came from piece 0, then from 1...: it preserves the order of
+//  the equals. LSD is stable by construction. The comparison leaf uses the
+//  stable `sort` when the engine is the stable one. Counting only exists for
+//  a bare key, where equals are indistinguishable.
 //
-//  A rotina devolve `false` SEM TER MOVIDO NADA quando nao serve; o chamador
-//  segue pelo caminho por comparacao.
+//  The routine returns `false` WITHOUT HAVING MOVED ANYTHING when it does not
+//  apply; the caller goes on along the comparison path.
 // =====================================================================
 
-/// Como o caminho caotico enxerga a chave de um elemento.
+/// How the chaotic path sees the key of an element.
 pub(crate) trait Keyer<T>: Sync {
-    /// Ha chave? `NoKey` desliga o radix em tempo de compilacao.
+    /// Is there a key? `NoKey` turns radix off at compile time.
     const ENABLED: bool;
-    /// Chaves iguais implicam elementos iguais na comparacao. Libera a folha
-    /// LSD. `false` para prefixo: ali o desempate e sempre por comparacao.
+    /// Equal keys imply elements equal under the comparison. Enables the LSD
+    /// leaf. `false` for a prefix: there ties are always broken by comparison.
     const EXACT: bool;
-    /// O elemento e a propria chave e se reconstroi dos bits. Libera a
-    /// contagem.
+    /// The element is the key itself and is rebuilt from the bits. Enables
+    /// counting.
     const BARE: bool;
     fn bits(&self, x: &T) -> u64;
     fn rebuild(&self, bits: u64) -> T;
 }
 
-/// Sem chave: so comparacao. E o que as entradas sem `radix` no nome usam.
+/// No key: comparison only. It is what the entries without `radix` in the name use.
 pub(crate) struct NoKey;
 impl<T> Keyer<T> for NoKey {
     const ENABLED: bool = false;
@@ -1402,11 +1494,11 @@ impl<T> Keyer<T> for NoKey {
         0
     }
     fn rebuild(&self, _: u64) -> T {
-        unreachable!("NoKey nao reconstroi elemento")
+        unreachable!("NoKey does not rebuild an element")
     }
 }
 
-/// O elemento e um inteiro: ele e a chave.
+/// The element is an integer: it is the key.
 pub(crate) struct Bare;
 impl<T: RadixKey> Keyer<T> for Bare {
     const ENABLED: bool = true;
@@ -1422,7 +1514,7 @@ impl<T: RadixKey> Keyer<T> for Bare {
     }
 }
 
-/// A chave extraida decide a ordem inteira; o elemento pode levar mais dado.
+/// The extracted key decides the whole order; the element may carry more data.
 pub(crate) struct Exact<K>(pub K);
 impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Exact<K> {
     const ENABLED: bool = true;
@@ -1433,11 +1525,11 @@ impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Exact<K> {
         (self.0)(x)
     }
     fn rebuild(&self, _: u64) -> T {
-        unreachable!("chave extraida nao reconstroi elemento")
+        unreachable!("an extracted key does not rebuild an element")
     }
 }
 
-/// A chave extraida e so o comeco da ordem; o comparador desempata.
+/// The extracted key is only the start of the order; the comparator breaks ties.
 pub(crate) struct Prefix<K>(pub K);
 impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Prefix<K> {
     const ENABLED: bool = true;
@@ -1448,21 +1540,21 @@ impl<T, K: Fn(&T) -> u64 + Sync> Keyer<T> for Prefix<K> {
         (self.0)(x)
     }
     fn rebuild(&self, _: u64) -> T {
-        unreachable!("prefixo nao reconstroi elemento")
+        unreachable!("a prefix does not rebuild an element")
     }
 }
 
-/// O que a rotina carrega de um nivel para o outro.
+/// What the routine carries from one level to the next.
 struct Radix<'a, F, K> {
     cmp: &'a F,
     key: &'a K,
     stable: bool,
     t: &'a Tuning,
-    /// Folha LSD: ate quantos bits restantes.
+    /// LSD leaf: up to how many remaining bits.
     lsd_max: u32,
 }
 
-/// Sort por comparacao de um trecho grande, quando o radix nao serve nele.
+/// Comparison sort of a large stretch, when radix is not suitable for it.
 fn radix_fallback<T, F>(a: &mut [T], cmp: &F, stable: bool)
 where
     T: Send,
@@ -1475,9 +1567,9 @@ where
     }
 }
 
-/// Ordena `arr` por radix. Devolve `false`, sem ter movido nenhum elemento,
-/// quando a chave e enviesada, quando o prefixo nao distingue nada ou quando
-/// nao ha memoria para o buffer.
+/// Sorts `arr` by radix. Returns `false`, without having moved any element,
+/// when the key is skewed, when the prefix tells nothing apart or when
+/// there is no memory for the buffer.
 fn radix_sort<T, F, K>(arr: &mut [T], rx: &Radix<F, K>, scratch: Option<&mut Vec<T>>) -> bool
 where
     T: Copy + Send + Sync,
@@ -1489,27 +1581,64 @@ where
         return true;
     }
     let t = rx.t;
-    if radix_skewed(arr, rx.key, t) {
-        return false;
+    // A skewed key (one bucket with more than 1/4 of the data) makes radix give up, because
+    // the scatter does not divide the work. In the unstable engine the alternative is the
+    // quicksort, which handles repeated keys in passing. In the STABLE one the alternative is
+    // the blocks sorted by comparison and merged, and there are two cases in which radix
+    // finishes in ONE pass and beats them:
+    //
+    //  a single key holds more than half of the data: it is done in a three-way split. From 4
+    //          scatter pieces on (at 300K: 1.2x to 2.9x).
+    //  one digit covers all the bits that vary: the scatter already leaves everything sorted.
+    //          From 8 pieces on (two and three keys: 0.8x to 1.1x at 300K; 1.0x to 1.9x at 1M).
+    //
+    // Outside of them (heavy tail, concentration in a wide range) radix would need several
+    // levels, each moving almost everything, and it loses: 0.44x to 0.92x. It still gives up.
+    let one_key = K::EXACT && rx.stable && n >= 4 * t.radix_piece;
+    let one_digit = one_key && n >= 8 * t.radix_piece;
+    let skew = radix_skewed(arr, rx.key, t);
+    match skew {
+        Skew::No => {}
+        Skew::OneKey if one_key => {}
+        Skew::OneDigit if one_digit => {}
+        _ => return false,
     }
-    let (and, or) = radix_range(arr, rx.key);
-    let diff = and ^ or;
-    if diff == 0 {
-        // Todas as chaves iguais. Com chave exata nao ha o que ordenar; com
-        // prefixo, ele nao distingue nada e a comparacao assume.
-        return K::EXACT;
+    // The sample saw a dominant key: counting it comes before any other
+    // scan. If the count contradicts the sample, giving up cost one read pass.
+    let mut pivot = None;
+    if skew == Skew::OneKey {
+        match radix_pivot_plan(arr, rx.key, t) {
+            Some(p) if p.eq == n => return true, // a single key: nothing to sort
+            Some(p) => pivot = Some(p),
+            None => return false,
+        }
     }
-    let hi = 64 - diff.leading_zeros();
-    if K::BARE && hi <= t.radix_count_bits {
-        radix_count(arr, rx.key, or, hi);
-        return true;
+    let mut plan = None;
+    if pivot.is_none() {
+        let (and, or) = radix_range(arr, rx.key);
+        let diff = and ^ or;
+        if diff == 0 {
+            // All keys equal. With an exact key there is nothing to sort; with a
+            // prefix, it tells nothing apart and the comparison takes over.
+            return K::EXACT;
+        }
+        let hi = 64 - diff.leading_zeros();
+        if K::BARE && hi <= t.radix_count_bits {
+            radix_count(arr, rx.key, or, hi);
+            return true;
+        }
+        // The histogram comes BEFORE the buffer: if the key is skewed, giving up
+        // did not even cost the allocation.
+        plan = radix_plan(arr, rx.key, t, hi, one_digit);
+        // The sample did not see it, but the exact histogram showed concentration: it is worth
+        // checking whether it is a single key, also before the buffer.
+        if plan.is_none() && one_key {
+            pivot = radix_pivot_plan(arr, rx.key, t);
+        }
+        if plan.is_none() && pivot.is_none() {
+            return false;
+        }
     }
-    // O histograma vem ANTES do buffer: se a chave for enviesada, desistir
-    // nao custou nem a alocacao.
-    let plan = match radix_plan(arr, rx.key, t, hi) {
-        Some(p) => p,
-        None => return false,
-    };
     let mut owned: Vec<T> = Vec::new();
     let buf: &mut [T] = match scratch {
         Some(v) if v.len() >= n => &mut v[..n],
@@ -1529,45 +1658,96 @@ where
             &mut owned[..]
         }
     };
-    radix_scatter(arr, buf, &plan, rx.key);
-    radix_buckets(arr, buf, &plan, rx, 0);
+    match (&plan, &pivot) {
+        (Some(p), _) => {
+            radix_scatter(arr, buf, p, rx.key);
+            radix_buckets(arr, buf, p, rx, 0);
+        }
+        (None, Some(pv)) => radix_pivot(arr, buf, pv, rx, 0),
+        (None, None) => unreachable!("without a plan, radix has already given up"),
+    }
     true
 }
 
-/// A chave e enviesada? Olha 1024 elementos espalhados: se a faixa deles e
-/// larga e um balde dos bits altos fica com mais de 1/`radix_skew` da amostra,
-/// o espalhamento nao dividiria o trabalho.
-fn radix_skewed<T, K>(a: &[T], key: &K, t: &Tuning) -> bool
+/// What the sample says about the key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Skew {
+    /// No bucket of the high bits exceeds 1/`radix_skew` of the sample.
+    No,
+    /// Skewed, but one digit covers all the bits that vary.
+    OneDigit,
+    /// Skewed, and a single key holds at least half of the sample.
+    OneKey,
+    /// Skewed and spread over more than one digit, with no dominant key.
+    Wide,
+}
+
+/// Is the key skewed? Looks at 1024 scattered elements: if their range is
+/// wide and one bucket of the high bits gets more than 1/`radix_skew` of the
+/// sample, the scatter would not divide the work.
+fn radix_skewed<T, K>(a: &[T], key: &K, t: &Tuning) -> Skew
 where
     K: Keyer<T>,
 {
     let n = a.len();
     let m = 1024.min(n);
     let step = n / m;
+    // A random position inside each step, instead of the start of the step. With a fixed step,
+    // periodic data fools the sample: 512 runs of the same length in 640K elements put half of
+    // the samples on the SMALLEST value of each run, and the key looks skewed when it is not.
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ n as u64;
+    let mut keys: Vec<u64> = (0..m)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            key.bits(&a[i * step + (seed % step as u64) as usize])
+        })
+        .collect();
     let (mut and, mut or) = (u64::MAX, 0u64);
-    for i in 0..m {
-        let b = key.bits(&a[i * step]);
+    for &b in &keys {
         and &= b;
         or |= b;
     }
     let hi = 64 - (and ^ or).leading_zeros();
     if K::BARE && hi <= t.radix_count_bits {
-        return false; // candidato a contagem; a varredura exata decide
+        return Skew::No; // counting candidate; the exact scan decides
     }
     if hi == 0 {
-        return true; // a amostra inteira tem a mesma chave
+        return Skew::OneKey; // the whole sample has the same key
     }
     let b = t.radix_digit.clamp(1, hi.min(16));
     let shift = hi - b;
     let mask = (1u64 << b) - 1;
     let mut h = vec![0usize; 1usize << b];
-    for i in 0..m {
-        h[((key.bits(&a[i * step]) >> shift) & mask) as usize] += 1;
+    for &k in &keys {
+        h[((k >> shift) & mask) as usize] += 1;
     }
-    h.iter().any(|&c| c * t.radix_skew > m)
+    if !h.iter().any(|&c| c * t.radix_skew > m) {
+        return Skew::No;
+    }
+    // Skewed. Does radix still finish in one pass?
+    if shift == 0 {
+        return Skew::OneDigit;
+    }
+    keys.sort_unstable();
+    let (mut best, mut i) = (0usize, 0usize);
+    while i < m {
+        let mut j = i + 1;
+        while j < m && keys[j] == keys[i] {
+            j += 1;
+        }
+        best = best.max(j - i);
+        i = j;
+    }
+    if best * 2 >= m {
+        Skew::OneKey
+    } else {
+        Skew::Wide
+    }
 }
 
-/// AND e OR de todas as chaves: os bits em que diferem sao os que variam.
+/// AND and OR of all the keys: the bits in which they differ are the ones that vary.
 fn radix_range<T, K>(a: &[T], key: &K) -> (u64, u64)
 where
     T: Sync,
@@ -1583,8 +1763,8 @@ where
         .reduce(|| (u64::MAX, 0u64), |l, r| (l.0 & r.0, l.1 | r.1))
 }
 
-/// Chave nua de faixa pequena: conta e preenche, sem buffer. `or` e o OU de
-/// todas as chaves e `hi` quantos bits de baixo variam.
+/// Bare key with a small range: counts and fills, without a buffer. `or` is the OR
+/// of all the keys and `hi` how many low bits vary.
 fn radix_count<T, K>(a: &mut [T], key: &K, or: u64, hi: u32)
 where
     T: Copy + Send + Sync,
@@ -1593,7 +1773,7 @@ where
     let n = a.len();
     let nb = 1usize << hi;
     let low = (nb - 1) as u64;
-    let base = or & !low; // os bits de cima sao iguais em todas as chaves
+    let base = or & !low; // the upper bits are equal in all the keys
     let pieces = (n >> 20).clamp(1, 16);
     let chunk = (n + pieces - 1) / pieces;
     let hists: Vec<Vec<usize>> = a
@@ -1625,23 +1805,26 @@ where
     });
 }
 
-/// Histograma da passada MSD de um trecho.
+/// Histogram of the MSD pass over a stretch.
 struct RadixPlan {
-    /// Bits abaixo do digito: o que sobra para a folha.
+    /// Bits below the digit: what is left for the leaf.
     shift: u32,
     mask: u64,
     nb: usize,
-    /// Elementos por pedaco.
+    /// Elements per piece.
     chunk: usize,
-    /// Um histograma por pedaco.
+    /// One histogram per piece.
     hists: Vec<Vec<usize>>,
-    /// Limites dos baldes no destino (`nb + 1` valores).
+    /// Bucket boundaries in the destination (`nb + 1` values).
     bounds: Vec<usize>,
 }
 
-/// Conta o digito MSD -- os `radix_digit` bits mais altos entre os `hi` que
-/// variam. `None` se um balde ficaria com mais de 1/`radix_skew` do trecho.
-fn radix_plan<T, K>(a: &[T], key: &K, t: &Tuning, hi: u32) -> Option<RadixPlan>
+/// Counts the MSD digit -- the `radix_digit` highest bits among the `hi` that
+/// vary. `None` if a bucket would get more than 1/`radix_skew` of the stretch.
+///
+/// With `one_digit`, the dominant bucket is accepted when the digit covers all the bits that
+/// vary: after the scatter nothing is left to sort.
+fn radix_plan<T, K>(a: &[T], key: &K, t: &Tuning, hi: u32, one_digit: bool) -> Option<RadixPlan>
 where
     T: Sync,
     K: Keyer<T>,
@@ -1668,16 +1851,16 @@ where
         bounds[d + 1] = bounds[d] + hists.iter().map(|h| h[d]).sum::<usize>();
     }
     let limit = n / t.radix_skew.max(1);
-    if (0..nb).any(|d| bounds[d + 1] - bounds[d] > limit) {
+    if !(one_digit && shift == 0) && (0..nb).any(|d| bounds[d + 1] - bounds[d] > limit) {
         return None;
     }
     Some(RadixPlan { shift, mask, nb, chunk, hists, bounds })
 }
 
-/// Espalha `src` em `dst` conforme o plano, em paralelo. O destino e fatiado
-/// antes: balde por balde e, dentro do balde, pedaco por pedaco. Cada pedaco
-/// recebe as suas `nb` faixas e escreve por elas -- sem `unsafe`, e na ordem
-/// que mantem os iguais como vieram.
+/// Scatters `src` into `dst` according to the plan, in parallel. The destination is
+/// sliced beforehand: bucket by bucket and, inside the bucket, piece by piece. Each
+/// piece receives its own `nb` ranges and writes through them -- without `unsafe`, and
+/// in the order that keeps the equals as they came.
 fn radix_scatter<T, K>(src: &[T], dst: &mut [T], p: &RadixPlan, key: &K)
 where
     T: Copy + Send + Sync,
@@ -1705,7 +1888,7 @@ where
     });
 }
 
-/// Ordena cada balde. O dado esta em `buf`; o resultado termina em `arr`.
+/// Sorts each bucket. The data is in `buf`; the result ends up in `arr`.
 fn radix_buckets<T, F, K>(arr: &mut [T], buf: &mut [T], p: &RadixPlan, rx: &Radix<F, K>, depth: u32)
 where
     T: Copy + Send + Sync,
@@ -1715,9 +1898,9 @@ where
     let t = rx.t;
     let big = (arr.len() / t.radix_big_div.max(1)).max(t.radix_big);
     let shift = p.shift;
-    // Folha estreita = LSD de poucas passadas: ali so reentra o balde grande
-    // de verdade. Folha larga (muitas passadas ou comparacao): um segundo
-    // corte MSD sai mais barato que ordenar um balde que nao cabe no cache.
+    // Narrow leaf = LSD with few passes: there only a truly big bucket
+    // re-enters. Wide leaf (many passes or comparison): a second MSD
+    // cut comes out cheaper than sorting a bucket that does not fit in cache.
     let narrow = K::EXACT && shift <= t.radix_lsd_cheap;
     let recut = if narrow { big } else { t.radix_recut.min(big) };
     let mut pairs: Vec<(&mut [T], &mut [T])> = Vec::with_capacity(p.nb);
@@ -1735,12 +1918,12 @@ where
     pairs.into_par_iter().for_each(|(a, s)| {
         let len = a.len();
         if K::EXACT && shift == 0 {
-            // O digito cobriu todos os bits que variam: chaves identicas.
+            // The digit covered all the bits that vary: identical keys.
             a.copy_from_slice(s);
         } else if len > recut && depth < 6 {
-            // Balde grande (dado com concentracao, ou folha larga): de volta
-            // para `arr` e a rotina de novo, paralela por dentro, com o
-            // proprio pedaco do buffer como rascunho.
+            // Big bucket (data with concentration, or a wide leaf): back
+            // to `arr` and the routine again, parallel inside, with its
+            // own piece of the buffer as scratch.
             par_copy(a, s, t.par_grain);
             radix_bucket(a, s, rx, depth + 1);
         } else if K::EXACT && len >= t.radix_leaf_min && shift <= rx.lsd_max {
@@ -1756,7 +1939,7 @@ where
     });
 }
 
-/// A rotina de novo em um balde grande. O dado esta em `a`; `s` e rascunho.
+/// The routine again on a big bucket. The data is in `a`; `s` is scratch.
 fn radix_bucket<T, F, K>(a: &mut [T], s: &mut [T], rx: &Radix<F, K>, depth: u32)
 where
     T: Copy + Send + Sync,
@@ -1776,18 +1959,163 @@ where
         radix_count(a, rx.key, or, hi);
         return;
     }
-    match radix_plan(a, rx.key, rx.t, hi) {
+    // Here radix has already started and the alternative is sorting the whole bucket by
+    // comparison: the two one-pass cases hold for a bucket of any size.
+    let one_pass = K::EXACT && rx.stable;
+    match radix_plan(a, rx.key, rx.t, hi, one_pass) {
         Some(p) => {
             radix_scatter(a, s, &p, rx.key);
             radix_buckets(a, s, &p, rx, depth);
         }
-        None => radix_fallback(a, rx.cmp, rx.stable),
+        None => {
+            if one_pass && depth < 6 {
+                if let Some(pv) = radix_pivot_plan(a, rx.key, rx.t) {
+                    radix_pivot(a, s, &pv, rx, depth);
+                    return;
+                }
+            }
+            radix_fallback(a, rx.cmp, rx.stable)
+        }
     }
 }
 
-/// Radix LSD sequencial de um balde, sobre os `low_bits` de baixo da chave
-/// (os de cima sao iguais no balde inteiro). O dado esta em `src`; o
-/// resultado termina em `dst`. Passada de digito constante e pulada.
+/// The dominant key of a stretch and the exact count of the three parts.
+struct PivotPlan {
+    pivot: u64,
+    /// Elements per piece.
+    chunk: usize,
+    /// Per piece: how many are smaller than, equal to and greater than `pivot`.
+    hists: Vec<[usize; 3]>,
+    lt: usize,
+    eq: usize,
+}
+
+/// 0: smaller than the dominant key; 1: equal; 2: greater.
+#[inline(always)]
+fn pivot_side(bits: u64, pivot: u64) -> usize {
+    (bits >= pivot) as usize + (bits > pivot) as usize
+}
+
+/// Does a single key hold at least half of the stretch? The candidate is the mode of 256
+/// samples; the exact count, in parallel, confirms it. Moves nothing.
+fn radix_pivot_plan<T, K>(a: &[T], key: &K, t: &Tuning) -> Option<PivotPlan>
+where
+    T: Sync,
+    K: Keyer<T>,
+{
+    let n = a.len();
+    if n < 2 {
+        return None;
+    }
+    let m = 256.min(n);
+    let step = n / m;
+    let mut seed = 0xD1B5_4A32_D192_ED03u64 ^ n as u64;
+    let mut keys: Vec<u64> = (0..m)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            key.bits(&a[i * step + (seed % step as u64) as usize])
+        })
+        .collect();
+    keys.sort_unstable();
+    let (mut pivot, mut best, mut i) = (keys[0], 0usize, 0usize);
+    while i < m {
+        let mut j = i + 1;
+        while j < m && keys[j] == keys[i] {
+            j += 1;
+        }
+        if j - i > best {
+            best = j - i;
+            pivot = keys[i];
+        }
+        i = j;
+    }
+    // Slack for the sample's error; the count is what decides.
+    if best * 5 < m * 2 {
+        return None;
+    }
+    let pieces = (n / t.radix_piece.max(1)).clamp(1, 128);
+    let chunk = (n + pieces - 1) / pieces;
+    let hists: Vec<[usize; 3]> = a
+        .par_chunks(chunk)
+        .map(|c| {
+            let mut h = [0usize; 3];
+            for x in c {
+                h[pivot_side(key.bits(x), pivot)] += 1;
+            }
+            h
+        })
+        .collect();
+    let lt: usize = hists.iter().map(|h| h[0]).sum();
+    let eq: usize = hists.iter().map(|h| h[1]).sum();
+    // The entry sample requires half; the count accepts from 40% on. With the same cut in
+    // both, a key with exactly half of the data would pass the sample and fail here by chance,
+    // paying for the scans without any gain (measured: 0.91x to 0.93x at 1M).
+    if eq * 5 < n * 2 {
+        return None;
+    }
+    Some(PivotPlan { pivot, chunk, hists, lt, eq })
+}
+
+/// Splits the stretch into smaller than, equal to and greater than the dominant key. The
+/// data is in `a`; `s` is scratch; the result ends up in `a`.
+///
+/// The scatter walks the pieces in order, like the MSD pass: the equals come out done and in
+/// the order they came. The outer parts, which sum to less than half, go back to the routine.
+fn radix_pivot<T, F, K>(a: &mut [T], s: &mut [T], p: &PivotPlan, rx: &Radix<F, K>, depth: u32)
+where
+    T: Copy + Send + Sync,
+    F: Fn(&T, &T) -> Ordering + Sync,
+    K: Keyer<T>,
+{
+    let t = rx.t;
+    {
+        let mut slots: Vec<Vec<&mut [T]>> =
+            (0..p.hists.len()).map(|_| Vec::with_capacity(3)).collect();
+        let mut rest: &mut [T] = &mut *s;
+        for d in 0..3 {
+            for (piece, h) in p.hists.iter().enumerate() {
+                let (head, r) = std::mem::take(&mut rest).split_at_mut(h[d]);
+                slots[piece].push(head);
+                rest = r;
+            }
+        }
+        a.par_chunks(p.chunk).zip(slots.into_par_iter()).for_each(|(c, mut cur)| {
+            for x in c {
+                let d = pivot_side(rx.key.bits(x), p.pivot);
+                let slot = std::mem::take(&mut cur[d]);
+                if let Some((head, tail)) = slot.split_first_mut() {
+                    *head = *x;
+                    cur[d] = tail;
+                }
+            }
+        });
+    }
+    let (a_lt, a_rest) = a.split_at_mut(p.lt);
+    let (a_eq, a_gt) = a_rest.split_at_mut(p.eq);
+    let (s_lt, s_rest) = s.split_at_mut(p.lt);
+    let (s_eq, s_gt) = s_rest.split_at_mut(p.eq);
+    let finish = |x: &mut [T], y: &mut [T]| {
+        if x.is_empty() {
+            return;
+        }
+        par_copy(x, y, t.par_grain);
+        if x.len() > t.small_sort {
+            radix_bucket(x, y, rx, depth + 1);
+        } else {
+            leaf_sort(x, rx.cmp, rx.stable);
+        }
+    };
+    rayon::join(
+        || par_copy(a_eq, s_eq, t.par_grain),
+        || rayon::join(|| finish(a_lt, s_lt), || finish(a_gt, s_gt)),
+    );
+}
+
+/// Sequential LSD radix of a bucket, over the lower `low_bits` of the key
+/// (the upper ones are equal across the whole bucket). The data is in `src`; the
+/// result ends up in `dst`. A pass over a constant digit is skipped.
 fn radix_lsd<T, K>(src: &mut [T], dst: &mut [T], key: &K, low_bits: u32)
 where
     T: Copy,
@@ -1825,29 +2153,29 @@ where
 }
 
 // =====================================================================
-//  FASE 3: ARVORE DE MERGE
+//  PHASE 3: MERGE TREE
 //
-//  Entrada: `offsets` delimita runs ASCENDENTES em `arr`.
+//  Input: `offsets` delimits ASCENDING runs in `arr`.
 //
-//  O BUFFER
+//  THE BUFFER
 //
-//  Sem buffer do chamador, ele nasce como COPIA PARALELA do array. Isso troca
-//  duas coisas da versao anterior -- o preenchimento sequencial
-//  (`vec![arr[0]; n]`, uma thread escrevendo n elementos que seriam
-//  sobrescritos) e a copia das folhas de paridade impar -- por uma passada
-//  paralela so. Com os dois lados iguais na largada, toda folha ja esta onde
-//  precisa estar.
+//  Without a caller's buffer, it is born as a PARALLEL COPY of the array. That
+//  trades two things from the previous version -- the sequential fill
+//  (`vec![arr[0]; n]`, one thread writing n elements that would be
+//  overwritten) and the copy of the odd-parity leaves -- for a single
+//  parallel pass. With both sides equal at the start, every leaf already is
+//  where it needs to be.
 //
-//  A medicao que tinha concluido que inicializar o buffer "nao custa nada"
-//  (457,4 contra 458,5 ms) estava confundida: quando `arr[0]` e o inteiro
-//  zero, `vec![arr[0]; n]` vira `calloc` e o sistema entrega paginas zeradas
-//  sob demanda. Com `arr[0] != 0` o preenchimento custa ~14 ms por 80 MB
-//  (64 runs em 10M u64: 64,0 ms com zero na frente, 77,5 sem). Dado real
-//  quase nunca comeca com zero.
+//  The measurement that had concluded that initializing the buffer "costs
+//  nothing" (457.4 vs 458.5 ms) was confounded: when `arr[0]` is the integer
+//  zero, `vec![arr[0]; n]` becomes `calloc` and the system hands out zeroed
+//  pages on demand. With `arr[0] != 0` the fill costs ~14 ms per 80 MB
+//  (64 runs on 10M u64: 64.0 ms with a zero in front, 77.5 without). Real
+//  data almost never starts with zero.
 //
-//  Com buffer do chamador (`*_with_buffer`), ja inicializado e do tamanho
-//  certo, nao ha nada a criar nem pagina nova a tocar: so as folhas de
-//  paridade impar copiam o proprio trecho.
+//  With a caller's buffer (`*_with_buffer`), already initialized and of the
+//  right size, there is nothing to create and no new page to touch: only the
+//  odd-parity leaves copy their own stretch.
 // =====================================================================
 
 fn merge_segments<T, F>(
@@ -1880,13 +2208,13 @@ fn merge_segments<T, F>(
     }
 }
 
-/// Recursao K-aria sobre os runs. Hibrida: k-vias nos niveis que vao a DRAM,
-/// binaria abaixo de `kway_min_elems`, onde o trecho ja mora em cache.
+/// K-ary recursion over the runs. Hybrid: k-way on the levels that go to DRAM,
+/// binary below `kway_min_elems`, where the stretch already lives in cache.
 ///
-/// Contrato: o dado de entrada esta em `v`. Na saida o trecho ordenado esta
-/// em `buf` se `into_buf`, senao em `v`. Se `copy_leaves` e falso, `buf` ja
-/// nasceu como copia de `v` e a folha nao tem nada a fazer; se e verdadeiro,
-/// `buf` tem lixo valido e a folha de paridade impar copia o proprio trecho.
+/// Contract: the input data is in `v`. On exit the sorted stretch is in
+/// `buf` if `into_buf`, otherwise in `v`. If `copy_leaves` is false, `buf` was
+/// born as a copy of `v` and the leaf has nothing to do; if it is true, `buf`
+/// holds valid garbage and the odd-parity leaf copies its own stretch.
 fn tree_kway<T, F>(v: &mut [T], buf: &mut [T], offsets: &[usize], cmp: &F, t: &Tuning, into_buf: bool, copy_leaves: bool)
 where
     T: Copy + Send + Sync,
@@ -1906,7 +2234,7 @@ where
         return;
     }
 
-    // Cortes balanceados por ELEMENTO, nao por contagem de runs.
+    // Cuts balanced by ELEMENT, not by run count.
     let g = KWAY_FANOUT.min(runs);
     let mut cm = [0usize; KWAY_FANOUT + 1];
     cm[g] = runs;
@@ -1937,7 +2265,7 @@ where
 
     let (src, dst): (&[T], &mut [T]) = if into_buf { (&*v, buf) } else { (&*buf, v) };
 
-    // Grupos adjacentes ja em ordem viram UM stream.
+    // Adjacent groups already in order become ONE stream.
     let mut streams: [&[T]; KWAY_FANOUT] = [&[]; KWAY_FANOUT];
     let mut ns = 0usize;
     let mut gs = 0usize;
@@ -1953,7 +2281,7 @@ where
     kway_merge(&streams[..ns], dst, cmp, t);
 }
 
-/// Arvore binaria, com split balanceado por elementos.
+/// Binary tree, with a split balanced by elements.
 fn tree_binary<T, F>(v: &mut [T], buf: &mut [T], offsets: &[usize], cmp: &F, t: &Tuning, into_buf: bool, copy_leaves: bool)
 where
     T: Copy + Send + Sync,
@@ -1991,11 +2319,11 @@ where
 }
 
 // =====================================================================
-//  MERGE DE DOIS: CO-RANK + BIDIRECIONAL
+//  TWO-WAY MERGE: CO-RANK + BIDIRECTIONAL
 // =====================================================================
 
-/// Maior `i` tal que `a[..i]` e `b[..k - i]` sao os `k` menores, com empate
-/// para `a`. E o corte que mantem o merge estavel.
+/// Largest `i` such that `a[..i]` and `b[..k - i]` are the `k` smallest, with
+/// ties going to `a`. It is the cut that keeps the merge stable.
 fn co_rank<T, F>(k: usize, a: &[T], b: &[T], cmp: &F) -> (usize, usize)
 where
     F: Fn(&T, &T) -> Ordering,
@@ -2015,7 +2343,7 @@ where
     (lo, k - lo)
 }
 
-/// Merge para FRENTE: emite os `dest.len()` menores. Empate -> A.
+/// FORWARD merge: emits the `dest.len()` smallest. Tie -> A.
 #[inline]
 fn merge_front<T, F>(a: &[T], b: &[T], dest: &mut [T], cmp: &F)
 where
@@ -2044,12 +2372,12 @@ where
     }
 }
 
-/// Merge para TRAS: emite os `dest.len()` maiores. Empate -> B.
+/// BACKWARD merge: emits the `dest.len()` largest. Tie -> B.
 ///
-/// A regra de desempate e a COMPLEMENTAR da de `merge_front`, e e isso que faz
-/// o teorema valer: os k menores (empate -> A) e os total-k maiores
-/// (empate -> B) particionam o multiconjunto para QUALQUER k. Nenhum ponto de
-/// corte precisa ser calculado -- cada lado so conta as proprias saidas.
+/// The tie-breaking rule is the COMPLEMENT of the one in `merge_front`, and that is
+/// what makes the theorem hold: the k smallest (tie -> A) and the total-k largest
+/// (tie -> B) partition the multiset for ANY k. No cut point needs to be
+/// computed -- each side only counts its own outputs.
 #[inline]
 fn merge_back<T, F>(a: &[T], b: &[T], dest: &mut [T], cmp: &F)
 where
@@ -2076,9 +2404,9 @@ where
     }
 }
 
-/// Merge paralelo de dois runs, de fontes imutaveis. Corta por co-rank ate o
-/// grao; em cada pedaco tenta primeiro os atalhos de faixas disjuntas e so
-/// entao funde -- com uma thread vindo da frente e outra do fim.
+/// Parallel merge of two runs, from immutable sources. Cuts by co-rank down to the
+/// grain; in each piece it first tries the disjoint-range shortcuts and only
+/// then merges -- with one thread coming from the front and another from the end.
 fn merge_two<T, F>(a: &[T], b: &[T], dest: &mut [T], cmp: &F, t: &Tuning)
 where
     T: Copy + Send + Sync,
@@ -2105,7 +2433,7 @@ where
         dest.copy_from_slice(a);
         return;
     }
-    // Faixas disjuntas: e uma concatenacao.
+    // Disjoint ranges: it is a concatenation.
     if cmp(&a[a.len() - 1], &b[0]) != Greater {
         let (d1, d2) = dest.split_at_mut(a.len());
         d1.copy_from_slice(a);
@@ -2141,27 +2469,27 @@ fn par_copy<T: Copy + Send + Sync>(dest: &mut [T], src: &[T], grain: usize) {
 }
 
 // =====================================================================
-//  MERGE K-VIAS COM BLOCAGEM DE CACHE
+//  K-WAY MERGE WITH CACHE BLOCKING
 //
-//  O merge binario paga log2(runs) passadas sobre a memoria, e a maquina
-//  satura a banda: o custo e o NUMERO DE PASSADAS. Um merge de K vias paga
-//  logK(runs).
+//  The binary merge pays log2(runs) passes over memory, and the machine
+//  saturates the bandwidth: the cost is the NUMBER OF PASSES. A K-way merge
+//  pays logK(runs).
 //
-//  NAO usa loser tree: medido, custa ~12x mais por elemento que o merge
-//  simples, porque `head[w]` com `w` em tempo de execucao nao e promovido a
-//  registrador. Cada tile e cortado por `multiseq_partition` e fundido por uma
-//  arvore BINARIA que cabe em L1 -- o kernel rapido continua o mesmo.
+//  It does NOT use a loser tree: measured, it costs ~12x more per element than
+//  the simple merge, because `head[w]` with a run-time `w` is not promoted to a
+//  register. Each tile is cut by `multiseq_partition` and merged by a BINARY
+//  tree that fits in L1 -- the fast kernel stays the same.
 // =====================================================================
 
-/// Acha `out[i]` com soma igual a `rank`, tal que os prefixos sao exatamente
-/// os `rank` menores elementos. Empates sao distribuidos em ordem de stream,
-/// o que mantem a estabilidade e concorda com o desempate de `merge_front`.
+/// Finds `out[i]` summing to `rank`, such that the prefixes are exactly the
+/// `rank` smallest elements. Ties are distributed in stream order, which
+/// keeps stability and agrees with the tie-breaking of `merge_front`.
 ///
-/// As buscas binarias rodam so dentro de `[lo, hi)`. Todo pivo sai de dentro
-/// do intervalo vivo, entao fica estritamente entre os pivos anteriores, e
-/// nenhum elemento fora do intervalo pode mudar de lado. O resultado e
-/// identico ao da busca no run inteiro; contado em 8 runs, as comparacoes por
-/// elemento do merge caem de 6,24 para 5,22 (o ideal e 4,00).
+/// The binary searches run only inside `[lo, hi)`. Every pivot comes from
+/// inside the live interval, so it lies strictly between the previous pivots,
+/// and no element outside the interval can change sides. The result is
+/// identical to that of the search over the whole run; counted on 8 runs, the
+/// comparisons per merge element drop from 6.24 to 5.22 (the ideal is 4.00).
 fn multiseq_partition<T, F>(seq: &[&[T]], rank: usize, out: &mut [usize], cmp: &F)
 where
     F: Fn(&T, &T) -> Ordering,
@@ -2176,7 +2504,7 @@ where
     }
 
     loop {
-        // Pivo: o meio do intervalo mais largo.
+        // Pivot: the middle of the widest interval.
         let mut m = usize::MAX;
         let mut w = 0usize;
         for i in 0..ns {
@@ -2217,8 +2545,8 @@ where
     }
 }
 
-/// Um nivel da arvore binaria do tile: funde pares de segmentos contiguos de
-/// `src` em `dst`. Devolve os novos segmentos (offset, len) e quantos sao.
+/// One level of the tile's binary tree: merges pairs of contiguous segments of
+/// `src` into `dst`. Returns the new segments (offset, len) and how many there are.
 fn merge_level<T, F>(
     src: &[T],
     segs: &[(usize, usize)],
@@ -2252,8 +2580,8 @@ where
     (out, cnt)
 }
 
-/// Merge de 3..=K runs com blocagem de cache: a DRAM ve uma leitura e uma
-/// escrita, em vez de log2(K) passadas.
+/// Merge of 3..=K runs with cache blocking: the DRAM sees one read and one
+/// write, instead of log2(K) passes.
 fn kway_tiled<T, F>(runs: &[&[T]], dest: &mut [T], cmp: &F, tile: usize)
 where
     T: Copy,
@@ -2283,7 +2611,7 @@ where
     while done < total {
         let want = tile.min(total - done);
 
-        // Janela restrita: um tile consome no maximo `want` de qualquer run.
+        // Restricted window: a tile consumes at most `want` from any run.
         let mut win: [&[T]; KWAY_FANOUT] = [&[]; KWAY_FANOUT];
         for i in 0..ns {
             let rem = &runs[i][cur[i]..];
@@ -2292,7 +2620,7 @@ where
         let mut cut = [0usize; KWAY_FANOUT];
         multiseq_partition(&win[..ns], want, &mut cut[..ns], cmp);
 
-        // Nivel 1: das janelas para s1.
+        // Level 1: from the windows into s1.
         let mut segs = [(0usize, 0usize); KWAY_FANOUT];
         let mut cnt = 0usize;
         let mut off = 0usize;
@@ -2318,8 +2646,8 @@ where
             i += 2;
         }
 
-        // Niveis intermediarios em s1/s2 (residentes em L1); o ULTIMO nivel
-        // escreve direto no destino -- a unica escrita que chega na DRAM.
+        // Intermediate levels in s1/s2 (resident in L1); the LAST level
+        // writes straight to the destination -- the only write that reaches DRAM.
         let out = &mut dest[done..done + want];
         if cnt > 2 {
             let (segs2, _) = merge_level(&s1[..want], &segs[..cnt], s2, cmp);
@@ -2341,13 +2669,13 @@ where
     }
 }
 
-/// Merge k-vias paralelo: corta por rank e recursa.
+/// Parallel k-way merge: cuts by rank and recurses.
 ///
-/// Streams vazios sao descartados a cada nivel. Depois de um corte e comum
-/// sobrar um ou dois streams com dado num pedaco; sem o descarte eles
-/// atravessavam os tres niveis do tile como se fossem oito. Com UM stream e
-/// copia, com DOIS e o merge binario por co-rank -- que escala com as threads,
-/// onde antes o caso de dois runs ficava preso em duas.
+/// Empty streams are dropped at each level. After a cut it is common for one
+/// or two streams with data to remain in a piece; without dropping them they
+/// went through the three levels of the tile as if they were eight. With ONE
+/// stream it is a copy, with TWO it is the binary merge by co-rank -- which
+/// scales with the threads, where before the two-run case was stuck on two.
 fn kway_merge<T, F>(runs: &[&[T]], dest: &mut [T], cmp: &F, t: &Tuning)
 where
     T: Copy + Send + Sync,

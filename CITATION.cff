@@ -26,8 +26,8 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.20417493
     description: "Version v1.0.0 (2026-05-27), the earlier engine, from the repository fbcouto/multimerge-genomics."
-version: 2.5.1
-date-released: 2026-11-18
+version: 2.5.2
+date-released: 2026-11-25
 keywords:
   - bioinformatics
   - genomics
